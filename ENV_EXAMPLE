@@ -1,0 +1,15 @@
+# Flask configuration
+FLASK_ENV=development
+PORT=8000
+FRONTEND_URL=http://localhost:3000
+
+# MongoDB configuration
+MONGODB_URI=mongodb://localhost:27017
+
+# JWT configuration
+JWT_SECRET_KEY=your-secret-key-here
+
+# AI API keys (optional)
+OPENAI_API_KEY=your-openai-api-key
+OPENROUTER_API_KEY=your-openrouter-api-key
+CLAUDE_API_KEY=your-claude-api-key 

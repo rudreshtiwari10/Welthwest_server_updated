@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: stock-market-api
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "true"
+      - key: FRONTEND_URL
+        value: "*" 
