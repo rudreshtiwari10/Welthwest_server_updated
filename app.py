@@ -24,6 +24,7 @@ from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 import json
 from functools import wraps
 import re
+from services.backtesting_service import BacktestingService
 
 # Setup logging with more detailed format
 logging.basicConfig(
@@ -147,6 +148,9 @@ user_service = UserService()
 # Initialize services
 technical_analysis = TechnicalAnalysis()
 portfolio_service = PortfolioService()
+
+# Initialize backtesting service
+backtesting_service = BacktestingService()
 
 # Root route for health checks
 @app.route('/', methods=['GET', 'HEAD'])
@@ -1108,4 +1112,264 @@ def get_market_breadth():
             "total_stocks_analyzed": len(nifty500_stocks[:50])
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500 
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/backtesting/generate-signals', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def generate_backtesting_signals():
+    """Generate backtesting signals based on technical indicators"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['instrument', 'timeframe', 'start_date', 'end_date', 'indicators', 'combination_logic']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+        
+        # Validate timeframe format
+        valid_timeframes = ['1m', '5m', '15m', '30m', '1h', '1d']
+        if data['timeframe'] not in valid_timeframes:
+            return jsonify({"error": f"Invalid timeframe. Must be one of: {', '.join(valid_timeframes)}"}), 400
+            
+        # Validate date formats
+        try:
+            pd.to_datetime(data['start_date'])
+            pd.to_datetime(data['end_date'])
+        except ValueError:
+            return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
+            
+        # Validate combination logic
+        if data['combination_logic'] not in ['AND', 'OR']:
+            return jsonify({"error": "combination_logic must be either 'AND' or 'OR'"}), 400
+            
+        # Validate indicators array
+        if not isinstance(data['indicators'], list) or len(data['indicators']) == 0:
+            return jsonify({"error": "indicators must be a non-empty array"}), 400
+            
+        for indicator in data['indicators']:
+            if not all(k in indicator for k in ['type', 'parameters', 'signal_condition', 'signal_type']):
+                return jsonify({"error": "Each indicator must have type, parameters, signal_condition, and signal_type"}), 400
+                
+        # Get historical data
+        df = get_ohlc_data(data['instrument'], data['timeframe'], data['start_date'], data['end_date'])
+        if df.empty:
+            return jsonify({"error": "No data available for the specified period"}), 404
+            
+        # Calculate indicator values and generate signals
+        signals = []
+        indicator_results = {}
+        
+        for indicator in data['indicators']:
+            try:
+                # Calculate indicator values
+                indicator_type = indicator['type'].lower()
+                params = indicator['parameters']
+                
+                if indicator_type == 'rsi':
+                    values = technical_analysis._calculate_rsi(df, params.get('period', 14))
+                    indicator_results[indicator_type] = values
+                elif indicator_type == 'macd':
+                    macd_data = technical_analysis._calculate_macd(
+                        df,
+                        params.get('fastperiod', 12),
+                        params.get('slowperiod', 26),
+                        params.get('signalperiod', 9)
+                    )
+                    indicator_results[indicator_type] = macd_data
+                elif indicator_type == 'bollinger':
+                    bb_data = technical_analysis._calculate_bollinger_bands(df, params.get('period', 20))
+                    indicator_results[indicator_type] = bb_data
+                else:
+                    return jsonify({"error": f"Unsupported indicator type: {indicator_type}"}), 400
+                    
+            except Exception as e:
+                return jsonify({"error": f"Error calculating {indicator_type}: {str(e)}"}), 500
+                
+        # Generate signals based on indicator conditions
+        for idx, row in df.iterrows():
+            signal = None
+            conditions_met = []
+            
+            for indicator in data['indicators']:
+                indicator_type = indicator['type'].lower()
+                condition = indicator['signal_condition']
+                signal_type = indicator['signal_type']
+                
+                # Check conditions for each indicator
+                condition_met = False
+                
+                if indicator_type == 'rsi':
+                    rsi_value = indicator_results[indicator_type][idx]
+                    if condition == 'oversold' and rsi_value < 30:
+                        condition_met = signal_type == 'buy'
+                    elif condition == 'overbought' and rsi_value > 70:
+                        condition_met = signal_type == 'sell'
+                        
+                elif indicator_type == 'macd':
+                    macd = indicator_results[indicator_type]['macd'][idx]
+                    signal_line = indicator_results[indicator_type]['signal'][idx]
+                    if condition == 'crossover' and macd > signal_line:
+                        condition_met = signal_type == 'buy'
+                    elif condition == 'crossunder' and macd < signal_line:
+                        condition_met = signal_type == 'sell'
+                        
+                elif indicator_type == 'bollinger':
+                    price = row['Close']
+                    lower = indicator_results[indicator_type]['lower'][idx]
+                    upper = indicator_results[indicator_type]['upper'][idx]
+                    if condition == 'lower_band' and price <= lower:
+                        condition_met = signal_type == 'buy'
+                    elif condition == 'upper_band' and price >= upper:
+                        condition_met = signal_type == 'sell'
+                        
+                conditions_met.append(condition_met)
+                
+            # Combine conditions based on logic
+            if data['combination_logic'] == 'AND' and all(conditions_met):
+                signal = {
+                    'timestamp': idx.isoformat(),
+                    'price': float(row['Close']),
+                    'type': data['indicators'][0]['signal_type']  # Use first indicator's signal type
+                }
+            elif data['combination_logic'] == 'OR' and any(conditions_met):
+                # For OR logic, use the signal type of the first condition that was met
+                signal_type = next(ind['signal_type'] for i, ind in enumerate(data['indicators']) if conditions_met[i])
+                signal = {
+                    'timestamp': idx.isoformat(),
+                    'price': float(row['Close']),
+                    'type': signal_type
+                }
+                
+            if signal:
+                signals.append(signal)
+                
+        # Calculate performance metrics
+        metrics = calculate_performance_metrics(signals, df)
+        
+        return jsonify({
+            "signals": signals,
+            "metrics": metrics,
+            "summary": {
+                "total_signals": len(signals),
+                "period_start": data['start_date'],
+                "period_end": data['end_date'],
+                "instrument": data['instrument']
+            }
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+def calculate_performance_metrics(signals, df):
+    """Calculate performance metrics for the backtesting signals"""
+    if not signals:
+        return {
+            "win_rate": 0,
+            "total_trades": 0,
+            "profit_loss": 0,
+            "max_drawdown": 0
+        }
+        
+    trades = []
+    current_position = None
+    total_profit_loss = 0
+    max_drawdown = 0
+    peak_value = 0
+    
+    for signal in signals:
+        price = signal['price']
+        
+        if not current_position and signal['type'] == 'buy':
+            current_position = {
+                'entry_price': price,
+                'entry_time': signal['timestamp']
+            }
+        elif current_position and signal['type'] == 'sell':
+            profit_loss = price - current_position['entry_price']
+            trades.append({
+                'entry_price': current_position['entry_price'],
+                'exit_price': price,
+                'profit_loss': profit_loss,
+                'entry_time': current_position['entry_time'],
+                'exit_time': signal['timestamp']
+            })
+            total_profit_loss += profit_loss
+            
+            # Update peak value and drawdown
+            if total_profit_loss > peak_value:
+                peak_value = total_profit_loss
+            else:
+                drawdown = peak_value - total_profit_loss
+                max_drawdown = max(max_drawdown, drawdown)
+                
+            current_position = None
+            
+    winning_trades = len([t for t in trades if t['profit_loss'] > 0])
+    total_trades = len(trades)
+    
+    return {
+        "win_rate": (winning_trades / total_trades * 100) if total_trades > 0 else 0,
+        "total_trades": total_trades,
+        "profit_loss": total_profit_loss,
+        "max_drawdown": max_drawdown,
+        "trades": trades
+    }
+
+@app.route('/api/backtesting/run', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def run_backtest():
+    """Run a backtest with the specified parameters"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['ticker', 'start_date', 'end_date', 'indicators', 'position_size']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+        
+        # Get optional parameters
+        stop_loss = data.get('stop_loss')
+        take_profit = data.get('take_profit')
+        timeframe = data.get('timeframe', '1d')
+        
+        # Validate indicators format
+        if not isinstance(data['indicators'], list):
+            return jsonify({"error": "Indicators must be a list"}), 400
+            
+        for indicator in data['indicators']:
+            if not isinstance(indicator, dict):
+                return jsonify({"error": "Each indicator must be an object"}), 400
+            if 'type' not in indicator:
+                return jsonify({"error": "Each indicator must have a type"}), 400
+            if 'parameters' not in indicator and 'params' not in indicator:
+                return jsonify({"error": f"Parameters must be specified for indicator {indicator['type']}"}), 400
+        
+        # Initialize backtesting service if not already initialized
+        if not hasattr(app, 'backtesting_service'):
+            from services.backtesting_service import BacktestingService
+            app.backtesting_service = BacktestingService()
+        
+        # Run backtest
+        results = app.backtesting_service.run_backtest(
+            ticker=data['ticker'],
+            start_date=data['start_date'],
+            end_date=data['end_date'],
+            indicators=data['indicators'],
+            position_size=float(data['position_size']),
+            stop_loss=float(stop_loss) if stop_loss is not None else None,
+            take_profit=float(take_profit) if take_profit is not None else None,
+            timeframe=timeframe
+        )
+        
+        return jsonify(results), 200
+        
+    except ValueError as e:
+        logger.warning(f"Validation error in backtest: {str(e)}")
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error running backtest: {str(e)}", exc_info=True)
+        return jsonify({"error": "An error occurred while running the backtest"}), 500 

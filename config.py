@@ -44,5 +44,5 @@ config = {
 
 # Get configuration based on environment
 def get_config():
-    env = os.environ.get('FLASK_ENV', 'development')
+    env = 'development' if os.environ.get('FLASK_DEBUG', 'True').lower() == 'true' else 'production'
     return config.get(env, config['default']) 

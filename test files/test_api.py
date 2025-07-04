@@ -6,7 +6,7 @@ import os
 class StockAPITestCase(unittest.TestCase):
     def setUp(self):
         # Set environment to testing
-        os.environ['FLASK_ENV'] = 'testing'
+        os.environ['FLASK_DEBUG'] = 'True'
         self.app = create_app()
         self.client = self.app.test_client()
 

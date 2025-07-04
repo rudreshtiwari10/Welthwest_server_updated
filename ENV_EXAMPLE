@@ -1,5 +1,5 @@
 # Flask configuration
-FLASK_ENV=development
+FLASK_DEBUG=True
 PORT=8000
 FRONTEND_URL=http://localhost:3000
 

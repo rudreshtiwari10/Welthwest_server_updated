@@ -2,8 +2,12 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Optional
 from ta import momentum, trend, volatility, volume
-from services.stock_service import get_historical_data, format_indian_ticker
+from services.stock_service import get_ohlc_data, format_indian_ticker
 from services.cache_service import get_cached_data, set_cached_data
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class TechnicalAnalysis:
     def __init__(self):
@@ -13,11 +17,14 @@ class TechnicalAnalysis:
     def calculate_indicators(self, ticker: str, indicators: List[str], params: Dict = None) -> Dict[str, Any]:
         """Calculate technical indicators for a given stock"""
         # Get historical data
-        df = get_historical_data(ticker, self.default_period, self.default_interval)
+        df = get_ohlc_data(ticker, self.default_period, self.default_interval)
         if df.empty:
             return {"error": "No data available for the ticker"}
             
         results = {}
+        
+        # Handle both params and parameters
+        params = params.get("parameters", params) if params else {}
         
         for indicator in indicators:
             try:
@@ -157,7 +164,7 @@ class TechnicalAnalysis:
         results = {}
         for ticker in tickers:
             try:
-                df = get_historical_data(ticker, "1mo", "1d")  # Use shorter period for screening
+                df = get_ohlc_data(ticker, "1mo", "1d")  # Use shorter period for screening
                 if not df.empty:
                     matches_criteria = self._evaluate_screening_criteria(df, criteria)
                     if matches_criteria:
@@ -169,7 +176,7 @@ class TechnicalAnalysis:
     
     def get_support_resistance(self, ticker: str) -> Dict[str, Any]:
         """Calculate support and resistance levels"""
-        df = get_historical_data(ticker, "1y", "1d")
+        df = get_ohlc_data(ticker, "1y", "1d")
         if df.empty:
             return {"error": "No data available"}
             
@@ -188,7 +195,7 @@ class TechnicalAnalysis:
     
     def identify_patterns(self, ticker: str) -> Dict[str, Any]:
         """Identify chart patterns"""
-        df = get_historical_data(ticker, "6mo", "1d")
+        df = get_ohlc_data(ticker, "6mo", "1d")
         if df.empty:
             return {"error": "No data available"}
             
@@ -202,7 +209,7 @@ class TechnicalAnalysis:
     
     def get_trading_signals(self, ticker: str) -> Dict[str, Any]:
         """Generate trading signals based on multiple indicators"""
-        df = get_historical_data(ticker, "3mo", "1d")
+        df = get_ohlc_data(ticker, "3mo", "1d")
         if df.empty:
             return {"error": "No data available"}
             
@@ -618,4 +625,68 @@ class TechnicalAnalysis:
             "high": float(high),
             "low": float(low),
             "levels": levels
-        } 
+        }
+    
+    def _get_data_with_indicators(
+        self,
+        ticker: str,
+        start_date: str,
+        end_date: str,
+        timeframe: str,
+        indicators: List[Dict[str, Any]]
+    ) -> pd.DataFrame:
+        """Get historical data and calculate indicators"""
+        # Try to get cached data
+        cache_key = f"data_{ticker}_{start_date}_{end_date}_{timeframe}"
+        cached_data = get_cached_data(cache_key)
+        if cached_data is not None:
+            return pd.DataFrame(cached_data)
+
+        # Get fresh data using get_ohlc_data instead of get_historical_data
+        df = get_ohlc_data(ticker, start_date=start_date, end_date=end_date, interval=timeframe)
+        if df.empty:
+            return df
+
+        # Calculate indicators
+        for indicator in indicators:
+            try:
+                ind_type = indicator["type"].lower()
+                # Handle both params and parameters
+                params = indicator.get("parameters", indicator.get("params", {}))
+                
+                if ind_type == "rsi":
+                    df[f"RSI_{params.get('period', 14)}"] = self._calculate_rsi(df, params.get("period", 14))
+                elif ind_type == "macd":
+                    macd_data = self._calculate_macd(
+                        df,
+                        params.get("fastperiod", 12),
+                        params.get("slowperiod", 26),
+                        params.get("signalperiod", 9)
+                    )
+                    df["MACD"] = macd_data["macd"]
+                    df["MACD_Signal"] = macd_data["signal"]
+                    df["MACD_Hist"] = macd_data["histogram"]
+                elif ind_type == "bollinger":
+                    bb_data = self._calculate_bollinger_bands(df, params.get("period", 20))
+                    df["BB_Upper"] = bb_data["upper"]
+                    df["BB_Middle"] = bb_data["middle"]
+                    df["BB_Lower"] = bb_data["lower"]
+                elif ind_type == "sma":
+                    df[f"SMA_{params.get('period', 20)}"] = self._calculate_sma(df, params.get("period", 20))
+                elif ind_type == "ema":
+                    df[f"EMA_{params.get('period', 20)}"] = self._calculate_ema(df, params.get("period", 20))
+                elif ind_type == "stochastic":
+                    stoch_data = self._calculate_stochastic(
+                        df,
+                        params.get("k_period", 14),
+                        params.get("d_period", 3)
+                    )
+                    df["STOCH_K"] = stoch_data["k"]
+                    df["STOCH_D"] = stoch_data["d"]
+            except Exception as e:
+                logger.error(f"Error calculating indicator {ind_type}: {str(e)}")
+                continue
+
+        # Cache the data
+        set_cached_data(cache_key, df.to_dict(), self.cache_ttl)
+        return df 

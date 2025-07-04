@@ -14,6 +14,17 @@ def format_indian_ticker(ticker_symbol):
     Returns:
     str: Formatted ticker symbol with .NS or .BO suffix
     """
+    # Handle index symbols
+    if ticker_symbol.upper() == "NIFTY":
+        return "^NSEI"
+    if ticker_symbol.upper() == "BANKNIFTY":
+        return "^NSEBANK"
+    if ticker_symbol.upper() == "SENSEX":
+        return "^BSESN"
+    if ticker_symbol.startswith("^"):
+        return ticker_symbol
+        
+    # Handle regular stocks
     if ticker_symbol.endswith('.NS') or ticker_symbol.endswith('.BO'):
         return ticker_symbol
     else:

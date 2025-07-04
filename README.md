@@ -381,7 +381,7 @@ The API has built-in support for validating popular Indian stocks, including:
    ```
 3. Create a `.env` file with the following content:
    ```
-   FLASK_ENV=development
+   FLASK_DEBUG=True
    PORT=5000
    ```
 4. Run the application:

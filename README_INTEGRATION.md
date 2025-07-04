@@ -13,7 +13,7 @@ This document provides instructions for running the integrated frontend and back
    Create a `.env` file in the Server directory with the following content:
    ```
    # Flask configuration
-   FLASK_ENV=development
+   FLASK_DEBUG=True
    PORT=8000
 
    # AI API keys
