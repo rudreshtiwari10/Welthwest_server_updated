@@ -1,15 +1,56 @@
-# Flask configuration
-FLASK_DEBUG=True
-PORT=8000
-FRONTEND_URL=http://localhost:3000
+# MongoDB Configuration
+MONGODB_URI=mongodb://localhost:27017/
+DB_NAME=welthwest
 
-# MongoDB configuration
-MONGODB_URI=mongodb://localhost:27017
+# JWT Configuration
+JWT_SECRET_KEY=your-secret-key
+JWT_ACCESS_TOKEN_EXPIRES=3600
+JWT_REFRESH_TOKEN_EXPIRES=2592000
 
-# JWT configuration
-JWT_SECRET_KEY=your-secret-key-here
+# Redis Configuration
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+REDIS_PASSWORD=
 
-# AI API keys (optional)
-OPENAI_API_KEY=your-openai-api-key
-OPENROUTER_API_KEY=your-openrouter-api-key
-CLAUDE_API_KEY=your-claude-api-key 
+# Upstox Configuration
+UPSTOX_API_KEY=your-upstox-api-key
+UPSTOX_API_SECRET=your-upstox-api-secret
+UPSTOX_REDIRECT_URI=http://localhost:8000/api/upstox/callback
+
+# Cache Configuration
+CACHE_TYPE=redis
+CACHE_REDIS_DB=1
+CACHE_DEFAULT_TIMEOUT=300
+
+# API Configuration
+API_VERSION=v1
+BASE_URL=http://localhost:8000
+
+# Logging Configuration
+LOG_LEVEL=INFO
+LOG_FORMAT=%(asctime)s - %(name)s - %(levelname)s - %(message)s
+
+# Security Configuration
+CORS_ORIGINS=*
+RATE_LIMIT=100/hour
+
+# Feature Flags
+ENABLE_CACHING=True
+ENABLE_RATE_LIMITING=True
+ENABLE_JWT_BLACKLIST=True
+
+# Development/Production mode
+DEBUG=False
+TESTING=False
+FLASK_ENV=development
+
+# Subscription Configuration
+FREE_BACKTEST_LIMIT=2
+FREE_LLM_LIMIT=5
+BASIC_BACKTEST_LIMIT=10
+BASIC_LLM_LIMIT=20
+PRO_BACKTEST_LIMIT=30
+PRO_LLM_LIMIT=50
+USAGE_RESET_HOUR=0
+USAGE_RESET_TIMEZONE=Asia/Kolkata 

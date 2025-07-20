@@ -1,0 +1,14 @@
+{
+  "server_url": "http://127.0.0.1:8000",
+  "test_user": {
+    "username_or_email": "dasd@dfsdf.ocm",
+    "password": "123456",
+    "name": "Custom Test User"
+  },
+  "test_settings": {
+    "default_ticker": "RELIANCE.NS",
+    "test_tickers": ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS"],
+    "timeout": 30,
+    "retry_attempts": 3
+  }
+}

@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WelthWest API Testing Interface</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .api-section {
+            background-color: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .response-area {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 10px;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        input, select, textarea {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        label {
+            font-weight: bold;
+            display: block;
+            margin-top: 10px;
+        }
+        .error {
+            color: red;
+            margin-top: 5px;
+        }
+        .success {
+            color: green;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>WelthWest API Testing Interface</h1>
+    
+    <!-- Authentication Section -->
+    <div class="api-section">
+        <h2>Authentication</h2>
+        
+        <!-- Register -->
+        <div>
+            <h3>Register</h3>
+            <input type="email" id="register-email" placeholder="Email">
+            <input type="text" id="register-username" placeholder="Username">
+            <input type="password" id="register-password" placeholder="Password">
+            <input type="password" id="register-confirm-password" placeholder="Confirm Password">
+            <button onclick="register()">Register</button>
+            <div id="register-response" class="response-area"></div>
+        </div>
+
+        <!-- Login -->
+        <div>
+            <h3>Login</h3>
+            <input type="text" id="login-username" placeholder="Username or Email">
+            <input type="password" id="login-password" placeholder="Password">
+            <button onclick="login()">Login</button>
+            <div id="login-response" class="response-area"></div>
+        </div>
+    </div>
+
+    <!-- AI Chat Section -->
+    <div class="api-section">
+        <h2>AI Chat</h2>
+        <select id="chat-model">
+            <option value="openai">OpenAI</option>
+            <option value="claude">Claude</option>
+            <option value="openrouter">OpenRouter</option>
+        </select>
+        <textarea id="chat-query" rows="4" placeholder="Enter your query"></textarea>
+        <button onclick="sendChatQuery()">Send Query</button>
+        <div id="chat-response" class="response-area"></div>
+    </div>
+
+    <!-- Market Data Section -->
+    <div class="api-section">
+        <h2>Market Data</h2>
+        
+        <!-- Historical Data -->
+        <div>
+            <h3>Historical Data</h3>
+            <input type="text" id="historical-ticker" placeholder="Ticker (e.g., RELIANCE.NS)">
+            <input type="text" id="historical-period" placeholder="Period (e.g., 1y, 6mo)" value="1y">
+            <input type="text" id="historical-interval" placeholder="Interval (e.g., 1d)" value="1d">
+            <button onclick="getHistoricalData()">Get Historical Data</button>
+            <div id="historical-response" class="response-area"></div>
+        </div>
+
+        <!-- Live Data -->
+        <div>
+            <h3>Live Data</h3>
+            <input type="text" id="live-tickers" placeholder="Tickers (comma-separated, e.g., RELIANCE.NS,TCS.NS)">
+            <button onclick="getLiveData()">Get Live Data</button>
+            <div id="live-response" class="response-area"></div>
+        </div>
+
+        <!-- Market Indices -->
+        <div>
+            <h3>Market Indices</h3>
+            <button onclick="getMarketIndices()">Get Market Indices</button>
+            <div id="indices-response" class="response-area"></div>
+        </div>
+
+        <!-- Top Gainers/Losers -->
+        <div>
+            <h3>Top Gainers/Losers</h3>
+            <button onclick="getTopGainersLosers()">Get Top Gainers/Losers</button>
+            <div id="gainers-losers-response" class="response-area"></div>
+        </div>
+    </div>
+
+    <!-- Technical Analysis Section -->
+    <div class="api-section">
+        <h2>Technical Analysis</h2>
+        
+        <!-- Indicators -->
+        <div>
+            <h3>Technical Indicators</h3>
+            <input type="text" id="indicator-ticker" placeholder="Ticker (e.g., RELIANCE.NS)">
+            <input type="text" id="indicators" placeholder="Indicators (comma-separated, e.g., rsi,macd,sma)" value="rsi,macd">
+            <button onclick="getIndicators()">Get Indicators</button>
+            <div id="indicators-response" class="response-area"></div>
+        </div>
+
+        <!-- Comprehensive Analysis -->
+        <div>
+            <h3>Comprehensive Analysis</h3>
+            <input type="text" id="analysis-ticker" placeholder="Ticker (e.g., RELIANCE.NS)">
+            <button onclick="getComprehensiveAnalysis()">Get Analysis</button>
+            <div id="analysis-response" class="response-area"></div>
+        </div>
+    </div>
+
+    <!-- Backtesting Section -->
+    <div class="api-section">
+        <h2>Backtesting</h2>
+        <input type="text" id="backtest-ticker" placeholder="Ticker (e.g., RELIANCE.NS)">
+        <input type="text" id="backtest-strategy" placeholder="Strategy (e.g., SMA Crossover)">
+        <input type="text" id="backtest-period" placeholder="Period (e.g., 1y)" value="1y">
+        <button onclick="runBacktest()">Run Backtest</button>
+        <div id="backtest-response" class="response-area"></div>
+    </div>
+
+    <script>
+        // Store the JWT token
+        let jwtToken = '';
+        const BASE_URL = 'http://localhost:8000'; // Change this to your API server URL
+
+        // Helper function to display response
+        function displayResponse(elementId, data, isError = false) {
+            const element = document.getElementById(elementId);
+            element.className = 'response-area ' + (isError ? 'error' : 'success');
+            element.textContent = typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
+        }
+
+        // Helper function for API calls
+        async function apiCall(endpoint, method = 'GET', body = null, needsAuth = false) {
+            try {
+                const headers = {
+                    'Content-Type': 'application/json'
+                };
+                
+                if (needsAuth && jwtToken) {
+                    headers['Authorization'] = `Bearer ${jwtToken}`;
+                }
+
+                const options = {
+                    method,
+                    headers,
+                    credentials: 'include'
+                };
+
+                if (body) {
+                    options.body = JSON.stringify(body);
+                }
+
+                const response = await fetch(`${BASE_URL}${endpoint}`, options);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'API call failed');
+                }
+
+                return data;
+            } catch (error) {
+                throw new Error(error.message || 'API call failed');
+            }
+        }
+
+        // Authentication Functions
+        async function register() {
+            try {
+                const email = document.getElementById('register-email').value;
+                const username = document.getElementById('register-username').value;
+                const password = document.getElementById('register-password').value;
+                const confirmPassword = document.getElementById('register-confirm-password').value;
+
+                const data = await apiCall('/api/auth/register', 'POST', {
+                    email,
+                    username,
+                    password,
+                    confirm_password: confirmPassword
+                });
+
+                jwtToken = data.access_token;
+                displayResponse('register-response', data);
+            } catch (error) {
+                displayResponse('register-response', error.message, true);
+            }
+        }
+
+        async function login() {
+            try {
+                const username = document.getElementById('login-username').value;
+                const password = document.getElementById('login-password').value;
+
+                const data = await apiCall('/api/auth/login', 'POST', {
+                    username_or_email: username,
+                    password
+                });
+
+                jwtToken = data.access_token;
+                displayResponse('login-response', data);
+            } catch (error) {
+                displayResponse('login-response', error.message, true);
+            }
+        }
+
+        // AI Chat Function
+        async function sendChatQuery() {
+            try {
+                const query = document.getElementById('chat-query').value;
+                const model = document.getElementById('chat-model').value;
+
+                const data = await apiCall('/api/market/chat', 'POST', {
+                    query,
+                    model
+                });
+
+                displayResponse('chat-response', data);
+            } catch (error) {
+                displayResponse('chat-response', error.message, true);
+            }
+        }
+
+        // Market Data Functions
+        async function getHistoricalData() {
+            try {
+                const ticker = document.getElementById('historical-ticker').value;
+                const period = document.getElementById('historical-period').value;
+                const interval = document.getElementById('historical-interval').value;
+
+                const data = await apiCall(`/api/historical?ticker=${ticker}&period=${period}&interval=${interval}`);
+                displayResponse('historical-response', data);
+            } catch (error) {
+                displayResponse('historical-response', error.message, true);
+            }
+        }
+
+        async function getLiveData() {
+            try {
+                const tickers = document.getElementById('live-tickers').value;
+                const data = await apiCall(`/api/live?tickers=${tickers}`);
+                displayResponse('live-response', data);
+            } catch (error) {
+                displayResponse('live-response', error.message, true);
+            }
+        }
+
+        async function getMarketIndices() {
+            try {
+                const data = await apiCall('/api/market-indices');
+                displayResponse('indices-response', data);
+            } catch (error) {
+                displayResponse('indices-response', error.message, true);
+            }
+        }
+
+        async function getTopGainersLosers() {
+            try {
+                const data = await apiCall('/api/top-gainers-losers');
+                displayResponse('gainers-losers-response', data);
+            } catch (error) {
+                displayResponse('gainers-losers-response', error.message, true);
+            }
+        }
+
+        // Technical Analysis Functions
+        async function getIndicators() {
+            try {
+                const ticker = document.getElementById('indicator-ticker').value;
+                const indicators = document.getElementById('indicators').value;
+
+                const data = await apiCall(`/api/indicators?ticker=${ticker}&indicators=${indicators}`, 'GET', null, true);
+                displayResponse('indicators-response', data);
+            } catch (error) {
+                displayResponse('indicators-response', error.message, true);
+            }
+        }
+
+        async function getComprehensiveAnalysis() {
+            try {
+                const ticker = document.getElementById('analysis-ticker').value;
+                const data = await apiCall(`/api/technical-analysis?ticker=${ticker}`, 'GET', null, true);
+                displayResponse('analysis-response', data);
+            } catch (error) {
+                displayResponse('analysis-response', error.message, true);
+            }
+        }
+
+        // Backtesting Function
+        async function runBacktest() {
+            try {
+                const ticker = document.getElementById('backtest-ticker').value;
+                const strategy = document.getElementById('backtest-strategy').value;
+                const period = document.getElementById('backtest-period').value;
+
+                const data = await apiCall('/api/backtesting/run', 'POST', {
+                    ticker,
+                    strategy,
+                    period
+                }, true);
+
+                displayResponse('backtest-response', data);
+            } catch (error) {
+                displayResponse('backtest-response', error.message, true);
+            }
+        }
+    </script>
+</body>
+</html> 

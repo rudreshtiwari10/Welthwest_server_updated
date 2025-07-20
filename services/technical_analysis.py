@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from ta import momentum, trend, volatility, volume
 from services.stock_service import get_ohlc_data, format_indian_ticker
 from services.cache_service import get_cached_data, set_cached_data
@@ -22,6 +22,7 @@ class TechnicalAnalysis:
             return {"error": "No data available for the ticker"}
             
         results = {}
+        dates = df.index.strftime('%Y-%m-%d').tolist()  # Get dates for all data points
         
         # Handle both params and parameters
         params = params.get("parameters", params) if params else {}
@@ -31,125 +32,242 @@ class TechnicalAnalysis:
                 if indicator.lower() == "rsi":
                     period = params.get("rsi_period", 14) if params else 14
                     rsi_values = self._calculate_rsi(df, period)
+                    
+                    # RSI Signal Logic:
+                    # Oversold (RSI < 40) + RSI turning up = Buy
+                    # Overbought (RSI > 60) + RSI turning down = Sell
+                    signal = "neutral"
+                    if len(rsi_values) >= 2:
+                        current_rsi = rsi_values[-1]
+                        prev_rsi = rsi_values[-2]
+                        if current_rsi < 40 and current_rsi > prev_rsi:
+                            signal = "buy"
+                        elif current_rsi > 60 and current_rsi < prev_rsi:
+                            signal = "sell"
+                    
                     results["rsi"] = {
-                        "values": [float(x) for x in rsi_values[-10:]],  # Last 10 values
+                        "dates": dates,
+                        "values": [float(x) for x in rsi_values],
                         "current": float(rsi_values[-1]),
-                        "signal": "buy" if rsi_values[-1] > 30 else "sell" if rsi_values[-1] < 70 else "neutral"
+                        "signal": signal
                     }
+
                 elif indicator.lower() == "macd":
                     fastperiod = params.get("macd_fastperiod", 12) if params else 12
                     slowperiod = params.get("macd_slowperiod", 26) if params else 26
                     signalperiod = params.get("macd_signalperiod", 9) if params else 9
                     macd_data = self._calculate_macd(df, fastperiod, slowperiod, signalperiod)
+                    
+                    # MACD Signal Logic:
+                    # MACD line crosses above signal line = Buy
+                    # MACD line crosses below signal line = Sell
+                    # Also consider histogram direction change
+                    signal = "neutral"
+                    if len(macd_data["macd"]) >= 2:
+                        curr_macd = macd_data["macd"][-1]
+                        curr_signal = macd_data["signal"][-1]
+                        prev_macd = macd_data["macd"][-2]
+                        prev_signal = macd_data["signal"][-2]
+                        curr_hist = macd_data["histogram"][-1]
+                        prev_hist = macd_data["histogram"][-2]
+                        
+                        if (prev_macd <= prev_signal and curr_macd > curr_signal) or \
+                           (prev_hist < 0 and curr_hist > 0):
+                            signal = "buy"
+                        elif (prev_macd >= prev_signal and curr_macd < curr_signal) or \
+                             (prev_hist > 0 and curr_hist < 0):
+                            signal = "sell"
+                    
                     results["macd"] = {
-                        "macd": [float(x) for x in macd_data["macd"][-10:]],
-                        "signal": [float(x) for x in macd_data["signal"][-10:]],
-                        "histogram": [float(x) for x in macd_data["histogram"][-10:]],
+                        "dates": dates,
+                        "macd": [float(x) for x in macd_data["macd"]],
+                        "signal": [float(x) for x in macd_data["signal"]],
+                        "histogram": [float(x) for x in macd_data["histogram"]],
                         "current": {
                             "macd": float(macd_data["macd"][-1]),
                             "signal": float(macd_data["signal"][-1]),
                             "histogram": float(macd_data["histogram"][-1])
                         },
-                        "signal": "buy" if macd_data["macd"][-1] > macd_data["signal"][-1] else "sell"
+                        "signal": signal
                     }
+
                 elif indicator.lower() == "bollinger":
                     period = params.get("bb_period", 20) if params else 20
                     bb_data = self._calculate_bollinger_bands(df, period)
                     current_price = float(df['Close'].iloc[-1])
+                    prev_price = float(df['Close'].iloc[-2])
+                    
+                    # Bollinger Bands Signal Logic:
+                    # Price crosses above upper band = Potential sell (overbought)
+                    # Price crosses below lower band = Potential buy (oversold)
+                    # Price moves back inside bands = Reversal signal
+                    # Band squeeze (bands narrow) followed by expansion = Breakout signal
+                    signal = "neutral"
+                    signal_reason = ""
+                    
+                    upper = bb_data["upper"][-1]
+                    lower = bb_data["lower"][-1]
+                    prev_upper = bb_data["upper"][-2]
+                    prev_lower = bb_data["lower"][-2]
+                    
+                    # Calculate band width for squeeze detection
+                    curr_bandwidth = (upper - lower) / bb_data["middle"][-1]
+                    prev_bandwidth = (prev_upper - prev_lower) / bb_data["middle"][-2]
+                    
+                    if current_price > upper and prev_price <= prev_upper:
+                        signal = "sell"
+                        signal_reason = "price crossed above upper band"
+                    elif current_price < lower and prev_price >= prev_lower:
+                        signal = "buy"
+                        signal_reason = "price crossed below lower band"
+                    elif (prev_price > prev_upper and current_price <= upper) or \
+                         (prev_price < prev_lower and current_price >= lower):
+                        signal = "neutral"
+                        signal_reason = "price moved back inside bands"
+                    elif curr_bandwidth > prev_bandwidth * 1.1 and \
+                         abs(current_price - prev_price) > abs(upper - lower) * 0.1:
+                        signal = "buy" if current_price > prev_price else "sell"
+                        signal_reason = "breakout from band squeeze"
+                    
                     results["bollinger"] = {
-                        "upper": [float(x) for x in bb_data["upper"][-10:]],
-                        "middle": [float(x) for x in bb_data["middle"][-10:]],
-                        "lower": [float(x) for x in bb_data["lower"][-10:]],
+                        "dates": dates,
+                        "upper": [float(x) for x in bb_data["upper"]],
+                        "middle": [float(x) for x in bb_data["middle"]],
+                        "lower": [float(x) for x in bb_data["lower"]],
                         "current": {
                             "upper": float(bb_data["upper"][-1]),
                             "middle": float(bb_data["middle"][-1]),
                             "lower": float(bb_data["lower"][-1]),
                             "price": current_price
                         },
-                        "signal": "buy" if current_price <= bb_data["lower"][-1] else "sell" if current_price >= bb_data["upper"][-1] else "neutral"
+                        "signal": signal,
+                        "signal_reason": signal_reason
                     }
-                elif indicator.lower() == "sma":
-                    period = params.get("sma_period", 20) if params else 20
-                    sma_values = self._calculate_sma(df, period)
-                    current_price = float(df['Close'].iloc[-1])
-                    results["sma"] = {
-                        "values": [float(x) for x in sma_values[-10:]],
-                        "current": float(sma_values[-1]),
-                        "signal": "buy" if current_price > sma_values[-1] else "sell"
-                    }
-                elif indicator.lower() == "ema":
-                    period = params.get("ema_period", 20) if params else 20
-                    ema_values = self._calculate_ema(df, period)
-                    current_price = float(df['Close'].iloc[-1])
-                    results["ema"] = {
-                        "values": [float(x) for x in ema_values[-10:]],
-                        "current": float(ema_values[-1]),
-                        "signal": "buy" if current_price > ema_values[-1] else "sell"
-                    }
+
                 elif indicator.lower() == "stochastic":
                     k_period = params.get("stoch_k_period", 14) if params else 14
                     d_period = params.get("stoch_d_period", 3) if params else 3
                     stoch_data = self._calculate_stochastic(df, k_period, d_period)
+                    
+                    # Stochastic Signal Logic:
+                    # K line crosses above D line in oversold territory = Strong buy
+                    # K line crosses below D line in overbought territory = Strong sell
+                    # K line crosses D line in neutral territory = Weak signal
+                    signal = "neutral"
+                    signal_strength = "weak"
+                    
+                    if len(stoch_data["k"]) >= 2:
+                        curr_k = stoch_data["k"][-1]
+                        curr_d = stoch_data["d"][-1]
+                        prev_k = stoch_data["k"][-2]
+                        prev_d = stoch_data["d"][-2]
+                        
+                        if prev_k <= prev_d and curr_k > curr_d:  # Bullish crossover
+                            if curr_k < 20:
+                                signal = "buy"
+                                signal_strength = "strong"
+                            else:
+                                signal = "buy"
+                                signal_strength = "weak"
+                        elif prev_k >= prev_d and curr_k < curr_d:  # Bearish crossover
+                            if curr_k > 80:
+                                signal = "sell"
+                                signal_strength = "strong"
+                            else:
+                                signal = "sell"
+                                signal_strength = "weak"
+                    
                     results["stochastic"] = {
-                        "k": [float(x) for x in stoch_data["k"][-10:]],
-                        "d": [float(x) for x in stoch_data["d"][-10:]],
+                        "dates": dates,
+                        "k": [float(x) for x in stoch_data["k"]],
+                        "d": [float(x) for x in stoch_data["d"]],
                         "current": {
                             "k": float(stoch_data["k"][-1]),
                             "d": float(stoch_data["d"][-1])
                         },
-                        "signal": "buy" if stoch_data["k"][-1] > stoch_data["d"][-1] and stoch_data["k"][-1] < 20 else "sell" if stoch_data["k"][-1] < stoch_data["d"][-1] and stoch_data["k"][-1] > 80 else "neutral"
+                        "signal": signal,
+                        "signal_strength": signal_strength
                     }
-                elif indicator.lower() == "atr":
-                    period = params.get("atr_period", 14) if params else 14
-                    atr_values = self._calculate_atr(df, period)
-                    results["atr"] = {
-                        "values": [float(x) for x in atr_values[-10:]],
-                        "current": float(atr_values[-1]),
-                        "signal": "neutral"  # ATR is not directional
-                    }
-                elif indicator.lower() == "obv":
-                    obv_values = self._calculate_obv(df)
-                    results["obv"] = {
-                        "values": [float(x) for x in obv_values[-10:]],
-                        "current": float(obv_values[-1]),
-                        "signal": "buy" if obv_values[-1] > obv_values[-2] else "sell"
-                    }
-                elif indicator.lower() == "vwap":
-                    vwap_values = self._calculate_vwap(df)
+
+                elif indicator.lower() == "sma":
+                    period = params.get("sma_period", 20) if params else 20
+                    sma_values = self._calculate_sma(df, period)
                     current_price = float(df['Close'].iloc[-1])
-                    results["vwap"] = {
-                        "values": [float(x) for x in vwap_values[-10:]],
-                        "current": float(vwap_values[-1]),
-                        "signal": "buy" if current_price > vwap_values[-1] else "sell"
-                    }
-                elif indicator.lower() == "pivot":
-                    pivot_data = self._calculate_pivot_points(df)
-                    current_price = float(df['Close'].iloc[-1])
-                    # Check if price is bouncing from support or rejecting from resistance
+                    prev_price = float(df['Close'].iloc[-2])
+                    prev_sma = float(sma_values[-2])
+                    curr_sma = float(sma_values[-1])
+                    
+                    # SMA Signal Logic:
+                    # Price crosses above SMA = Buy
+                    # Price crosses below SMA = Sell
+                    # Also consider SMA slope for trend strength
                     signal = "neutral"
-                    if current_price <= pivot_data["support1"] or current_price <= pivot_data["support2"]:
+                    trend = "neutral"
+                    
+                    # Determine trend based on SMA slope
+                    if curr_sma > prev_sma:
+                        trend = "uptrend"
+                    elif curr_sma < prev_sma:
+                        trend = "downtrend"
+                    
+                    # Generate signal based on price crossover
+                    if prev_price <= prev_sma and current_price > curr_sma:
                         signal = "buy"
-                    elif current_price >= pivot_data["resistance1"] or current_price >= pivot_data["resistance2"]:
+                    elif prev_price >= prev_sma and current_price < curr_sma:
                         signal = "sell"
-                    results["pivot"] = {
-                        **pivot_data,
-                        "current_price": current_price,
-                        "signal": signal
+                    
+                    results["sma"] = {
+                        "dates": dates,
+                        "values": [float(x) for x in sma_values],
+                        "current": float(sma_values[-1]),
+                        "signal": signal,
+                        "trend": trend
                     }
-                elif indicator.lower() == "fibonacci":
-                    fib_data = self._calculate_fibonacci_retracement(df)
+
+                elif indicator.lower() == "ema":
+                    period = params.get("ema_period", 20) if params else 20
+                    ema_values = self._calculate_ema(df, period)
                     current_price = float(df['Close'].iloc[-1])
-                    # Check if price is bouncing from retracement levels
+                    prev_price = float(df['Close'].iloc[-2])
+                    prev_ema = float(ema_values[-2])
+                    curr_ema = float(ema_values[-1])
+                    
+                    # EMA Signal Logic:
+                    # Similar to SMA but more weight on recent prices
+                    # Price crosses above EMA = Buy
+                    # Price crosses below EMA = Sell
+                    # Also consider EMA slope and distance from price
                     signal = "neutral"
-                    for level, value in fib_data["levels"].items():
-                        if abs(current_price - value) / value < 0.01:  # Within 1% of fib level
-                            signal = "buy" if current_price > value else "sell"
-                            break
-                    results["fibonacci"] = {
-                        **fib_data,
-                        "current_price": current_price,
-                        "signal": signal
+                    trend = "neutral"
+                    strength = "normal"
+                    
+                    # Determine trend based on EMA slope
+                    if curr_ema > prev_ema:
+                        trend = "uptrend"
+                    elif curr_ema < prev_ema:
+                        trend = "downtrend"
+                    
+                    # Generate signal based on price crossover
+                    if prev_price <= prev_ema and current_price > curr_ema:
+                        signal = "buy"
+                        # Check signal strength based on distance from EMA
+                        if (current_price - curr_ema) / curr_ema > 0.02:
+                            strength = "strong"
+                    elif prev_price >= prev_ema and current_price < curr_ema:
+                        signal = "sell"
+                        # Check signal strength based on distance from EMA
+                        if (curr_ema - current_price) / curr_ema > 0.02:
+                            strength = "strong"
+                    
+                    results["ema"] = {
+                        "dates": dates,
+                        "values": [float(x) for x in ema_values],
+                        "current": float(ema_values[-1]),
+                        "signal": signal,
+                        "trend": trend,
+                        "strength": strength
                     }
+
             except Exception as e:
                 results[indicator] = {"error": str(e)}
                 
@@ -277,7 +395,7 @@ class TechnicalAnalysis:
         }
         
         # OBV Signal
-        obv = self._calculate_obv(df)
+        obv, obv_signals = self.calculate_obv(df, {"signal_period": 20, "ma_type": 1})
         signals["obv"] = {
             "value": float(obv[-1]),
             "signal": "buy" if obv[-1] > obv[-2] else "sell",
@@ -285,7 +403,7 @@ class TechnicalAnalysis:
         }
         
         # VWAP Signal
-        vwap = self._calculate_vwap(df)
+        vwap, vwap_signals = self.calculate_vwap(df, {"period": 14, "anchor": 1})
         signals["vwap"] = {
             "value": float(vwap[-1]),
             "signal": "buy" if current_price > vwap[-1] else "sell",
@@ -332,39 +450,113 @@ class TechnicalAnalysis:
     
     def _calculate_rsi(self, df: pd.DataFrame, period: int = 14) -> np.ndarray:
         """Calculate RSI indicator"""
-        rsi = momentum.RSIIndicator(df['Close'], window=period)
-        return rsi.rsi().fillna(0).values
+        try:
+            logger.info(f"Calculating RSI with period {period}")
+            
+            # Calculate price changes
+            delta = df['Close'].diff()
+            logger.info(f"Price changes calculated. Sample:\n{delta.head()}")
+            
+            # Get gains and losses
+            gain = (delta.where(delta > 0, 0)).fillna(0)
+            loss = (-delta.where(delta < 0, 0)).fillna(0)
+            logger.info(f"Gains and losses calculated. Samples:\nGains:\n{gain.head()}\nLosses:\n{loss.head()}")
+            
+            # Calculate average gains and losses
+            avg_gain = gain.rolling(window=period).mean()
+            avg_loss = loss.rolling(window=period).mean()
+            logger.info(f"Average gains and losses calculated. Samples:\nAvg Gains:\n{avg_gain.head()}\nAvg Losses:\n{avg_loss.head()}")
+            
+            # Calculate RS and RSI
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+            logger.info(f"RSI calculated. Sample values:\n{rsi.head()}")
+            
+            return rsi.values
+        except Exception as e:
+            logger.error(f"Error calculating RSI: {str(e)}")
+            logger.error("Full traceback:", exc_info=True)
+            return np.zeros(len(df))
     
     def _calculate_macd(self, df: pd.DataFrame, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> Dict[str, np.ndarray]:
         """Calculate MACD indicator"""
-        macd = trend.MACD(
-            df['Close'], 
-            window_slow=slowperiod,
-            window_fast=fastperiod,
-            window_sign=signalperiod
-        )
-        return {
-            "macd": macd.macd().fillna(0).values,
-            "signal": macd.macd_signal().fillna(0).values,
-            "histogram": macd.macd_diff().fillna(0).values
-        }
+        try:
+            logger.info(f"Calculating MACD with fast={fastperiod}, slow={slowperiod}, signal={signalperiod}")
+            
+            # Calculate EMAs
+            fast_ema = df['Close'].ewm(span=fastperiod, adjust=False).mean()
+            slow_ema = df['Close'].ewm(span=slowperiod, adjust=False).mean()
+            logger.info(f"EMAs calculated. Samples:\nFast EMA:\n{fast_ema.head()}\nSlow EMA:\n{slow_ema.head()}")
+            
+            # Calculate MACD line
+            macd_line = fast_ema - slow_ema
+            logger.info(f"MACD line calculated. Sample:\n{macd_line.head()}")
+            
+            # Calculate signal line
+            signal_line = macd_line.ewm(span=signalperiod, adjust=False).mean()
+            logger.info(f"Signal line calculated. Sample:\n{signal_line.head()}")
+            
+            # Calculate histogram
+            histogram = macd_line - signal_line
+            logger.info(f"Histogram calculated. Sample:\n{histogram.head()}")
+            
+            return {
+                'macd': macd_line.values,
+                'signal': signal_line.values,
+                'histogram': histogram.values
+            }
+        except Exception as e:
+            logger.error(f"Error calculating MACD: {str(e)}")
+            logger.error("Full traceback:", exc_info=True)
+            zeros = np.zeros(len(df))
+            return {'macd': zeros, 'signal': zeros, 'histogram': zeros}
     
-    def _calculate_bollinger_bands(self, df: pd.DataFrame, period: int = 20) -> Dict[str, np.ndarray]:
+    def _calculate_bollinger_bands(self, df: pd.DataFrame, period: int = 20, num_std: int = 2) -> Dict[str, np.ndarray]:
         """Calculate Bollinger Bands"""
-        bb = volatility.BollingerBands(df['Close'], window=period)
-        return {
-            "upper": bb.bollinger_hband().fillna(0).values,
-            "middle": bb.bollinger_mavg().fillna(0).values,
-            "lower": bb.bollinger_lband().fillna(0).values
-        }
+        try:
+            logger.info(f"Calculating Bollinger Bands with period={period}, std={num_std}")
+            
+            # Calculate middle band (SMA)
+            middle = df['Close'].rolling(window=period, min_periods=1).mean()
+            
+            # Calculate standard deviation
+            std = df['Close'].rolling(window=period, min_periods=1).std()
+            
+            # Calculate upper and lower bands
+            upper = middle + (std * num_std)
+            lower = middle - (std * num_std)
+            
+            return {
+                "upper": upper.to_numpy(),
+                "middle": middle.to_numpy(),
+                "lower": lower.to_numpy()
+            }
+        except Exception as e:
+            logger.error(f"Error calculating Bollinger Bands: {str(e)}")
+            zeros = np.zeros(len(df))
+            return {
+                "upper": zeros,
+                "middle": zeros,
+                "lower": zeros
+            }
     
     def _calculate_sma(self, df: pd.DataFrame, period: int = 20) -> np.ndarray:
         """Calculate Simple Moving Average"""
-        return trend.SMAIndicator(df['Close'], window=period).sma_indicator().fillna(0).values
+        try:
+            sma = df['Close'].rolling(window=period, min_periods=1).mean()
+            return sma.to_numpy()
+        except Exception as e:
+            logger.error(f"Error calculating SMA: {str(e)}")
+            return np.zeros(len(df))
     
     def _calculate_ema(self, df: pd.DataFrame, period: int = 20) -> np.ndarray:
         """Calculate Exponential Moving Average"""
-        return trend.EMAIndicator(df['Close'], window=period).ema_indicator().fillna(0).values
+        try:
+            ema = df['Close'].ewm(span=period, adjust=False).mean()
+            return ema.to_numpy()
+        except Exception as e:
+            logger.error(f"Error calculating EMA: {str(e)}")
+            return np.zeros(len(df))
     
     def _get_default_stock_list(self) -> List[str]:
         """Get default list of stocks (e.g., Nifty 50)"""
@@ -552,31 +744,102 @@ class TechnicalAnalysis:
         atr = volatility.AverageTrueRange(df['High'], df['Low'], df['Close'], window=period)
         return atr.average_true_range().fillna(0).values
     
-    def _calculate_obv(self, df: pd.DataFrame) -> np.ndarray:
-        """Calculate On-Balance Volume"""
-        obv = volume.OnBalanceVolumeIndicator(df['Close'], df['Volume'])
-        return obv.on_balance_volume().fillna(0).values
-    
-    def _calculate_vwap(self, df: pd.DataFrame) -> np.ndarray:
-        """Calculate Volume Weighted Average Price"""
-        # Calculate typical price
-        typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+    def calculate_obv(self, df: pd.DataFrame, params: Dict[str, Any]) -> Tuple[pd.Series, List[Dict[str, Any]]]:
+        """
+        Calculate On-Balance Volume with signal line
+        params:
+            signal_period: Period for signal line calculation
+            ma_type: Moving average type (1 for SMA, 2 for EMA)
+        """
+        signal_period = params.get('signal_period', 20)
+        ma_type = params.get('ma_type', 1)  # 1 for SMA, 2 for EMA
         
-        # Calculate volume weighted price
-        vwap_values = []
-        cumulative_volume = 0
-        cumulative_price_volume = 0
+        # Calculate basic OBV using ta library
+        obv_indicator = volume.OnBalanceVolumeIndicator(
+            close=df['close'],
+            volume=df['volume']
+        )
+        obv = obv_indicator.on_balance_volume()
         
-        for i in range(len(df)):
-            cumulative_volume += df['Volume'].iloc[i]
-            cumulative_price_volume += typical_price.iloc[i] * df['Volume'].iloc[i]
+        # Calculate signal line based on ma_type
+        if ma_type == 2:  # EMA
+            signal_line = obv.ewm(span=signal_period, adjust=False).mean()
+        else:  # Default to SMA
+            signal_line = obv.rolling(window=signal_period).mean()
+        
+        # Generate signals
+        signals = []
+        for i in range(1, len(obv)):
+            if pd.isna(signal_line[i]) or pd.isna(signal_line[i-1]):
+                continue
             
-            if cumulative_volume > 0:
-                vwap_values.append(cumulative_price_volume / cumulative_volume)
-            else:
-                vwap_values.append(0)
-                
-        return np.array(vwap_values)
+            if obv[i] > signal_line[i] and obv[i-1] <= signal_line[i-1]:
+                signals.append({
+                    'timestamp': df.index[i],
+                    'type': 'buy',
+                    'price': df['close'][i],
+                    'strength': 1
+                })
+            elif obv[i] < signal_line[i] and obv[i-1] >= signal_line[i-1]:
+                signals.append({
+                    'timestamp': df.index[i],
+                    'type': 'sell',
+                    'price': df['close'][i],
+                    'strength': 1
+                })
+        
+        return obv, signals
+    
+    def calculate_vwap(self, df: pd.DataFrame, params: Dict[str, Any]) -> Tuple[pd.Series, List[Dict[str, Any]]]:
+        """
+        Calculate Volume Weighted Average Price with custom period and anchor
+        params:
+            period: Rolling window period
+            anchor: Reset frequency (1: daily, 2: weekly, 3: monthly)
+        """
+        period = params.get('period', 14)
+        anchor = params.get('anchor', 1)
+        
+        # Calculate typical price
+        typical_price = (df['high'] + df['low'] + df['close']) / 3
+        
+        # Calculate cumulative values based on anchor
+        if anchor == 2:  # Weekly
+            grouper = pd.Grouper(freq='W')
+        elif anchor == 3:  # Monthly
+            grouper = pd.Grouper(freq='M')
+        else:  # Daily
+            grouper = pd.Grouper(freq='D')
+        
+        # Group by the specified frequency
+        df['cumulative_volume'] = df['volume'].groupby(grouper).cumsum()
+        df['cumulative_pv'] = (typical_price * df['volume']).groupby(grouper).cumsum()
+        
+        # Calculate VWAP
+        vwap = df['cumulative_pv'].rolling(window=period).sum() / df['cumulative_volume'].rolling(window=period).sum()
+        
+        # Generate signals
+        signals = []
+        for i in range(1, len(df)):
+            if pd.isna(vwap[i]) or pd.isna(vwap[i-1]):
+                continue
+            
+            if df['close'][i] > vwap[i] and df['close'][i-1] <= vwap[i-1]:
+                signals.append({
+                    'timestamp': df.index[i],
+                    'type': 'buy',
+                    'price': df['close'][i],
+                    'strength': 1
+                })
+            elif df['close'][i] < vwap[i] and df['close'][i-1] >= vwap[i-1]:
+                signals.append({
+                    'timestamp': df.index[i],
+                    'type': 'sell',
+                    'price': df['close'][i],
+                    'strength': 1
+                })
+        
+        return vwap, signals
     
     def _calculate_pivot_points(self, df: pd.DataFrame) -> Dict[str, float]:
         """Calculate Pivot Points"""
@@ -635,58 +898,84 @@ class TechnicalAnalysis:
         timeframe: str,
         indicators: List[Dict[str, Any]]
     ) -> pd.DataFrame:
-        """Get historical data and calculate indicators"""
-        # Try to get cached data
-        cache_key = f"data_{ticker}_{start_date}_{end_date}_{timeframe}"
-        cached_data = get_cached_data(cache_key)
-        if cached_data is not None:
-            return pd.DataFrame(cached_data)
+        """Get data with technical indicators"""
+        try:
+            logger.info(f"Getting data with indicators for {ticker}")
+            logger.info(f"Timeframe: {timeframe}")
+            logger.info(f"Indicators requested: {[ind['type'] for ind in indicators]}")
+            
+            # Get OHLC data
+            df = get_ohlc_data(ticker, start_date, end_date, timeframe)
+            if df.empty:
+                logger.error(f"No data available for {ticker}")
+                return df
 
-        # Get fresh data using get_ohlc_data instead of get_historical_data
-        df = get_ohlc_data(ticker, start_date=start_date, end_date=end_date, interval=timeframe)
-        if df.empty:
+            logger.info(f"Initial data shape: {df.shape}")
+            logger.info(f"Initial columns: {df.columns.tolist()}")
+            logger.info(f"Sample data:\n{df.head()}")
+
+            # Calculate indicators
+            for indicator in indicators:
+                try:
+                    indicator_type = indicator['type'].lower()
+                    params = indicator.get('parameters', {})
+                    logger.info(f"Calculating {indicator_type} with params: {params}")
+
+                    if indicator_type == 'rsi':
+                        period = params.get('period', 14)
+                        rsi_values = self._calculate_rsi(df, period)
+                        df[f'RSI_{period}'] = rsi_values
+                        logger.info(f"RSI_{period} calculation completed. Sample values:\n{df[f'RSI_{period}'].head()}")
+
+                    elif indicator_type == 'sma':
+                        period = params.get('period', 20)
+                        sma_values = self._calculate_sma(df, period)
+                        df[f'SMA_{period}'] = sma_values
+                        logger.info(f"SMA_{period} calculation completed. Sample values:\n{df[f'SMA_{period}'].head()}")
+
+                    elif indicator_type == 'ema':
+                        period = params.get('period', 20)
+                        ema_values = self._calculate_ema(df, period)
+                        df[f'EMA_{period}'] = ema_values
+                        logger.info(f"EMA_{period} calculation completed. Sample values:\n{df[f'EMA_{period}'].head()}")
+
+                    elif indicator_type == 'macd':
+                        fast_period = params.get('fastperiod', 12)
+                        slow_period = params.get('slowperiod', 26)
+                        signal_period = params.get('signalperiod', 9)
+                        macd_data = self._calculate_macd(df, fast_period, slow_period, signal_period)
+                        df['MACD'] = macd_data['macd']
+                        df['MACD_Signal'] = macd_data['signal']
+                        df['MACD_Hist'] = macd_data['histogram']
+                        logger.info("MACD calculation completed. Sample values:\n" + \
+                                  f"MACD: {df['MACD'].head()}\n" + \
+                                  f"Signal: {df['MACD_Signal'].head()}\n" + \
+                                  f"Histogram: {df['MACD_Hist'].head()}")
+
+                    elif indicator_type == 'bollinger':
+                        period = params.get('period', 20)
+                        bb_data = self._calculate_bollinger_bands(df, period)
+                        df['BB_Upper'] = bb_data['upper']
+                        df['BB_Middle'] = bb_data['middle']
+                        df['BB_Lower'] = bb_data['lower']
+                        logger.info("Bollinger Bands calculation completed. Sample values:\n" + \
+                                  f"Upper: {df['BB_Upper'].head()}\n" + \
+                                  f"Middle: {df['BB_Middle'].head()}\n" + \
+                                  f"Lower: {df['BB_Lower'].head()}")
+
+                except Exception as e:
+                    logger.error(f"Error calculating {indicator_type}: {str(e)}")
+                    logger.error(f"DataFrame info at error:\n{df.info()}")
+                    continue
+
+            logger.info(f"Final data shape: {df.shape}")
+            logger.info(f"Final columns: {df.columns.tolist()}")
+            logger.info("Sample of final data with indicators:\n" + \
+                      f"{df.head().to_string()}")
+
             return df
 
-        # Calculate indicators
-        for indicator in indicators:
-            try:
-                ind_type = indicator["type"].lower()
-                # Handle both params and parameters
-                params = indicator.get("parameters", indicator.get("params", {}))
-                
-                if ind_type == "rsi":
-                    df[f"RSI_{params.get('period', 14)}"] = self._calculate_rsi(df, params.get("period", 14))
-                elif ind_type == "macd":
-                    macd_data = self._calculate_macd(
-                        df,
-                        params.get("fastperiod", 12),
-                        params.get("slowperiod", 26),
-                        params.get("signalperiod", 9)
-                    )
-                    df["MACD"] = macd_data["macd"]
-                    df["MACD_Signal"] = macd_data["signal"]
-                    df["MACD_Hist"] = macd_data["histogram"]
-                elif ind_type == "bollinger":
-                    bb_data = self._calculate_bollinger_bands(df, params.get("period", 20))
-                    df["BB_Upper"] = bb_data["upper"]
-                    df["BB_Middle"] = bb_data["middle"]
-                    df["BB_Lower"] = bb_data["lower"]
-                elif ind_type == "sma":
-                    df[f"SMA_{params.get('period', 20)}"] = self._calculate_sma(df, params.get("period", 20))
-                elif ind_type == "ema":
-                    df[f"EMA_{params.get('period', 20)}"] = self._calculate_ema(df, params.get("period", 20))
-                elif ind_type == "stochastic":
-                    stoch_data = self._calculate_stochastic(
-                        df,
-                        params.get("k_period", 14),
-                        params.get("d_period", 3)
-                    )
-                    df["STOCH_K"] = stoch_data["k"]
-                    df["STOCH_D"] = stoch_data["d"]
-            except Exception as e:
-                logger.error(f"Error calculating indicator {ind_type}: {str(e)}")
-                continue
-
-        # Cache the data
-        set_cached_data(cache_key, df.to_dict(), self.cache_ttl)
-        return df 
+        except Exception as e:
+            logger.error(f"Error in _get_data_with_indicators: {str(e)}")
+            logger.error(f"Full traceback:", exc_info=True)
+            return pd.DataFrame() 

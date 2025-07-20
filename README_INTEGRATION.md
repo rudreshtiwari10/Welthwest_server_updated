@@ -146,3 +146,5 @@ The AI assistant is designed to:
    - Check that the API endpoint URL in `frontend/src/services/api.ts` is correct
    - Verify that the required dependencies are installed (`requests`)
    - Check the API keys in your `.env` file if using external AI models 
+
+http://localhost:5000/test-api.html 

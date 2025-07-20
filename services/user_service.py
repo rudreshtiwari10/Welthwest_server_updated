@@ -5,24 +5,26 @@ from bson.objectid import ObjectId
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, Tuple
 from urllib.parse import quote_plus
+from config import get_config
 
 # MongoDB connection
 def get_db_connection():
     """
     Connect to MongoDB using connection string from environment variable
     """
+    config = get_config()
     mongo_uri = os.environ.get('MONGODB_URI', 'mongodb://localhost:27017')
     
     # Handle potential special characters in connection string
     try:
         client = MongoClient(mongo_uri)
-        db = client.get_database('welthwest_db')
+        db = client.get_database(config.DB_NAME)
         return db
     except Exception as e:
         print(f"MongoDB connection error: {str(e)}")
         # Fallback to local connection without authentication
         client = MongoClient('mongodb://localhost:27017')
-        db = client.get_database('welthwest_db')
+        db = client.get_database(config.DB_NAME)
         return db
 
 class UserService:
@@ -60,7 +62,7 @@ class UserService:
         if self.users.find_one({"email": email}):
             return False, "Email already exists", None
         
-        # Create user document
+        # Create user document without subscription (will be initialized separately)
         user = {
             "username": username,
             "email": email,
@@ -73,15 +75,20 @@ class UserService:
             "watchlists": []
         }
         
-        # Insert user into database
-        result = self.users.insert_one(user)
-        
-        if result.inserted_id:
-            # Return user data without password
-            user_data = self.get_user_by_id(result.inserted_id)
-            return True, "User registered successfully", user_data
-        
-        return False, "Failed to register user", None
+        try:
+            # Insert user into database
+            result = self.users.insert_one(user)
+            
+            if result.inserted_id:
+                # Return user data without password
+                user_data = self.get_user_by_id(result.inserted_id)
+                if user_data:
+                    return True, "User registered successfully", user_data
+            
+            return False, "Failed to register user", None
+        except Exception as e:
+            print(f"Error registering user: {str(e)}")
+            return False, "Failed to register user", None
     
     def login_user(self, username_or_email: str, password: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """
@@ -135,7 +142,25 @@ class UserService:
             "email": user["email"],
             "first_name": user.get("first_name", ""),
             "last_name": user.get("last_name", ""),
-            "avatar_url": user.get("avatar_url", "")
+            "avatar_url": user.get("avatar_url", ""),
+            "role": user.get("role", "user"),
+            "subscription": user.get("subscription", {
+                "tier": "FREE",
+                "starts_at": datetime.utcnow(),
+                "expires_at": None,
+                "usage": {
+                    "daily": {
+                        "backtest_count": 0,
+                        "llm_query_count": 0,
+                        "last_reset": datetime.utcnow()
+                    },
+                    "monthly": {
+                        "backtest_count": 0,
+                        "llm_query_count": 0,
+                        "last_reset": datetime.utcnow()
+                    }
+                }
+            })
         }
     
     def update_user_profile(self, user_id: str, profile_data: Dict[str, Any]) -> Tuple[bool, str, Optional[Dict[str, Any]]]:

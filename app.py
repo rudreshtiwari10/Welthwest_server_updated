@@ -8,8 +8,12 @@ from services.stock_service import (
     get_historical_data, get_live_data, validate_ticker,
     get_ohlc_data, get_market_indices, get_top_gainers_losers
 )
+from services.upstox_service import upstox_api
 from services.utils import normalize_data, calculate_statistics
 from services.user_service import UserService
+from services.ai_service import AIModelService
+from services.subscription_service import SubscriptionService
+from middleware.subscription_middleware import require_subscription_feature, check_market_data_access
 import os
 import requests
 import logging
@@ -25,6 +29,9 @@ import json
 from functools import wraps
 import re
 from services.backtesting_service import BacktestingService
+from services.market_regime_service import market_regime_service
+from services.session_service import InMemorySessionService
+from bson import ObjectId
 
 # Setup logging with more detailed format
 logging.basicConfig(
@@ -144,10 +151,13 @@ def create_app():
 app = create_app()
 jwt = JWTManager(app)
 user_service = UserService()
+subscription_service = SubscriptionService()
+session_service = InMemorySessionService()
 
 # Initialize services
 technical_analysis = TechnicalAnalysis()
 portfolio_service = PortfolioService()
+ai_service = AIModelService()  # Initialize AI service
 
 # Initialize backtesting service
 backtesting_service = BacktestingService()
@@ -185,6 +195,19 @@ def register():
     if not success:
         return jsonify({"error": message}), 400
     
+    # Initialize subscription
+    if not subscription_service.initialize_subscription(user_data['id']):
+        # If subscription initialization fails, delete the user and return error
+        user_service.users.delete_one({"_id": ObjectId(user_data['id'])})
+        return jsonify({"error": "Failed to initialize user subscription"}), 500
+    
+    # Get the initialized subscription
+    subscription = subscription_service.get_subscription_details(user_data['id'])
+    if not subscription:
+        # This shouldn't happen, but if it does, clean up and return error
+        user_service.users.delete_one({"_id": ObjectId(user_data['id'])})
+        return jsonify({"error": "Failed to retrieve user subscription"}), 500
+    
     # Generate tokens
     access_token = create_access_token(identity=str(user_data['id']))
     refresh_token = create_refresh_token(identity=str(user_data['id']))
@@ -195,6 +218,7 @@ def register():
     return jsonify({
         "message": "Registration successful",
         "user": user_data,
+        "subscription": subscription,
         "access_token": access_token,
         "refresh_token": refresh_token
     }), 201
@@ -218,6 +242,14 @@ def login():
     if not success:
         return jsonify({"error": message}), 401
     
+    # Handle session conversion if session_id is provided
+    session_id = data.get('session_id')
+    if session_id:
+        # Convert anonymous session to authenticated session
+        conversion_success = session_service.convert_to_authenticated_session(session_id, user_data['id'])
+        if not conversion_success:
+            logger.warning(f"Failed to convert session {session_id} for user {user_data['id']}")
+    
     # Generate tokens
     access_token = create_access_token(identity=str(user_data['id']))
     refresh_token = create_refresh_token(identity=str(user_data['id']))
@@ -225,12 +257,20 @@ def login():
     # Store refresh token
     user_service.store_refresh_token(user_data['id'], refresh_token)
     
-    return jsonify({
+    response_data = {
         "message": "Login successful",
         "user": user_data,
         "access_token": access_token,
         "refresh_token": refresh_token
-    }), 200
+    }
+    
+    # Include session info if conversion happened
+    if session_id:
+        response_data["session_converted"] = conversion_success
+        if conversion_success:
+            response_data["session_id"] = session_id
+    
+    return jsonify(response_data), 200
 
 @app.route('/api/auth/refresh', methods=['POST'])
 @validate_json_request
@@ -307,6 +347,238 @@ def update_profile():
         "message": "Profile updated successfully",
         "user": user_data
     }), 200
+
+# Anonymous Chat endpoint with session tracking
+@app.route('/api/chat', methods=['POST'])
+@validate_json_request
+def anonymous_chat():
+    """Chat with AI using session-based message tracking"""
+    try:
+        data = request.get_json()
+        
+        # Get or create session ID
+        session_id = data.get('session_id')
+        if not session_id:
+            session_id = session_service.create_anonymous_session()
+            return jsonify({
+                "session_id": session_id,
+                "message": "Please include this session_id in future requests",
+                "login_required": False
+            }), 200
+        
+        # Check if user can send more messages
+        can_send = session_service.check_can_send_message(session_id)
+        if not can_send:
+            return jsonify({
+                "error": "Message limit reached",
+                "login_required": True
+            }), 403
+        
+        # Process the chat message
+        message = data.get('message', '')
+        if not message:
+            return jsonify({"error": "Message is required"}), 400
+            
+        model = data.get('model', 'openrouter')  # Default to OpenRouter
+        
+        # Validate model selection
+        valid_models = ['openai', 'claude', 'openrouter', 'llama']
+        if model not in valid_models:
+            model = 'openrouter'  # Fallback to default
+        
+        # Check if the model's API key is configured
+        api_key_map = {
+            'openai': os.environ.get('OPENAI_API_KEY'),
+            'claude': os.environ.get('CLAUDE_API_KEY'),
+            'openrouter': os.environ.get('OPENROUTER_API_KEY')
+        }
+        
+        # For llama or if the selected model's API key is not configured, use available model
+        if model == 'llama' or not api_key_map.get(model):
+            # Find first available model
+            for available_model, key in api_key_map.items():
+                if key:
+                    model = available_model
+                    break
+            else:
+                # If no API keys configured, use llama (simulated)
+                model = 'llama'
+        
+        # Process the chat query
+        ai_response = ai_service.process_chat_query(message, model)
+        
+        # Update message count
+        new_count = session_service.update_message_count(session_id)
+        
+        # Convert to native Python int to avoid JSON serialization issues
+        new_count = int(new_count) if new_count is not False else 0
+        
+        # Check if this was their last free message
+        remaining = int(session_service.free_message_limit) - new_count
+        login_required = remaining <= 0
+        
+        # Convert any numpy/pandas types to native Python types for JSON serialization
+        def convert_to_serializable(obj):
+            """Convert numpy/pandas types to JSON serializable types"""
+            if obj is None:
+                return None
+            
+            # Handle basic containers first
+            if isinstance(obj, dict):
+                return {k: convert_to_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [convert_to_serializable(v) for v in obj]
+            
+            # Check if it's a numpy/pandas type by string name to avoid import issues
+            type_name = type(obj).__name__
+            module_name = type(obj).__module__
+            
+            # Handle numpy types
+            if 'numpy' in module_name or type_name.startswith('int') or type_name.startswith('float'):
+                if 'int' in type_name or 'Int' in type_name:
+                    return int(obj)
+                elif 'float' in type_name or 'Float' in type_name:
+                    return float(obj)
+                elif 'ndarray' in type_name:
+                    return obj.tolist()
+            
+            # Handle pandas types
+            if 'pandas' in module_name:
+                try:
+                    import pandas as pd
+                    if pd.isna(obj):
+                        return None
+                except ImportError:
+                    pass
+                
+                # Convert pandas Series/DataFrame to dict/list
+                if hasattr(obj, 'to_dict'):
+                    return convert_to_serializable(obj.to_dict())
+                elif hasattr(obj, 'tolist'):
+                    return convert_to_serializable(obj.tolist())
+            
+            # For any other object that might not be serializable, convert to string
+            try:
+                import json
+                json.dumps(obj)  # Test if it's JSON serializable
+                return obj
+            except (TypeError, OverflowError):
+                return str(obj)
+        
+        # Clean the entire AI response for JSON serialization
+        clean_ai_response = convert_to_serializable(ai_response)
+        
+        # Prepare response data with explicit type conversions
+        response_data = {
+            "session_id": str(session_id),
+            "response": str(clean_ai_response.get('analysis', 'Sorry, I could not process your request.')),
+            "model": str(clean_ai_response.get('model', model)),
+            "stock_data": clean_ai_response.get('stock_data', {}),
+            "remaining_messages": int(remaining) if remaining > 0 else 0,
+            "login_required": bool(login_required)
+        }
+        
+        # Debug: Log the types of all values to identify any remaining int64 issues
+        logger.debug(f"Response data types: {[(k, type(v).__name__) for k, v in response_data.items()]}")
+        
+        return jsonify(response_data), 200
+        
+    except Exception as e:
+        logger.error(f"Error in anonymous chat endpoint: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": "An unexpected error occurred",
+            "details": str(e)
+        }), 500
+
+# Upstox API Authentication routes
+@app.route('/api/upstox/login-url', methods=['GET'])
+@jwt_required()
+def get_upstox_login_url():
+    """Get Upstox OAuth login URL"""
+    try:
+        login_url = upstox_api.get_login_url()
+        return jsonify({"login_url": login_url}), 200
+    except Exception as e:
+        logger.error(f"Error generating Upstox login URL: {str(e)}")
+        return jsonify({"error": "Failed to generate login URL"}), 500
+
+@app.route('/api/upstox/callback', methods=['GET'])
+def upstox_callback():
+    """Handle Upstox OAuth callback"""
+    try:
+        authorization_code = request.args.get('code')
+        if not authorization_code:
+            return jsonify({"error": "Authorization code not provided"}), 400
+        
+        # Exchange authorization code for access token
+        access_token = upstox_api.get_access_token(authorization_code)
+        
+        if access_token:
+            return jsonify({
+                "message": "Upstox authentication successful",
+                "access_token": access_token
+            }), 200
+        else:
+            return jsonify({"error": "Failed to get access token"}), 400
+            
+    except Exception as e:
+        logger.error(f"Error in Upstox callback: {str(e)}")
+        return jsonify({"error": "Authentication failed"}), 500
+
+@app.route('/api/upstox/set-token', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def set_upstox_token():
+    """Set Upstox access token manually"""
+    try:
+        data = request.get_json()
+        access_token = data.get('access_token')
+        
+        if not access_token:
+            return jsonify({"error": "Access token is required"}), 400
+        
+        upstox_api.set_access_token(access_token)
+        return jsonify({"message": "Upstox token set successfully"}), 200
+        
+    except Exception as e:
+        logger.error(f"Error setting Upstox token: {str(e)}")
+        return jsonify({"error": "Failed to set token"}), 500
+
+@app.route('/api/upstox/status', methods=['GET'])
+@jwt_required()
+def get_upstox_status():
+    """Get Upstox API connection status"""
+    try:
+        has_token = upstox_api.access_token is not None
+        return jsonify({
+            "connected": has_token,
+            "message": "Upstox API is connected" if has_token else "Upstox API not connected"
+        }), 200
+    except Exception as e:
+        logger.error(f"Error checking Upstox status: {str(e)}")
+        return jsonify({"error": "Failed to check status"}), 500
+
+@app.route('/api/upstox/save-credentials', methods=['POST'])
+@jwt_required()
+def save_upstox_credentials():
+    """Save Upstox credentials for automated login"""
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+        pin = data.get('pin')
+        
+        if not all([username, password, pin]):
+            return jsonify({'error': 'Missing required credentials'}), 400
+            
+        if upstox_api.save_credentials(username, password, pin):
+            return jsonify({'message': 'Credentials saved successfully'}), 200
+        else:
+            return jsonify({'error': 'Failed to save credentials'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error saving Upstox credentials: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 # AI Chat Service Implementation
 class AIModelService:
@@ -633,36 +905,74 @@ def ohlc_data():
 
 @app.route('/api/live', methods=['GET'])
 def live_data():
-    ticker_input = request.args.get('tickers', default='RELIANCE', type=str).upper()
-    ticker_list = [t.strip() for t in ticker_input.split(',')]
-    
-    # Validate tickers
-    valid_tickers = []
-    invalid_tickers = []
-    for ticker in ticker_list:
-        if validate_ticker(ticker):
-            valid_tickers.append(ticker)
-        else:
-            invalid_tickers.append(ticker)
-    
-    if not valid_tickers:
-        return jsonify({"error": "No valid ticker symbols provided"}), 400
-    
     try:
+        ticker_input = request.args.get('tickers', default='RELIANCE', type=str).upper()
+        ticker_list = [t.strip() for t in ticker_input.split(',')]
+        
+        logger.info(f"Live data request received for tickers: {ticker_list}")
+        
+        # Validate tickers
+        valid_tickers = []
+        invalid_tickers = []
+        for ticker in ticker_list:
+            if validate_ticker(ticker):
+                valid_tickers.append(ticker)
+            else:
+                invalid_tickers.append(ticker)
+        
+        if not valid_tickers:
+            logger.warning(f"No valid tickers found in request: {ticker_list}")
+            return jsonify({
+                "error": "No valid ticker symbols provided",
+                "invalid_tickers": invalid_tickers
+            }), 400
+        
+        logger.info(f"Fetching data for valid tickers: {valid_tickers}")
         data = get_live_data(valid_tickers)
-        # Convert DataFrame to dictionary for JSON serialization
-        result = data.reset_index().to_dict(orient='records')
+        
+        # Check for errors in the response
+        error_tickers = []
+        success_data = []
+        
+        for index, row in data.iterrows():
+            if 'error' in row:
+                error_tickers.append({
+                    'ticker': index,
+                    'error': row['error']
+                })
+            else:
+                success_data.append({
+                    'ticker': index,
+                    **row.to_dict()
+                })
+        
         response = {
-            "data": result,
+            "data": success_data,
             "valid_tickers": valid_tickers
         }
         
         if invalid_tickers:
             response["invalid_tickers"] = invalid_tickers
             
+        if error_tickers:
+            response["failed_tickers"] = error_tickers
+            
+        if not success_data:
+            logger.error(f"Failed to fetch data for all tickers: {error_tickers}")
+            return jsonify({
+                "error": "Failed to fetch data for all tickers",
+                "details": error_tickers
+            }), 503
+            
+        logger.info(f"Successfully fetched data for {len(success_data)} tickers")
         return jsonify(response)
+        
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Unexpected error in live data endpoint: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": "An unexpected error occurred",
+            "details": str(e)
+        }), 500
 
 @app.route('/api/validate', methods=['GET'])
 def validate():
@@ -748,6 +1058,8 @@ def get_statistics():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/market-indices', methods=['GET'])
+@jwt_required()
+@check_market_data_access
 def market_indices():
     try:
         indices_data = get_market_indices()
@@ -767,7 +1079,9 @@ def top_gainers_losers():
 
 # AI Chat endpoint
 @app.route('/api/market/chat', methods=['POST'])
+@jwt_required()
 @validate_json_request
+@require_subscription_feature('llm_query')
 def chat_with_ai():
     try:
         data = request.get_json()
@@ -776,16 +1090,59 @@ def chat_with_ai():
             return jsonify({"error": "No query provided"}), 400
             
         query = data['query']
-        model = data.get('model', 'llama')
+        model = data.get('model', 'openrouter')  # Default to OpenRouter
         user_id = data.get('user_id')
+        
+        # Log the request
+        logger.info(f"Chat request - Model: {model}, Query: {query}, User: {user_id}")
+        
+        # Validate model selection
+        valid_models = ['openai', 'claude', 'openrouter']
+        if model not in valid_models:
+            logger.warning(f"Invalid model requested: {model}")
+            return jsonify({
+                "error": f"Invalid model. Must be one of: {', '.join(valid_models)}",
+                "available_models": valid_models
+            }), 400
+        
+        # Check if the model's API key is configured
+        api_key_map = {
+            'openai': os.environ.get('OPENAI_API_KEY'),
+            'claude': os.environ.get('CLAUDE_API_KEY'),
+            'openrouter': os.environ.get('OPENROUTER_API_KEY')
+        }
+        
+        if not api_key_map[model]:
+            logger.error(f"API key not configured for model: {model}")
+            return jsonify({
+                "error": f"The {model} API key is not configured. Please try a different model or contact support.",
+                "available_models": [m for m, key in api_key_map.items() if key]
+            }), 503
         
         # Process the chat query
         response = ai_service.process_chat_query(query, model, user_id)
         
+        # Check if the response indicates an error
+        if not response.get('success', True):
+            logger.error(f"Error in AI response: {response.get('analysis')}")
+            return jsonify({
+                "error": "Failed to get response from AI model",
+                "details": response.get('analysis'),
+                "model": response.get('model')
+            }), 500
+        
+        # Log successful response
+        logger.info(f"Chat response generated successfully - Model: {response.get('model')}")
+        
         return jsonify(response)
+        
     except Exception as e:
-        logger.error(f"Error in chat endpoint: {str(e)}")
-        return jsonify({"error": str(e), "analysis": "Sorry, I encountered an error processing your request."}), 500
+        logger.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": "An unexpected error occurred",
+            "details": str(e),
+            "analysis": "Sorry, I encountered an error processing your request."
+        }), 500
 
 # Health check endpoint
 @app.route('/health', methods=['GET'])
@@ -1320,21 +1677,17 @@ def calculate_performance_metrics(signals, df):
 @app.route('/api/backtesting/run', methods=['POST'])
 @jwt_required()
 @validate_json_request
+@require_subscription_feature('backtest')
 def run_backtest():
     """Run a backtest with the specified parameters"""
     try:
         data = request.get_json()
         
         # Validate required fields
-        required_fields = ['ticker', 'start_date', 'end_date', 'indicators', 'position_size']
+        required_fields = ['ticker', 'start_date', 'end_date', 'indicators', 'position_size', 'initial_capital']
         for field in required_fields:
             if field not in data:
                 return jsonify({"error": f"Missing required field: {field}"}), 400
-        
-        # Get optional parameters
-        stop_loss = data.get('stop_loss')
-        take_profit = data.get('take_profit')
-        timeframe = data.get('timeframe', '1d')
         
         # Validate indicators format
         if not isinstance(data['indicators'], list):
@@ -1353,17 +1706,41 @@ def run_backtest():
             from services.backtesting_service import BacktestingService
             app.backtesting_service = BacktestingService()
         
-        # Run backtest
-        results = app.backtesting_service.run_backtest(
-            ticker=data['ticker'],
-            start_date=data['start_date'],
-            end_date=data['end_date'],
-            indicators=data['indicators'],
-            position_size=float(data['position_size']),
-            stop_loss=float(stop_loss) if stop_loss is not None else None,
-            take_profit=float(take_profit) if take_profit is not None else None,
-            timeframe=timeframe
-        )
+        # Extract and validate all parameters
+        params = {
+            'ticker': data['ticker'],
+            'start_date': data['start_date'],
+            'end_date': data['end_date'],
+            'indicators': data['indicators'],
+            'initial_capital': float(data['initial_capital']),
+            'position_size': float(data['position_size']),
+            'timeframe': data.get('timeframe', '1d'),
+            'stop_loss': int(data['stop_loss']) if 'stop_loss' in data else None,
+            'take_profit': int(data['take_profit']) if 'take_profit' in data else None,
+            'position_sizing_method': data.get('position_sizing_method', 'fixed'),
+            'kelly_fraction': float(data['kelly_fraction']) if 'kelly_fraction' in data else None,
+            
+            # Risk Management Parameters
+            'max_drawdown': float(data['max_drawdown']) if 'max_drawdown' in data else None,
+            'max_positions': int(data['max_positions']) if 'max_positions' in data else None,
+            'sector_exposure_limit': float(data['sector_exposure_limit']) if 'sector_exposure_limit' in data else None,
+            'consecutive_loss_limit': int(data['consecutive_loss_limit']) if 'consecutive_loss_limit' in data else None,
+            'daily_loss_limit': float(data['daily_loss_limit']) if 'daily_loss_limit' in data else None,
+            'weekly_loss_limit': float(data['weekly_loss_limit']) if 'weekly_loss_limit' in data else None,
+            
+            # Portfolio Constraints
+            'max_allocation': float(data['max_allocation']) if 'max_allocation' in data else None,
+            'margin_requirement': float(data['margin_requirement']) if 'margin_requirement' in data else None,
+            'margin_interest': float(data['margin_interest']) if 'margin_interest' in data else None,
+            'min_cash_reserve': float(data['min_cash_reserve']) if 'min_cash_reserve' in data else None,
+            
+            # Correlation Settings
+            'correlation_threshold': float(data['correlation_threshold']) if 'correlation_threshold' in data else None,
+            'benchmark_symbol': data.get('benchmark_symbol')
+        }
+        
+        # Run backtest with all parameters
+        results = app.backtesting_service.run_backtest(**params)
         
         return jsonify(results), 200
         
@@ -1373,3 +1750,308 @@ def run_backtest():
     except Exception as e:
         logger.error(f"Error running backtest: {str(e)}", exc_info=True)
         return jsonify({"error": "An error occurred while running the backtest"}), 500 
+
+# Subscription routes
+@app.route('/api/user/subscription', methods=['GET'])
+@jwt_required()
+def get_subscription():
+    """Get user's subscription details"""
+    user_id = get_jwt_identity()
+    
+    # Try to get subscription details
+    subscription = subscription_service.get_subscription_details(user_id)
+    
+    # If subscription not found, try to fix it
+    if not subscription:
+        fixed = subscription_service.fix_missing_subscription(user_id)
+        if fixed:
+            subscription = subscription_service.get_subscription_details(user_id)
+    
+    if not subscription:
+        return jsonify({"error": "Could not retrieve or create subscription"}), 500
+        
+    return jsonify(subscription), 200
+
+@app.route('/api/user/subscription/upgrade', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def upgrade_subscription():
+    """Upgrade user's subscription tier"""
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    if 'tier' not in data:
+        return jsonify({"error": "New tier is required"}), 400
+        
+    new_tier = data['tier']
+    success, message = subscription_service.upgrade_subscription(user_id, new_tier)
+    
+    if not success:
+        return jsonify({"error": message}), 400
+        
+    return jsonify({"message": message}), 200
+
+@app.route('/api/user/usage', methods=['GET'])
+@jwt_required()
+def get_usage_metrics():
+    """Get user's usage metrics"""
+    user_id = get_jwt_identity()
+    metrics = subscription_service.get_usage_metrics(user_id)
+    
+    if not metrics:
+        return jsonify({"error": "Usage metrics not found"}), 404
+        
+    return jsonify(metrics), 200
+
+@app.route('/api/user/usage/increment', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def increment_usage():
+    """Increment usage counter for a specific feature"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        if not data or 'feature' not in data:
+            return jsonify({"error": "Feature is required"}), 400
+        
+        feature = data['feature']
+        
+        # Validate feature
+        if feature not in ['backtest', 'llm_query']:
+            return jsonify({
+                "error": "Invalid feature",
+                "message": "Feature must be 'backtest' or 'llm_query'"
+            }), 400
+        
+        # Increment usage
+        success, message = subscription_service.increment_usage(user_id, feature)
+        
+        if not success:
+            return jsonify({
+                "error": "Failed to increment usage",
+                "message": message
+            }), 500
+        
+        # Get updated usage metrics
+        metrics = subscription_service.get_usage_metrics(user_id)
+        
+        return jsonify({
+            "success": True,
+            "message": message,
+            "usage": metrics
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in increment_usage endpoint: {str(e)}")
+        return jsonify({
+            "error": "Internal server error",
+            "message": str(e)
+        }), 500
+
+# Subscription tier management routes
+@app.route('/api/admin/subscription/tiers', methods=['GET'])
+@jwt_required()
+def get_subscription_tiers():
+    """Get all subscription tiers"""
+    # Check if user is admin
+    user_id = get_jwt_identity()
+    user = user_service.get_user_by_id(user_id)
+    if not user or user.get('role') != 'admin':
+        return jsonify({"error": "Unauthorized access"}), 403
+        
+    tiers = subscription_service.get_all_subscription_tiers()
+    return jsonify(tiers), 200
+
+@app.route('/api/admin/subscription/tiers', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def create_subscription_tier():
+    """Create a new subscription tier"""
+    # Check if user is admin
+    user_id = get_jwt_identity()
+    user = user_service.get_user_by_id(user_id)
+    if not user or user.get('role') != 'admin':
+        return jsonify({"error": "Unauthorized access"}), 403
+    
+    data = request.get_json()
+    if 'tier_name' not in data or 'tier_data' not in data:
+        return jsonify({"error": "tier_name and tier_data are required"}), 400
+    
+    tier_name = data['tier_name'].upper()  # Convert to uppercase for consistency
+    tier_data = data['tier_data']
+    
+    success, message = subscription_service.create_subscription_tier(tier_name, tier_data)
+    if not success:
+        return jsonify({"error": message}), 400
+        
+    return jsonify({"message": message}), 201
+
+# Market Regime Classification endpoints
+@app.route('/api/market-regime/train', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def train_market_regime_model():
+    """Train the market regime classifier"""
+    try:
+        # Check if user is admin
+        user_id = get_jwt_identity()
+        user = user_service.get_user_by_id(user_id)
+        if not user or user.get('role') != 'admin':
+            return jsonify({"error": "Unauthorized access"}), 403
+        
+        data = request.get_json()
+        ticker = data.get('ticker', 'RELIANCE.NS')
+        period = data.get('period', '2y')
+        retrain = data.get('retrain', False)
+        
+        result = market_regime_service.train_model(ticker, period, retrain)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in train_market_regime_model: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/market-regime/predict', methods=['GET'])
+@jwt_required()
+@check_market_data_access
+def predict_market_regime():
+    """Predict market regime for a ticker"""
+    try:
+        ticker = request.args.get('ticker', 'RELIANCE.NS')
+        
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+        
+        result = market_regime_service.predict_regime(ticker)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in predict_market_regime: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/market-regime/analysis', methods=['GET'])
+@jwt_required()
+@check_market_data_access
+def get_market_regime_analysis():
+    """Get comprehensive market regime analysis"""
+    try:
+        ticker = request.args.get('ticker', 'RELIANCE.NS')
+        
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+        
+        result = market_regime_service.get_regime_analysis(ticker)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in get_market_regime_analysis: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/market-regime/recommendations', methods=['GET'])
+@jwt_required()
+@check_market_data_access
+def get_market_regime_recommendations():
+    """Get trading recommendations based on market regime"""
+    try:
+        ticker = request.args.get('ticker', 'RELIANCE.NS')
+        
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+        
+        result = market_regime_service.get_regime_recommendations(ticker)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in get_market_regime_recommendations: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/market-regime/multiple', methods=['POST'])
+@jwt_required()
+@validate_json_request
+@check_market_data_access
+def get_multiple_market_regimes():
+    """Get market regime predictions for multiple tickers"""
+    try:
+        data = request.get_json()
+        tickers = data.get('tickers', ['RELIANCE.NS'])
+        
+        if not tickers or not isinstance(tickers, list):
+            return jsonify({"error": "tickers must be a list"}), 400
+        
+        result = market_regime_service.get_multiple_regime_predictions(tickers)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in get_multiple_market_regimes: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/market-regime/model-info', methods=['GET'])
+@jwt_required()
+def get_market_regime_model_info():
+    """Get information about the market regime model"""
+    try:
+        result = market_regime_service.get_model_info()
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logger.error(f"Error in get_market_regime_model_info: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/market-regime/evaluate', methods=['GET'])
+@jwt_required()
+def evaluate_market_regime_model():
+    """Evaluate market regime model performance"""
+    try:
+        # Check if user is admin
+        user_id = get_jwt_identity()
+        user = user_service.get_user_by_id(user_id)
+        if not user or user.get('role') != 'admin':
+            return jsonify({"error": "Unauthorized access"}), 403
+        
+        ticker = request.args.get('ticker', 'RELIANCE.NS')
+        
+        result = market_regime_service.evaluate_model_performance(ticker)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in evaluate_market_regime_model: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/market-regime/definitions', methods=['GET'])
+def get_market_regime_definitions():
+    """Get market regime definitions"""
+    try:
+        definitions = market_regime_service.classifier.get_regime_definitions()
+        return jsonify({
+            "status": "success",
+            "definitions": definitions
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in get_market_regime_definitions: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500 
