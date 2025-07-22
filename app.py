@@ -1058,8 +1058,6 @@ def get_statistics():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/market-indices', methods=['GET'])
-@jwt_required()
-@check_market_data_access
 def market_indices():
     try:
         indices_data = get_market_indices()
@@ -1917,8 +1915,6 @@ def train_market_regime_model():
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
 @app.route('/api/market-regime/predict', methods=['GET'])
-@jwt_required()
-@check_market_data_access
 def predict_market_regime():
     """Predict market regime for a ticker"""
     try:
@@ -1939,8 +1935,6 @@ def predict_market_regime():
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
 @app.route('/api/market-regime/analysis', methods=['GET'])
-@jwt_required()
-@check_market_data_access
 def get_market_regime_analysis():
     """Get comprehensive market regime analysis"""
     try:
@@ -1961,8 +1955,6 @@ def get_market_regime_analysis():
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
 @app.route('/api/market-regime/recommendations', methods=['GET'])
-@jwt_required()
-@check_market_data_access
 def get_market_regime_recommendations():
     """Get trading recommendations based on market regime"""
     try:
@@ -2055,3 +2047,17 @@ def get_market_regime_definitions():
     except Exception as e:
         logger.error(f"Error in get_market_regime_definitions: {str(e)}")
         return jsonify({"error": "Internal server error", "message": str(e)}), 500 
+
+if __name__ == '__main__':
+    # Get configuration
+    config = get_config()
+    
+    # Get port from environment or use default
+    port = int(os.environ.get('PORT', 5000))
+    
+    # Run the app
+    app.run(
+        host='0.0.0.0',
+        port=port,
+        debug=config.DEBUG if hasattr(config, 'DEBUG') else False
+    )

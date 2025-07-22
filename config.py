@@ -101,14 +101,22 @@ class Config:
         """Validate required configuration values"""
         required_fields = [
             ('MONGODB_URI', self.MONGODB_URI),
-            ('JWT_SECRET_KEY', self.JWT_SECRET_KEY),
+            ('JWT_SECRET_KEY', self.JWT_SECRET_KEY)
+        ]
+        
+        missing_fields = [field for field, value in required_fields if not value or value in ['your-jwt-secret-key-change-this-in-production', 'your-upstox-api-key', 'your-upstox-api-secret']]
+        if missing_fields:
+            print(f"Warning: Using default values for: {', '.join(missing_fields)}")
+        
+        # Optional fields that won't cause startup failure
+        optional_fields = [
             ('UPSTOX_API_KEY', self.UPSTOX_API_KEY),
             ('UPSTOX_API_SECRET', self.UPSTOX_API_SECRET)
         ]
         
-        missing_fields = [field for field, value in required_fields if not value]
-        if missing_fields:
-            raise ValueError(f"Missing required configuration: {', '.join(missing_fields)}")
+        missing_optional = [field for field, value in optional_fields if not value or value in ['your-upstox-api-key', 'your-upstox-api-secret']]
+        if missing_optional:
+            print(f"Info: Upstox features will be disabled. Missing: {', '.join(missing_optional)}")
 
 _config = None
 

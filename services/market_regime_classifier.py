@@ -48,10 +48,12 @@ class MarketRegimeClassifier:
     def __init__(self):
         self.model = RandomForestClassifier(
             n_estimators=100,
+            criterion='gini',
             max_depth=10,
             min_samples_split=5,
             min_samples_leaf=3,
-            random_state=42
+            random_state=42,
+            n_jobs=-1  # Use all available cores
         )
         self.scaler = StandardScaler()
         self.technical_analysis = TechnicalAnalysis()
@@ -300,10 +302,19 @@ class MarketRegimeClassifier:
                 logger.error("Insufficient data for training")
                 return {"status": "error", "message": "Insufficient data for training"}
             
-            # Split data
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=0.2, random_state=42, stratify=y
-            )
+            # Split data - check if we have enough samples for stratified split
+            unique_classes, class_counts = np.unique(y, return_counts=True)
+            min_class_count = min(class_counts)
+            
+            if min_class_count < 2:
+                logger.warning(f"Some classes have only {min_class_count} samples. Using non-stratified split.")
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X, y, test_size=0.2, random_state=42, stratify=None
+                )
+            else:
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X, y, test_size=0.2, random_state=42, stratify=y
+                )
             
             # Scale features
             X_train_scaled = self.scaler.fit_transform(X_train)
