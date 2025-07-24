@@ -13,6 +13,7 @@ from services.utils import normalize_data, calculate_statistics
 from services.user_service import UserService
 from services.ai_service import AIModelService
 from services.subscription_service import SubscriptionService
+from services.razorpay_service import RazorpayPaymentService
 from middleware.subscription_middleware import require_subscription_feature, check_market_data_access
 import os
 import requests
@@ -32,6 +33,7 @@ from services.backtesting_service import BacktestingService
 from services.market_regime_service import market_regime_service
 from services.session_service import InMemorySessionService
 from bson import ObjectId
+from datetime import datetime
 
 # Setup logging with more detailed format
 logging.basicConfig(
@@ -152,6 +154,7 @@ app = create_app()
 jwt = JWTManager(app)
 user_service = UserService()
 subscription_service = SubscriptionService()
+payment_service = RazorpayPaymentService()
 session_service = InMemorySessionService()
 
 # Initialize services
@@ -1884,6 +1887,280 @@ def create_subscription_tier():
         return jsonify({"error": message}), 400
         
     return jsonify({"message": message}), 201
+
+# Payment API Endpoints
+@app.route('/api/payment/create-order', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def create_payment_order():
+    """Create a new payment order for subscription upgrade"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['plan_tier', 'billing_details']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+        
+        # Validate billing details
+        billing_required = ['full_name', 'email', 'phone']
+        billing_details = data['billing_details']
+        for field in billing_required:
+            if field not in billing_details:
+                return jsonify({"error": f"Missing billing field: {field}"}), 400
+        
+        # Create payment order
+        result = payment_service.create_payment_order(
+            user_id=user_id,
+            plan_tier=data['plan_tier'],
+            billing_details=billing_details
+        )
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error creating payment order: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to create payment order",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/payment/verify', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def verify_payment():
+    """Verify payment signature and activate subscription"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['razorpay_payment_id', 'razorpay_order_id', 'razorpay_signature']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+        
+        # Verify payment
+        result = payment_service.verify_payment_signature(
+            razorpay_payment_id=data['razorpay_payment_id'],
+            razorpay_order_id=data['razorpay_order_id'],
+            razorpay_signature=data['razorpay_signature']
+        )
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error verifying payment: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Payment verification failed",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/payment/status/<order_id>', methods=['GET'])
+@jwt_required()
+def get_payment_status(order_id):
+    """Get payment status for an order"""
+    try:
+        result = payment_service.get_payment_status(order_id)
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 404
+            
+    except Exception as e:
+        logger.error(f"Error getting payment status: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to get payment status",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/payment/cancel/<order_id>', methods=['POST'])
+@jwt_required()
+def cancel_payment(order_id):
+    """Cancel a payment order"""
+    try:
+        result = payment_service.cancel_payment(order_id)
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error cancelling payment: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to cancel payment",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/payment/history', methods=['GET'])
+@jwt_required()
+def get_payment_history():
+    """Get user's payment history"""
+    try:
+        user_id = get_jwt_identity()
+        
+        # Get pagination parameters
+        limit = request.args.get('limit', default=20, type=int)
+        skip = request.args.get('skip', default=0, type=int)
+        
+        # Validate pagination parameters
+        if limit > 100:
+            limit = 100
+        if skip < 0:
+            skip = 0
+        
+        result = payment_service.get_payment_history(user_id, limit, skip)
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error getting payment history: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to get payment history",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/payment/webhook', methods=['POST'])
+def handle_payment_webhook():
+    """Handle Razorpay webhook events"""
+    try:
+        # Get webhook signature from headers
+        webhook_signature = request.headers.get('X-Razorpay-Signature')
+        if not webhook_signature:
+            logger.warning("Webhook received without signature")
+            return jsonify({"error": "Missing webhook signature"}), 400
+        
+        # Get webhook data
+        webhook_data = request.get_json()
+        if not webhook_data:
+            logger.warning("Webhook received without data")
+            return jsonify({"error": "Missing webhook data"}), 400
+        
+        # Process webhook
+        result = payment_service.process_webhook(webhook_data, webhook_signature)
+        
+        if result['success']:
+            return jsonify({"status": "success"}), 200
+        else:
+            logger.error(f"Webhook processing failed: {result}")
+            return jsonify({"error": "Webhook processing failed"}), 400
+            
+    except Exception as e:
+        logger.error(f"Error processing webhook: {str(e)}")
+        return jsonify({"error": "Webhook processing failed"}), 500
+
+@app.route('/api/payment/plans', methods=['GET'])
+def get_payment_plans():
+    """Get available subscription plans with pricing"""
+    try:
+        result = payment_service.get_plan_pricing()
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 500
+            
+    except Exception as e:
+        logger.error(f"Error getting payment plans: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to get payment plans",
+            "message": str(e)
+        }), 500
+
+# Billing details endpoints
+@app.route('/api/user/billing-details', methods=['GET'])
+@jwt_required()
+def get_billing_details():
+    """Get user's billing details"""
+    try:
+        user_id = get_jwt_identity()
+        user_data = user_service.get_user_by_id(user_id)
+        
+        if not user_data:
+            return jsonify({"error": "User not found"}), 404
+        
+        billing_details = user_data.get('billing_details', {})
+        
+        return jsonify({
+            "success": True,
+            "billing_details": billing_details
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting billing details: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to get billing details",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/user/billing-details', methods=['POST', 'PUT'])
+@jwt_required()
+@validate_json_request
+def update_billing_details():
+    """Update user's billing details"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['full_name', 'email', 'phone']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+        
+        # Update user's billing details
+        update_data = {
+            "billing_details": {
+                "full_name": data['full_name'],
+                "email": data['email'],
+                "phone": data['phone'],
+                "address": data.get('address', {}),
+                "updated_at": datetime.utcnow()
+            }
+        }
+        
+        result = user_service.users.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": update_data}
+        )
+        
+        if result.modified_count > 0:
+            return jsonify({
+                "success": True,
+                "message": "Billing details updated successfully"
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Failed to update billing details"
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"Error updating billing details: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to update billing details",
+            "message": str(e)
+        }), 500
 
 # Market Regime Classification endpoints
 @app.route('/api/market-regime/train', methods=['POST'])

@@ -64,6 +64,13 @@ class Config:
         self.UPSTOX_REDIRECT_URI = os.getenv('UPSTOX_REDIRECT_URI', 'http://localhost:8000/api/upstox/callback')
         self.UPSTOX_API_BASE_URL = "https://api.upstox.com/v2"
 
+        # Razorpay Configuration
+        self.RAZORPAY_KEY_ID = os.getenv('RAZORPAY_KEY_ID')
+        self.RAZORPAY_KEY_SECRET = os.getenv('RAZORPAY_KEY_SECRET')
+        self.RAZORPAY_WEBHOOK_SECRET = os.getenv('RAZORPAY_WEBHOOK_SECRET')
+        self.RAZORPAY_ENVIRONMENT = os.getenv('RAZORPAY_ENVIRONMENT', 'test')
+        self.RAZORPAY_CURRENCY = os.getenv('RAZORPAY_CURRENCY', 'INR')
+
         # Cache Configuration
         self.CACHE_TYPE = os.getenv('CACHE_TYPE', 'redis')
         self.CACHE_REDIS_HOST = self.REDIS_HOST
@@ -111,12 +118,19 @@ class Config:
         # Optional fields that won't cause startup failure
         optional_fields = [
             ('UPSTOX_API_KEY', self.UPSTOX_API_KEY),
-            ('UPSTOX_API_SECRET', self.UPSTOX_API_SECRET)
+            ('UPSTOX_API_SECRET', self.UPSTOX_API_SECRET),
+            ('RAZORPAY_KEY_ID', self.RAZORPAY_KEY_ID),
+            ('RAZORPAY_KEY_SECRET', self.RAZORPAY_KEY_SECRET),
+            ('RAZORPAY_WEBHOOK_SECRET', self.RAZORPAY_WEBHOOK_SECRET)
         ]
         
-        missing_optional = [field for field, value in optional_fields if not value or value in ['your-upstox-api-key', 'your-upstox-api-secret']]
-        if missing_optional:
-            print(f"Info: Upstox features will be disabled. Missing: {', '.join(missing_optional)}")
+        missing_upstox = [field for field, value in optional_fields[:2] if not value or value in ['your-upstox-api-key', 'your-upstox-api-secret']]
+        if missing_upstox:
+            print(f"Info: Upstox features will be disabled. Missing: {', '.join(missing_upstox)}")
+            
+        missing_razorpay = [field for field, value in optional_fields[2:] if not value or value in ['rzp_test_your_key_id', 'your_key_secret', 'your_webhook_secret']]
+        if missing_razorpay:
+            print(f"Info: Razorpay payment features will be disabled. Missing: {', '.join(missing_razorpay)}")
 
 _config = None
 

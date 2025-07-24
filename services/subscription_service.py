@@ -119,16 +119,28 @@ class SubscriptionService:
             logger.error(f"Error getting subscription details for user {user_id}: {str(e)}")
             return None
     
-    def upgrade_subscription(self, user_id: str, new_tier: str) -> Tuple[bool, str]:
+    def upgrade_subscription(self, user_id: str, new_tier: str, payment_verified: bool = False) -> Tuple[bool, str]:
         """Upgrade user's subscription to a new tier"""
         if new_tier not in self.config.SUBSCRIPTION_TIERS:
             return False, "Invalid subscription tier"
+        
+        # For paid tiers, require payment verification
+        if new_tier != "FREE" and not payment_verified:
+            return False, "Payment verification required for paid tiers"
             
         try:
+            # Set expiry date based on tier
+            if new_tier == "FREE":
+                expires_at = None  # FREE tier doesn't expire
+            else:
+                expires_at = datetime.utcnow() + timedelta(days=30)  # Paid tiers expire after 30 days
+                
             subscription_data = {
                 "subscription.tier": new_tier,
                 "subscription.starts_at": datetime.utcnow(),
-                "subscription.expires_at": datetime.utcnow() + timedelta(days=30)
+                "subscription.expires_at": expires_at,
+                "subscription.payment_verified": payment_verified,
+                "subscription.updated_at": datetime.utcnow()
             }
             
             result = self.users.update_one(
@@ -137,6 +149,7 @@ class SubscriptionService:
             )
             
             if result.modified_count > 0:
+                logger.info(f"Successfully upgraded user {user_id} to {new_tier} tier")
                 return True, f"Successfully upgraded to {new_tier} tier"
             return False, "Failed to upgrade subscription"
         except Exception as e:
@@ -421,4 +434,139 @@ class SubscriptionService:
             return True  # User already has subscription
         except Exception as e:
             logger.error(f"Error fixing subscription for user {user_id}: {str(e)}")
-            return False 
+            return False
+    
+    def check_subscription_expiry(self, user_id: str) -> Dict[str, Any]:
+        """Check if user's subscription has expired and handle expiry"""
+        try:
+            subscription = self.get_subscription_details(user_id)
+            if not subscription:
+                return {"expired": False, "message": "No subscription found"}
+            
+            # FREE tier doesn't expire
+            if subscription["tier"] == "FREE":
+                return {"expired": False, "message": "FREE tier doesn't expire"}
+            
+            # Check if subscription has expiry date
+            if "expires_at" not in subscription or not subscription["expires_at"]:
+                return {"expired": False, "message": "No expiry date set"}
+            
+            # Parse expiry date if it's a string
+            expires_at = subscription["expires_at"]
+            if isinstance(expires_at, str):
+                from dateutil.parser import parse
+                expires_at = parse(expires_at)
+            
+            # Check if expired
+            now = datetime.utcnow()
+            if expires_at and expires_at < now:
+                # Downgrade to FREE tier
+                success, message = self.upgrade_subscription(user_id, "FREE", payment_verified=True)
+                if success:
+                    logger.info(f"Downgraded expired subscription for user {user_id} to FREE tier")
+                    return {
+                        "expired": True, 
+                        "message": "Subscription expired and downgraded to FREE tier",
+                        "downgraded": True
+                    }
+                else:
+                    logger.error(f"Failed to downgrade expired subscription for user {user_id}")
+                    return {
+                        "expired": True,
+                        "message": "Subscription expired but failed to downgrade",
+                        "downgraded": False
+                    }
+            
+            return {"expired": False, "message": "Subscription is active"}
+            
+        except Exception as e:
+            logger.error(f"Error checking subscription expiry for user {user_id}: {str(e)}")
+            return {"expired": False, "message": f"Error checking expiry: {str(e)}"}
+    
+    def get_subscription_analytics(self) -> Dict[str, Any]:
+        """Get subscription analytics for admin dashboard"""
+        try:
+            # Get tier distribution
+            tier_pipeline = [
+                {"$group": {
+                    "_id": "$subscription.tier",
+                    "count": {"$sum": 1}
+                }}
+            ]
+            tier_distribution = list(self.users.aggregate(tier_pipeline))
+            
+            # Get recent upgrades (last 30 days)
+            thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+            recent_upgrades = self.users.count_documents({
+                "subscription.starts_at": {"$gte": thirty_days_ago},
+                "subscription.tier": {"$ne": "FREE"}
+            })
+            
+            # Get total active paid subscriptions
+            active_paid = self.users.count_documents({
+                "subscription.tier": {"$ne": "FREE"},
+                "$or": [
+                    {"subscription.expires_at": {"$gte": datetime.utcnow()}},
+                    {"subscription.expires_at": None}
+                ]
+            })
+            
+            # Get expired subscriptions
+            expired_subs = self.users.count_documents({
+                "subscription.expires_at": {"$lt": datetime.utcnow()},
+                "subscription.tier": {"$ne": "FREE"}
+            })
+            
+            return {
+                "tier_distribution": {item["_id"]: item["count"] for item in tier_distribution},
+                "recent_upgrades": recent_upgrades,
+                "active_paid_subscriptions": active_paid,
+                "expired_subscriptions": expired_subs,
+                "total_users": self.users.count_documents({})
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting subscription analytics: {str(e)}")
+            return {}
+    
+    def bulk_check_expiries(self) -> Dict[str, Any]:
+        """Bulk check and handle expired subscriptions"""
+        try:
+            current_time = datetime.utcnow()
+            
+            # Find expired subscriptions
+            expired_subscriptions = self.users.find({
+                "subscription.expires_at": {"$lt": current_time},
+                "subscription.tier": {"$ne": "FREE"}
+            })
+            
+            downgraded_count = 0
+            failed_count = 0
+            
+            for user in expired_subscriptions:
+                user_id = str(user["_id"])
+                try:
+                    success, _ = self.upgrade_subscription(user_id, "FREE", payment_verified=True)
+                    if success:
+                        downgraded_count += 1
+                        logger.info(f"Auto-downgraded expired subscription for user {user_id}")
+                    else:
+                        failed_count += 1
+                        logger.error(f"Failed to auto-downgrade expired subscription for user {user_id}")
+                except Exception as e:
+                    failed_count += 1
+                    logger.error(f"Error auto-downgrading user {user_id}: {str(e)}")
+            
+            return {
+                "success": True,
+                "processed": downgraded_count + failed_count,
+                "downgraded": downgraded_count,
+                "failed": failed_count
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in bulk check expiries: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            } 
