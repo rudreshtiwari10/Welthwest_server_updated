@@ -1132,6 +1132,20 @@ def chat_with_ai():
                 "model": response.get('model')
             }), 500
         
+        # Save chat history for the user
+        try:
+            user_id_from_jwt = get_jwt_identity()
+            chat_data = {
+                'query': query,
+                'response': response,
+                'model': model,
+                'timestamp': pd.Timestamp.now().isoformat()
+            }
+            user_service.save_chat_history(user_id_from_jwt, chat_data)
+            logger.info(f"Chat history saved for user {user_id_from_jwt}")
+        except Exception as e:
+            logger.warning(f"Failed to save chat history: {str(e)}")
+        
         # Log successful response
         logger.info(f"Chat response generated successfully - Model: {response.get('model')}")
         
@@ -1287,6 +1301,20 @@ def get_comprehensive_technical_analysis():
                 "total_indicators": signals.get("overall", {}).get("total_indicators", 0)
             }
         }
+        
+        # Save AI analysis result for the user
+        try:
+            user_id = get_jwt_identity()
+            analysis_data = {
+                'type': 'technical_analysis',
+                'ticker': ticker,
+                'result': result,
+                'timestamp': pd.Timestamp.now().isoformat()
+            }
+            user_service.save_ai_analysis_result(user_id, analysis_data)
+            logger.info(f"Technical analysis result saved for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Failed to save technical analysis result: {str(e)}")
         
         return jsonify(result)
     except Exception as e:
@@ -1742,6 +1770,19 @@ def run_backtest():
         
         # Run backtest with all parameters
         results = app.backtesting_service.run_backtest(**params)
+        
+        # Save backtest result for the user
+        try:
+            user_id = get_jwt_identity()
+            backtest_data = {
+                'params': params,
+                'results': results,
+                'timestamp': pd.Timestamp.now().isoformat()
+            }
+            user_service.save_backtest_result(user_id, backtest_data)
+            logger.info(f"Backtest result saved for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Failed to save backtest result: {str(e)}")
         
         return jsonify(results), 200
         
@@ -2223,6 +2264,23 @@ def get_market_regime_analysis():
         result = market_regime_service.get_regime_analysis(ticker)
         
         if result["status"] == "success":
+            # Save AI analysis result for the user if authenticated
+            try:
+                from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
+                verify_jwt_in_request(optional=True)
+                user_id = get_jwt_identity()
+                if user_id:
+                    analysis_data = {
+                        'type': 'market_regime_analysis',
+                        'ticker': ticker,
+                        'result': result,
+                        'timestamp': pd.Timestamp.now().isoformat()
+                    }
+                    user_service.save_ai_analysis_result(user_id, analysis_data)
+                    logger.info(f"Market regime analysis result saved for user {user_id}")
+            except Exception as e:
+                logger.warning(f"Failed to save market regime analysis result: {str(e)}")
+            
             return jsonify(result), 200
         else:
             return jsonify(result), 400
@@ -2323,7 +2381,212 @@ def get_market_regime_definitions():
         
     except Exception as e:
         logger.error(f"Error in get_market_regime_definitions: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500 
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+# User Data Persistence Endpoints
+@app.route('/api/user/save-backtest', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def save_backtest_result():
+    """Save backtest result for the authenticated user"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        if not data or 'backtest_data' not in data:
+            return jsonify({"error": "backtest_data is required"}), 400
+        
+        # Save the backtest result
+        success = user_service.save_backtest_result(user_id, data['backtest_data'])
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Backtest result saved successfully"
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Failed to save backtest result"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error saving backtest result: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Internal server error",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/user/save-ai-analysis', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def save_ai_analysis_result():
+    """Save AI analysis result for the authenticated user"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        if not data or 'analysis_data' not in data:
+            return jsonify({"error": "analysis_data is required"}), 400
+        
+        # Save the AI analysis result
+        success = user_service.save_ai_analysis_result(user_id, data['analysis_data'])
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "AI analysis result saved successfully"
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Failed to save AI analysis result"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error saving AI analysis result: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Internal server error",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/user/save-chat', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def save_chat_history():
+    """Save chat history for the authenticated user"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        if not data or 'chat_data' not in data:
+            return jsonify({"error": "chat_data is required"}), 400
+        
+        # Save the chat history
+        success = user_service.save_chat_history(user_id, data['chat_data'])
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Chat history saved successfully"
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Failed to save chat history"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error saving chat history: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Internal server error",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/user/backtests', methods=['GET'])
+@jwt_required()
+def get_user_backtests():
+    """Get user's saved backtest results"""
+    try:
+        user_id = get_jwt_identity()
+        
+        # Get pagination parameters
+        limit = request.args.get('limit', default=10, type=int)
+        skip = request.args.get('skip', default=0, type=int)
+        
+        # Validate pagination parameters
+        if limit > 100:
+            limit = 100
+        if skip < 0:
+            skip = 0
+        
+        # Get user's backtest results
+        backtests = user_service.get_user_backtests(user_id, limit, skip)
+        
+        return jsonify({
+            "success": True,
+            "backtests": backtests,
+            "count": len(backtests)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving user backtests: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Internal server error",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/user/ai-analyses', methods=['GET'])
+@jwt_required()
+def get_user_ai_analyses():
+    """Get user's saved AI analysis results"""
+    try:
+        user_id = get_jwt_identity()
+        
+        # Get pagination parameters
+        limit = request.args.get('limit', default=10, type=int)
+        skip = request.args.get('skip', default=0, type=int)
+        
+        # Validate pagination parameters
+        if limit > 100:
+            limit = 100
+        if skip < 0:
+            skip = 0
+        
+        # Get user's AI analysis results
+        analyses = user_service.get_user_ai_analyses(user_id, limit, skip)
+        
+        return jsonify({
+            "success": True,
+            "analyses": analyses,
+            "count": len(analyses)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving user AI analyses: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Internal server error",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/user/chat-history', methods=['GET'])
+@jwt_required()
+def get_user_chat_history():
+    """Get user's saved chat history"""
+    try:
+        user_id = get_jwt_identity()
+        
+        # Get pagination parameters
+        limit = request.args.get('limit', default=50, type=int)
+        skip = request.args.get('skip', default=0, type=int)
+        
+        # Validate pagination parameters
+        if limit > 200:
+            limit = 200
+        if skip < 0:
+            skip = 0
+        
+        # Get user's chat history
+        chat_history = user_service.get_user_chat_history(user_id, limit, skip)
+        
+        return jsonify({
+            "success": True,
+            "chat_history": chat_history,
+            "count": len(chat_history)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving user chat history: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Internal server error",
+            "message": str(e)
+        }), 500 
 
 if __name__ == '__main__':
     # Get configuration
