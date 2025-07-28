@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import time
 import logging
+import numpy as np
 from services.cache_service import get_cached_data, set_cached_data
 from services.upstox_service import (
     get_upstox_historical_data, 
@@ -13,6 +14,76 @@ from services.upstox_service import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def filter_trading_days(df):
+    """
+    Filter DataFrame to include only market trading days (Monday-Friday, excluding Indian holidays)
+    """
+    try:
+        if df.empty:
+            return df
+        
+        # Ensure we have a datetime index
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index)
+        
+        # Filter out weekends (Saturday=5, Sunday=6)
+        df = df[df.index.weekday < 5]
+        
+        # Basic Indian market holidays (major ones)
+        # Note: This is a simplified list. In production, you'd want a more comprehensive holiday calendar
+        indian_holidays_2023 = [
+            '2023-01-26',  # Republic Day
+            '2023-03-07',  # Holi
+            '2023-03-30',  # Ram Navami
+            '2023-04-04',  # Mahavir Jayanti
+            '2023-04-14',  # Good Friday
+            '2023-04-22',  # Eid ul Fitr
+            '2023-05-01',  # May Day
+            '2023-06-29',  # Eid ul Adha
+            '2023-08-15',  # Independence Day
+            '2023-08-31',  # Ganesh Chaturthi
+            '2023-10-02',  # Gandhi Jayanti
+            '2023-10-24',  # Dussehra
+            '2023-11-12',  # Diwali Laxmi Pujan
+            '2023-11-13',  # Diwali Balipratipada
+            '2023-11-27',  # Guru Nanak Jayanti
+            '2023-12-25',  # Christmas
+        ]
+        
+        indian_holidays_2024 = [
+            '2024-01-22',  # Ram Mandir Pran Pratishtha
+            '2024-01-26',  # Republic Day
+            '2024-03-08',  # Holi
+            '2024-03-25',  # Holi (second day)
+            '2024-03-29',  # Good Friday
+            '2024-04-11',  # Eid ul Fitr
+            '2024-04-14',  # Ambedkar Jayanti
+            '2024-04-17',  # Ram Navami
+            '2024-05-01',  # May Day
+            '2024-06-17',  # Eid ul Adha
+            '2024-08-15',  # Independence Day
+            '2024-08-26',  # Janmashtami
+            '2024-09-16',  # Eid Milad Un Nabi
+            '2024-10-02',  # Gandhi Jayanti
+            '2024-10-12',  # Dussehra
+            '2024-11-01',  # Diwali
+            '2024-11-15',  # Guru Nanak Jayanti
+            '2024-12-25',  # Christmas
+        ]
+        
+        all_holidays = indian_holidays_2023 + indian_holidays_2024
+        holiday_dates = pd.to_datetime(all_holidays)
+        
+        # Filter out holidays
+        df = df[~df.index.normalize().isin(holiday_dates)]
+        
+        logger.info(f"Filtered to {len(df)} trading days")
+        return df
+        
+    except Exception as e:
+        logger.warning(f"Error filtering trading days: {str(e)}. Returning original data.")
+        return df
 
 def format_indian_ticker(ticker_symbol):
     """
@@ -132,15 +203,24 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
             hist_data = ticker.history(period=period, interval=interval)
             
             if len(hist_data) > 0:
+                logger.info(f"Successfully fetched data. Shape: {hist_data.shape}")
+                logger.info(f"Columns: {hist_data.columns.tolist()}")
+                logger.info(f"Date range: {hist_data.index.min()} to {hist_data.index.max()}")
+                
                 # Store original index as a column for caching
                 hist_data_for_cache = hist_data.copy()
-                hist_data_for_cache['date'] = hist_data_for_cache.index
+                hist_data_for_cache['date'] = hist_data_for_cache.index.strftime('%Y-%m-%d %H:%M:%S')
                 
-                # Cache the result
+                # Cache the result with proper date formatting
                 set_cached_data(cache_key, hist_data_for_cache.to_dict('records'), cache_ttl)
                 
-                # Convert dates to string format for JSON serialization
-                hist_data.index = hist_data.index.strftime('%Y-%m-%d %H:%M:%S')
+                # Keep the original datetime index but normalize timezone
+                hist_data.index = hist_data.index.tz_localize(None) if hist_data.index.tz is not None else hist_data.index
+                hist_data.index.name = 'date'
+                
+                # Filter to trading days only
+                hist_data = filter_trading_days(hist_data)
+                
                 return hist_data
             
             # If we got empty data, try BSE if NSE didn't work
@@ -150,15 +230,19 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
                 hist_data = ticker.history(period=period, interval=interval)
                 
                 if len(hist_data) > 0:
+                    logger.info(f"Successfully fetched BSE data. Shape: {hist_data.shape}")
+                    
                     # Store original index as a column for caching
                     hist_data_for_cache = hist_data.copy()
-                    hist_data_for_cache['date'] = hist_data_for_cache.index
+                    hist_data_for_cache['date'] = hist_data_for_cache.index.strftime('%Y-%m-%d %H:%M:%S')
                     
-                    # Cache the result
+                    # Cache the result with proper date formatting
                     set_cached_data(cache_key, hist_data_for_cache.to_dict('records'), cache_ttl)
                     
-                    # Convert dates to string format for JSON serialization
-                    hist_data.index = hist_data.index.strftime('%Y-%m-%d %H:%M:%S')
+                    # Keep the original datetime index but normalize timezone
+                    hist_data.index = hist_data.index.tz_localize(None) if hist_data.index.tz is not None else hist_data.index
+                    hist_data.index.name = 'date'
+                    
                     return hist_data
             
             # If we got empty data, wait and retry
@@ -201,10 +285,12 @@ def get_ohlc_data(ticker_symbol, start_date=None, end_date=None, interval="1d"):
         cached_data = get_cached_data(cache_key)
         
         if cached_data is not None:
-            logger.info(f"Using cached data for {ticker_symbol}")
+            logger.info(f"Using cached OHLC data for {ticker_symbol}")
             df = pd.DataFrame.from_dict(cached_data)
             if 'date' in df:
+                df['date'] = pd.to_datetime(df['date'])
                 df.set_index('date', inplace=True)
+                df.index.name = 'date'
             logger.info(f"Cached data shape: {df.shape}")
             return df
         
@@ -269,7 +355,9 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
         logger.info(f"Using cached yfinance data for {formatted_ticker}")
         df = pd.DataFrame.from_dict(cached_data)
         if 'date' in df:
+            df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
+            df.index.name = 'date'
         return df
     
     max_retries = 3
@@ -282,17 +370,22 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
             hist_data = ticker.history(start=start_date, end=end_date, interval=interval)
             
             if len(hist_data) > 0:
-                logger.info(f"Successfully fetched data. Shape: {hist_data.shape}")
+                logger.info(f"Successfully fetched OHLC data. Shape: {hist_data.shape}")
                 logger.info(f"Columns: {hist_data.columns.tolist()}")
                 logger.info(f"Date range: {hist_data.index.min()} to {hist_data.index.max()}")
                 
-                # Store data for caching
+                # Store data for caching with proper date formatting
                 hist_data_for_cache = hist_data.copy()
-                hist_data_for_cache['date'] = hist_data_for_cache.index
+                hist_data_for_cache['date'] = hist_data_for_cache.index.strftime('%Y-%m-%d %H:%M:%S')
                 set_cached_data(cache_key, hist_data_for_cache.to_dict('records'), 600)  # 10 minutes cache
                 
-                # Convert dates to string format for JSON serialization
-                hist_data.index = hist_data.index.strftime('%Y-%m-%d %H:%M:%S')
+                # Keep the original datetime index but normalize timezone
+                hist_data.index = hist_data.index.tz_localize(None) if hist_data.index.tz is not None else hist_data.index
+                hist_data.index.name = 'date'
+                
+                # Filter to trading days only
+                hist_data = filter_trading_days(hist_data)
+                
                 return hist_data
             
             # If we got empty data from NSE, try BSE
@@ -303,15 +396,17 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
                 hist_data = ticker.history(start=start_date, end=end_date, interval=interval)
                 
                 if len(hist_data) > 0:
-                    logger.info(f"Successfully fetched BSE data. Shape: {hist_data.shape}")
+                    logger.info(f"Successfully fetched BSE OHLC data. Shape: {hist_data.shape}")
                     
-                    # Store data for caching
+                    # Store data for caching with proper date formatting
                     hist_data_for_cache = hist_data.copy()
-                    hist_data_for_cache['date'] = hist_data_for_cache.index
+                    hist_data_for_cache['date'] = hist_data_for_cache.index.strftime('%Y-%m-%d %H:%M:%S')
                     set_cached_data(cache_key, hist_data_for_cache.to_dict('records'), 600)
                     
-                    # Convert dates to string format for JSON serialization
-                    hist_data.index = hist_data.index.strftime('%Y-%m-%d %H:%M:%S')
+                    # Keep the original datetime index but normalize timezone
+                    hist_data.index = hist_data.index.tz_localize(None) if hist_data.index.tz is not None else hist_data.index
+                    hist_data.index.name = 'date'
+                    
                     return hist_data
             
             logger.warning(f"No data available for attempt {attempt + 1}")

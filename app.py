@@ -1749,6 +1749,9 @@ def run_backtest():
             'position_sizing_method': data.get('position_sizing_method', 'fixed'),
             'kelly_fraction': float(data['kelly_fraction']) if 'kelly_fraction' in data else None,
             
+            # Disable regime detection for improved calculation
+            'enable_regime_filter': False,
+            
             # Risk Management Parameters
             'max_drawdown': float(data['max_drawdown']) if 'max_drawdown' in data else None,
             'max_positions': int(data['max_positions']) if 'max_positions' in data else None,

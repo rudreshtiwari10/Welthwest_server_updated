@@ -449,7 +449,7 @@ class TechnicalAnalysis:
         return signals
     
     def _calculate_rsi(self, df: pd.DataFrame, period: int = 14) -> np.ndarray:
-        """Calculate RSI indicator"""
+        """Calculate RSI indicator with proper NaN handling"""
         try:
             logger.info(f"Calculating RSI with period {period}")
             
@@ -462,43 +462,68 @@ class TechnicalAnalysis:
             loss = (-delta.where(delta < 0, 0)).fillna(0)
             logger.info(f"Gains and losses calculated. Samples:\nGains:\n{gain.head()}\nLosses:\n{loss.head()}")
             
-            # Calculate average gains and losses
-            avg_gain = gain.rolling(window=period).mean()
-            avg_loss = loss.rolling(window=period).mean()
+            # Use exponentially weighted moving average for smoother RSI
+            # This reduces NaN values and provides better convergence
+            alpha = 1.0 / period
+            avg_gain = gain.ewm(alpha=alpha, adjust=False).mean()
+            avg_loss = loss.ewm(alpha=alpha, adjust=False).mean()
+            
+            # For the first few values, use simple average to avoid NaN
+            simple_avg_gain = gain.rolling(window=period, min_periods=1).mean()
+            simple_avg_loss = loss.rolling(window=period, min_periods=1).mean()
+            
+            # Use simple average for first period values, then switch to EMA
+            avg_gain.iloc[:period] = simple_avg_gain.iloc[:period]
+            avg_loss.iloc[:period] = simple_avg_loss.iloc[:period]
+            
             logger.info(f"Average gains and losses calculated. Samples:\nAvg Gains:\n{avg_gain.head()}\nAvg Losses:\n{avg_loss.head()}")
             
-            # Calculate RS and RSI
+            # Calculate RS and RSI with NaN handling
+            # Avoid division by zero
+            avg_loss = avg_loss.replace(0, np.finfo(float).eps)  # Replace 0 with smallest float
             rs = avg_gain / avg_loss
             rsi = 100 - (100 / (1 + rs))
+            
+            # Forward fill any remaining NaN values
+            rsi = rsi.fillna(method='ffill').fillna(50)  # Fill remaining NaN with neutral value
+            
             logger.info(f"RSI calculated. Sample values:\n{rsi.head()}")
+            logger.info(f"RSI NaN count: {rsi.isnull().sum()}/{len(rsi)}")
             
             return rsi.values
         except Exception as e:
             logger.error(f"Error calculating RSI: {str(e)}")
             logger.error("Full traceback:", exc_info=True)
-            return np.zeros(len(df))
+            return np.full(len(df), 50.0)  # Return neutral RSI values on error
     
     def _calculate_macd(self, df: pd.DataFrame, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> Dict[str, np.ndarray]:
-        """Calculate MACD indicator"""
+        """Calculate MACD indicator with improved NaN handling"""
         try:
             logger.info(f"Calculating MACD with fast={fastperiod}, slow={slowperiod}, signal={signalperiod}")
             
-            # Calculate EMAs
-            fast_ema = df['Close'].ewm(span=fastperiod, adjust=False).mean()
-            slow_ema = df['Close'].ewm(span=slowperiod, adjust=False).mean()
+            # Calculate EMAs with min_periods to reduce initial NaN values
+            fast_ema = df['Close'].ewm(span=fastperiod, adjust=False, min_periods=1).mean()
+            slow_ema = df['Close'].ewm(span=slowperiod, adjust=False, min_periods=1).mean()
             logger.info(f"EMAs calculated. Samples:\nFast EMA:\n{fast_ema.head()}\nSlow EMA:\n{slow_ema.head()}")
             
             # Calculate MACD line
             macd_line = fast_ema - slow_ema
             logger.info(f"MACD line calculated. Sample:\n{macd_line.head()}")
             
-            # Calculate signal line
-            signal_line = macd_line.ewm(span=signalperiod, adjust=False).mean()
+            # Calculate signal line with min_periods
+            signal_line = macd_line.ewm(span=signalperiod, adjust=False, min_periods=1).mean()
             logger.info(f"Signal line calculated. Sample:\n{signal_line.head()}")
             
             # Calculate histogram
             histogram = macd_line - signal_line
             logger.info(f"Histogram calculated. Sample:\n{histogram.head()}")
+            
+            # Ensure no NaN values
+            macd_line = macd_line.fillna(0)
+            signal_line = signal_line.fillna(0)
+            histogram = histogram.fillna(0)
+            
+            logger.info(f"MACD NaN counts - MACD: {macd_line.isnull().sum()}, Signal: {signal_line.isnull().sum()}, Histogram: {histogram.isnull().sum()}")
             
             return {
                 'macd': macd_line.values,
