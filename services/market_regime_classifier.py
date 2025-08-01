@@ -126,14 +126,36 @@ class MarketRegimeClassifier:
         Returns:
             DataFrame with features for classification
         """
-        features = df.copy()
+        # Ensure we have the required columns and clean the data
+        required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
         
-        # Price-based features
-        features['returns'] = df['Close'].pct_change()
-        features['log_returns'] = np.log(df['Close'] / df['Close'].shift(1))
-        features['price_momentum_5'] = df['Close'].pct_change(5)
-        features['price_momentum_10'] = df['Close'].pct_change(10)
-        features['price_momentum_20'] = df['Close'].pct_change(20)
+        # Create a clean copy with only required columns
+        features = pd.DataFrame(index=df.index)
+        
+        for col in required_columns:
+            if col in df.columns:
+                features[col] = df[col]
+            else:
+                logger.warning(f"Missing column {col}, filling with Close price")
+                if col == 'Volume':
+                    features[col] = 1000000  # Default volume
+                else:
+                    features[col] = df['Close'] if 'Close' in df.columns else 100
+        
+        # Price-based features with error handling
+        try:
+            features['returns'] = df['Close'].pct_change().fillna(0.0)
+            features['log_returns'] = np.log(df['Close'] / df['Close'].shift(1)).fillna(0.0)
+            features['price_momentum_5'] = df['Close'].pct_change(5).fillna(0.0)
+            features['price_momentum_10'] = df['Close'].pct_change(10).fillna(0.0)
+            features['price_momentum_20'] = df['Close'].pct_change(20).fillna(0.0)
+        except Exception as e:
+            logger.warning(f"Error calculating price features: {str(e)}")
+            features['returns'] = 0.0
+            features['log_returns'] = 0.0
+            features['price_momentum_5'] = 0.0
+            features['price_momentum_10'] = 0.0
+            features['price_momentum_20'] = 0.0
         
         # Volatility features
         features['volatility_5'] = features['returns'].rolling(5).std()
@@ -141,34 +163,92 @@ class MarketRegimeClassifier:
         features['volatility_20'] = features['returns'].rolling(20).std()
         features['volatility_ratio'] = features['volatility_5'] / features['volatility_20']
         
-        # Volume features
+        # Volume features with NaN handling
         features['volume_ma_5'] = df['Volume'].rolling(5).mean()
         features['volume_ma_20'] = df['Volume'].rolling(20).mean()
-        features['volume_ratio'] = df['Volume'] / features['volume_ma_20']
-        features['volume_momentum'] = df['Volume'].pct_change(5)
+        features['volume_ratio'] = np.where(
+            features['volume_ma_20'] != 0, df['Volume'] / features['volume_ma_20'], 1.0
+        )
+        features['volume_momentum'] = df['Volume'].pct_change(5).fillna(0.0)
         
-        # Technical indicators
-        features['rsi'] = self._calculate_rsi(df)
-        features['macd'], features['macd_signal'], features['macd_histogram'] = self._calculate_macd(df)
-        features['bb_upper'], features['bb_middle'], features['bb_lower'] = self._calculate_bollinger_bands(df)
-        features['bb_width'] = (features['bb_upper'] - features['bb_lower']) / features['bb_middle']
-        features['bb_position'] = (df['Close'] - features['bb_lower']) / (features['bb_upper'] - features['bb_lower'])
+        # Technical indicators with comprehensive error handling
+        try:
+            features['rsi'] = self._calculate_rsi(df)
+        except Exception as e:
+            logger.warning(f"Error calculating RSI: {str(e)}")
+            features['rsi'] = 50.0  # Neutral RSI
+            
+        try:
+            features['macd'], features['macd_signal'], features['macd_histogram'] = self._calculate_macd(df)
+        except Exception as e:
+            logger.warning(f"Error calculating MACD: {str(e)}")
+            features['macd'] = 0.0
+            features['macd_signal'] = 0.0
+            features['macd_histogram'] = 0.0
+            
+        try:
+            features['bb_upper'], features['bb_middle'], features['bb_lower'] = self._calculate_bollinger_bands(df)
+        except Exception as e:
+            logger.warning(f"Error calculating Bollinger Bands: {str(e)}")
+            close_price = df['Close'].iloc[-1] if len(df) > 0 else 100
+            features['bb_upper'] = close_price * 1.02
+            features['bb_middle'] = close_price
+            features['bb_lower'] = close_price * 0.98
         
-        # Moving averages
-        features['sma_5'] = df['Close'].rolling(5).mean()
-        features['sma_10'] = df['Close'].rolling(10).mean()
-        features['sma_20'] = df['Close'].rolling(20).mean()
-        features['sma_50'] = df['Close'].rolling(50).mean()
+        # Safe division with NaN handling
+        features['bb_width'] = np.where(
+            features['bb_middle'] != 0,
+            (features['bb_upper'] - features['bb_lower']) / features['bb_middle'],
+            0.0
+        )
         
-        # Moving average relationships
-        features['price_vs_sma_5'] = df['Close'] / features['sma_5']
-        features['price_vs_sma_20'] = df['Close'] / features['sma_20']
-        features['sma_5_vs_20'] = features['sma_5'] / features['sma_20']
-        features['sma_20_vs_50'] = features['sma_20'] / features['sma_50']
+        bb_range = features['bb_upper'] - features['bb_lower']
+        features['bb_position'] = np.where(
+            bb_range != 0,
+            (df['Close'] - features['bb_lower']) / bb_range,
+            0.5
+        )
         
-        # Trend strength
-        features['adx'] = self._calculate_adx(df)
-        features['trend_strength'] = self._calculate_trend_strength(df)
+        # Moving averages with error handling
+        try:
+            features['sma_5'] = df['Close'].rolling(5, min_periods=1).mean()
+            features['sma_10'] = df['Close'].rolling(10, min_periods=1).mean()
+            features['sma_20'] = df['Close'].rolling(20, min_periods=1).mean()
+            features['sma_50'] = df['Close'].rolling(50, min_periods=1).mean()
+        except Exception as e:
+            logger.warning(f"Error calculating moving averages: {str(e)}")
+            close_mean = df['Close'].mean() if len(df) > 0 else 100
+            features['sma_5'] = close_mean
+            features['sma_10'] = close_mean
+            features['sma_20'] = close_mean
+            features['sma_50'] = close_mean
+        
+        # Moving average relationships with safe division
+        features['price_vs_sma_5'] = np.where(
+            features['sma_5'] != 0, df['Close'] / features['sma_5'], 1.0
+        )
+        features['price_vs_sma_20'] = np.where(
+            features['sma_20'] != 0, df['Close'] / features['sma_20'], 1.0
+        )
+        features['sma_5_vs_20'] = np.where(
+            features['sma_20'] != 0, features['sma_5'] / features['sma_20'], 1.0
+        )
+        features['sma_20_vs_50'] = np.where(
+            features['sma_50'] != 0, features['sma_20'] / features['sma_50'], 1.0
+        )
+        
+        # Trend strength with error handling
+        try:
+            features['adx'] = self._calculate_adx(df)
+        except Exception as e:
+            logger.warning(f"Error calculating ADX: {str(e)}")
+            features['adx'] = 25.0  # Neutral ADX
+            
+        try:
+            features['trend_strength'] = self._calculate_trend_strength(df)
+        except Exception as e:
+            logger.warning(f"Error calculating trend strength: {str(e)}")
+            features['trend_strength'] = 0.5  # Neutral trend strength
         
         # Range and gap features
         features['true_range'] = self._calculate_true_range(df)
@@ -180,6 +260,24 @@ class MarketRegimeClassifier:
         features['higher_highs'] = self._detect_higher_highs(df)
         features['lower_lows'] = self._detect_lower_lows(df)
         features['breakout_strength'] = self._calculate_breakout_strength(df)
+        
+        # Final cleanup - replace infinite values and remaining NaN
+        features = features.replace([np.inf, -np.inf], np.nan)
+        
+        # Forward fill and backward fill for time series continuity
+        features = features.ffill().bfill()
+        
+        # Fill any remaining NaN values with appropriate defaults
+        for col in features.columns:
+            if features[col].isna().any():
+                if 'ratio' in col.lower() or 'vs' in col.lower():
+                    features[col] = features[col].fillna(1.0)
+                elif 'return' in col.lower() or 'momentum' in col.lower():
+                    features[col] = features[col].fillna(0.0)
+                elif 'volume' in col.lower():
+                    features[col] = features[col].fillna(features[col].median())
+                else:
+                    features[col] = features[col].fillna(0.0)
         
         return features
     
@@ -397,13 +495,78 @@ class MarketRegimeClassifier:
                 if df.empty:
                     return {"status": "error", "message": "No data available"}
             else:
-                df = current_data
+                df = current_data.copy()
             
-            # Prepare features
-            features_df = self.prepare_features(df)
+            # Ensure we have the minimum required data
+            if len(df) < self.lookback_period:
+                return {"status": "error", "message": "Insufficient data for prediction"}
             
-            # Get latest features
-            latest_features = features_df[self.feature_names].iloc[-1:].ffill()
+            # Clean column names and ensure standard format
+            df.columns = df.columns.str.strip()
+            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            
+            # Check if we have the required columns
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                logger.warning(f"Missing columns {missing_columns}, attempting to handle gracefully")
+                
+                # Try common alternative column names
+                column_mapping = {
+                    'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume',
+                    'adj close': 'Close', 'Adj Close': 'Close'
+                }
+                
+                for old_name, new_name in column_mapping.items():
+                    if old_name in df.columns and new_name not in df.columns:
+                        df[new_name] = df[old_name]
+                
+                # Fill any still missing columns
+                for col in required_columns:
+                    if col not in df.columns:
+                        if col == 'Volume':
+                            df[col] = 1000000  # Default volume
+                        else:
+                            df[col] = df.get('Close', 100)  # Use Close price or default
+            
+            # Prepare features with error handling
+            try:
+                features_df = self.prepare_features(df)
+                if features_df.empty:
+                    return {"status": "error", "message": "Feature preparation failed"}
+            except Exception as e:
+                logger.error(f"Error preparing features: {str(e)}")
+                return {"status": "error", "message": f"Feature preparation failed: {str(e)}"}
+            
+            # Get latest features with comprehensive NaN handling
+            latest_features = features_df[self.feature_names].iloc[-1:]
+            
+            # Handle missing values comprehensively
+            latest_features = latest_features.ffill().bfill()
+            
+            # Replace any remaining NaN values with column means or zeros
+            for col in latest_features.columns:
+                if latest_features[col].isna().any():
+                    # Try to use historical mean from the full dataset
+                    if not features_df[col].isna().all():
+                        mean_val = features_df[col].mean()
+                        latest_features[col] = latest_features[col].fillna(mean_val)
+                    else:
+                        # If column is all NaN, fill with appropriate default
+                        if 'ratio' in col.lower() or 'vs' in col.lower():
+                            latest_features[col] = latest_features[col].fillna(1.0)
+                        elif 'return' in col.lower():
+                            latest_features[col] = latest_features[col].fillna(0.0)
+                        else:
+                            latest_features[col] = latest_features[col].fillna(0.0)
+            
+            # Final check for any remaining NaN or infinite values
+            latest_features = latest_features.replace([np.inf, -np.inf], np.nan)
+            latest_features = latest_features.fillna(0.0)
+            
+            # Verify no NaN values remain
+            if latest_features.isna().any().any():
+                logger.warning("Still have NaN values after preprocessing, using zeros")
+                latest_features = latest_features.fillna(0.0)
             
             # Scale features
             features_scaled = self.scaler.transform(latest_features)

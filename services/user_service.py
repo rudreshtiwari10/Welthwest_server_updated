@@ -3,9 +3,12 @@ import bcrypt
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from urllib.parse import quote_plus
 from config import get_config
+import logging
+
+logger = logging.getLogger(__name__)
 
 # MongoDB connection
 def get_db_connection():
@@ -217,4 +220,112 @@ class UserService:
     def invalidate_refresh_token(self, token: str) -> bool:
         """Remove refresh token from database"""
         result = self.tokens.delete_one({"token": token})
-        return result.deleted_count > 0 
+        return result.deleted_count > 0
+    
+    def save_backtest_result(self, user_id: str, backtest_data: Dict[str, Any]) -> bool:
+        """Save backtest result for a user"""
+        try:
+            # Initialize backtesting collection if not exists
+            if not hasattr(self, 'backtests'):
+                self.backtests = self.db.user_backtests
+            
+            backtest_record = {
+                "user_id": user_id,
+                "backtest_data": backtest_data,
+                "created_at": datetime.utcnow(),
+                "type": "backtest"
+            }
+            
+            result = self.backtests.insert_one(backtest_record)
+            return bool(result.inserted_id)
+        except Exception as e:
+            logger.error(f"Error saving backtest result: {str(e)}")
+            return False
+    
+    def save_ai_analysis_result(self, user_id: str, analysis_data: Dict[str, Any]) -> bool:
+        """Save AI analysis result for a user"""
+        try:
+            # Initialize AI analysis collection if not exists
+            if not hasattr(self, 'ai_analyses'):
+                self.ai_analyses = self.db.user_ai_analyses
+            
+            analysis_record = {
+                "user_id": user_id,
+                "analysis_data": analysis_data,
+                "created_at": datetime.utcnow(),
+                "type": "ai_analysis"
+            }
+            
+            result = self.ai_analyses.insert_one(analysis_record)
+            return bool(result.inserted_id)
+        except Exception as e:
+            logger.error(f"Error saving AI analysis result: {str(e)}")
+            return False
+    
+    def save_chat_history(self, user_id: str, chat_data: Dict[str, Any]) -> bool:
+        """Save chat history for a user"""
+        try:
+            # Initialize chat history collection if not exists
+            if not hasattr(self, 'chat_histories'):
+                self.chat_histories = self.db.user_chat_histories
+            
+            chat_record = {
+                "user_id": user_id,
+                "chat_data": chat_data,
+                "created_at": datetime.utcnow(),
+                "type": "chat_history"
+            }
+            
+            result = self.chat_histories.insert_one(chat_record)
+            return bool(result.inserted_id)
+        except Exception as e:
+            logger.error(f"Error saving chat history: {str(e)}")
+            return False
+    
+    def get_user_backtests(self, user_id: str, limit: int = 10, skip: int = 0) -> List[Dict[str, Any]]:
+        """Get user's backtest results"""
+        try:
+            if not hasattr(self, 'backtests'):
+                self.backtests = self.db.user_backtests
+            
+            results = list(self.backtests.find(
+                {"user_id": user_id},
+                {"_id": 0}  # Exclude MongoDB ObjectId
+            ).sort("created_at", -1).skip(skip).limit(limit))
+            
+            return results
+        except Exception as e:
+            logger.error(f"Error retrieving user backtests: {str(e)}")
+            return []
+    
+    def get_user_ai_analyses(self, user_id: str, limit: int = 10, skip: int = 0) -> List[Dict[str, Any]]:
+        """Get user's AI analysis results"""
+        try:
+            if not hasattr(self, 'ai_analyses'):
+                self.ai_analyses = self.db.user_ai_analyses
+            
+            results = list(self.ai_analyses.find(
+                {"user_id": user_id},
+                {"_id": 0}  # Exclude MongoDB ObjectId
+            ).sort("created_at", -1).skip(skip).limit(limit))
+            
+            return results
+        except Exception as e:
+            logger.error(f"Error retrieving user AI analyses: {str(e)}")
+            return []
+    
+    def get_user_chat_history(self, user_id: str, limit: int = 50, skip: int = 0) -> List[Dict[str, Any]]:
+        """Get user's chat history"""
+        try:
+            if not hasattr(self, 'chat_histories'):
+                self.chat_histories = self.db.user_chat_histories
+            
+            results = list(self.chat_histories.find(
+                {"user_id": user_id},
+                {"_id": 0}  # Exclude MongoDB ObjectId
+            ).sort("created_at", -1).skip(skip).limit(limit))
+            
+            return results
+        except Exception as e:
+            logger.error(f"Error retrieving user chat history: {str(e)}")
+            return [] 

@@ -362,6 +362,246 @@ The test script covers:
 - Payment history
 - Subscription endpoints
 
+### Postman Testing Examples
+
+#### 1. Get Payment Status
+```http
+GET {{base_url}}/api/payment/status/order_MxABCDEF123456
+Authorization: Bearer {{jwt_token}}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "order_id": "order_MxABCDEF123456",
+  "status": "created",
+  "amount": 39900,
+  "currency": "INR",
+  "plan_tier": "BASIC",
+  "created_at": "2024-01-15T10:30:00Z",
+  "expires_at": "2024-01-15T11:30:00Z"
+}
+```
+
+#### 2. Cancel Payment
+```http
+POST {{base_url}}/api/payment/cancel/order_MxABCDEF123456
+Authorization: Bearer {{jwt_token}}
+Content-Type: application/json
+
+{
+  "reason": "User cancelled the payment"
+}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "message": "Payment cancelled successfully",
+  "order_id": "order_MxABCDEF123456",
+  "status": "cancelled"
+}
+```
+
+#### 3. Get Payment History
+```http
+GET {{base_url}}/api/payment/history?limit=10&skip=0
+Authorization: Bearer {{jwt_token}}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "payments": [
+    {
+      "order_id": "order_MxABCDEF123456",
+      "payment_id": "pay_MxABCDEF123456",
+      "amount": 399,
+      "currency": "INR",
+      "plan_tier": "BASIC",
+      "status": "captured",
+      "method": "card",
+      "created_at": "2024-01-15T10:30:00Z"
+    }
+  ],
+  "total_count": 5,
+  "has_more": false
+}
+```
+
+#### 4. Razorpay Webhook (Test Payload)
+```http
+POST {{base_url}}/api/payment/webhook
+Content-Type: application/json
+X-Razorpay-Signature: {{webhook_signature}}
+
+{
+  "entity": "event",
+  "account_id": "acc_BFQ7uQEaa30GJy",
+  "event": "payment.captured",
+  "contains": ["payment"],
+  "payload": {
+    "payment": {
+      "entity": {
+        "id": "pay_MxABCDEF123456",
+        "entity": "payment",
+        "amount": 39900,
+        "currency": "INR",
+        "status": "captured",
+        "order_id": "order_MxABCDEF123456",
+        "method": "card",
+        "captured": true,
+        "created_at": 1642248600
+      }
+    }
+  },
+  "created_at": 1642248600
+}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "message": "Webhook processed successfully",
+  "event": "payment.captured"
+}
+```
+
+#### 5. Get Subscription Plans
+```http
+GET {{base_url}}/api/payment/plans
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "plans": [
+    {
+      "tier": "FREE",
+      "name": "Free Plan",
+      "price": 0,
+      "currency": "INR",
+      "features": {
+        "backtests_per_day": 2,
+        "llm_queries_per_day": 5
+      }
+    },
+    {
+      "tier": "BASIC",
+      "name": "Basic Plan",
+      "price": 399,
+      "currency": "INR",
+      "features": {
+        "backtests_per_day": 10,
+        "llm_queries_per_day": 20
+      }
+    },
+    {
+      "tier": "PRO",
+      "name": "Pro Plan",
+      "price": 999,
+      "currency": "INR",
+      "features": {
+        "backtests_per_day": 30,
+        "llm_queries_per_day": 50
+      }
+    },
+    {
+      "tier": "ENTERPRISE",
+      "name": "Enterprise Plan",
+      "price": 2999,
+      "currency": "INR",
+      "features": {
+        "backtests_per_day": -1,
+        "llm_queries_per_day": -1
+      }
+    }
+  ]
+}
+```
+
+#### 6. Get Billing Details
+```http
+GET {{base_url}}/api/user/billing-details
+Authorization: Bearer {{jwt_token}}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "billing_details": {
+    "full_name": "John Doe",
+    "email": "john@example.com",
+    "phone": "+919876543210",
+    "address": {
+      "street": "123 Main St",
+      "city": "Mumbai",
+      "state": "Maharashtra",
+      "country": "India",
+      "pincode": "400001"
+    }
+  }
+}
+```
+
+#### 7. Update Billing Details
+```http
+PUT {{base_url}}/api/user/billing-details
+Authorization: Bearer {{jwt_token}}
+Content-Type: application/json
+
+{
+  "full_name": "John Smith",
+  "email": "john.smith@example.com",
+  "phone": "+919876543210",
+  "address": {
+    "street": "456 New Street",
+    "city": "Delhi",
+    "state": "Delhi",
+    "country": "India",
+    "pincode": "110001"
+  }
+}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "message": "Billing details updated successfully",
+  "billing_details": {
+    "full_name": "John Smith",
+    "email": "john.smith@example.com",
+    "phone": "+919876543210",
+    "address": {
+      "street": "456 New Street",
+      "city": "Delhi",
+      "state": "Delhi",
+      "country": "India",
+      "pincode": "110001"
+    }
+  }
+}
+```
+
+### Postman Environment Variables
+
+Set up these variables in your Postman environment:
+
+```json
+{
+  "base_url": "http://localhost:5000",
+  "jwt_token": "your_jwt_token_here",
+  "webhook_signature": "calculated_webhook_signature"
+}
+```
+
 ### Test Credentials
 
 For testing in Razorpay test mode:
