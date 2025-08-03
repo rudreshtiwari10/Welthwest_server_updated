@@ -1072,11 +1072,16 @@ def market_indices():
 
 @app.route('/api/top-gainers-losers', methods=['GET'])
 def top_gainers_losers():
+    """
+    Get top gainers and losers from NSE Nifty 50 index
+    Data is automatically refreshed every 15 minutes during market hours
+    """
     try:
         data = get_top_gainers_losers()
         return jsonify(data)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error in top gainers/losers endpoint: {str(e)}")
+        return jsonify({"error": str(e), "message": "Failed to fetch top gainers and losers data"}), 500
 
 # AI Chat endpoint
 @app.route('/api/market/chat', methods=['POST'])

@@ -449,139 +449,180 @@ class TechnicalAnalysis:
         return signals
     
     def _calculate_rsi(self, df: pd.DataFrame, period: int = 14) -> np.ndarray:
-        """Calculate RSI indicator with proper NaN handling"""
+        """Calculate RSI indicator with improved NaN handling and min_periods"""
         try:
             logger.info(f"Calculating RSI with period {period}")
             
+            # Validate input data
+            if df.empty or 'Close' not in df.columns:
+                logger.error("Invalid input data for RSI calculation")
+                return np.full(max(len(df), period), 50.0)
+            
             # Calculate price changes
             delta = df['Close'].diff()
-            logger.info(f"Price changes calculated. Sample:\n{delta.head()}")
             
-            # Get gains and losses
-            gain = (delta.where(delta > 0, 0)).fillna(0)
+            # Get gains and losses, ensuring no NaN propagation
+            gain = delta.where(delta > 0, 0).fillna(0)
             loss = (-delta.where(delta < 0, 0)).fillna(0)
-            logger.info(f"Gains and losses calculated. Samples:\nGains:\n{gain.head()}\nLosses:\n{loss.head()}")
             
-            # Use exponentially weighted moving average for smoother RSI
-            # This reduces NaN values and provides better convergence
-            alpha = 1.0 / period
-            avg_gain = gain.ewm(alpha=alpha, adjust=False).mean()
-            avg_loss = loss.ewm(alpha=alpha, adjust=False).mean()
+            # Use rolling average with min_periods=1 to reduce NaN values
+            avg_gain = gain.rolling(window=period, min_periods=1).mean()
+            avg_loss = loss.rolling(window=period, min_periods=1).mean()
             
-            # For the first few values, use simple average to avoid NaN
-            simple_avg_gain = gain.rolling(window=period, min_periods=1).mean()
-            simple_avg_loss = loss.rolling(window=period, min_periods=1).mean()
+            # Ensure no division by zero
+            avg_loss = avg_loss.replace(0, 1e-10)
             
-            # Use simple average for first period values, then switch to EMA
-            avg_gain.iloc[:period] = simple_avg_gain.iloc[:period]
-            avg_loss.iloc[:period] = simple_avg_loss.iloc[:period]
-            
-            logger.info(f"Average gains and losses calculated. Samples:\nAvg Gains:\n{avg_gain.head()}\nAvg Losses:\n{avg_loss.head()}")
-            
-            # Calculate RS and RSI with NaN handling
-            # Avoid division by zero
-            avg_loss = avg_loss.replace(0, np.finfo(float).eps)  # Replace 0 with smallest float
+            # Calculate RS and RSI
             rs = avg_gain / avg_loss
             rsi = 100 - (100 / (1 + rs))
             
-            # Forward fill any remaining NaN values
-            rsi = rsi.fillna(method='ffill').fillna(50)  # Fill remaining NaN with neutral value
+            # Fill any remaining NaN with neutral value (50)
+            rsi = rsi.fillna(50)
             
-            logger.info(f"RSI calculated. Sample values:\n{rsi.head()}")
-            logger.info(f"RSI NaN count: {rsi.isnull().sum()}/{len(rsi)}")
+            # Ensure all values are within valid range [0, 100]
+            rsi = np.clip(rsi.values, 0, 100)
             
-            return rsi.values
+            logger.info(f"RSI calculated successfully. Range: {rsi.min():.2f} - {rsi.max():.2f}")
+            logger.info(f"RSI NaN count: {pd.isna(rsi).sum()}/{len(rsi)}")
+            
+            return rsi
         except Exception as e:
             logger.error(f"Error calculating RSI: {str(e)}")
-            logger.error("Full traceback:", exc_info=True)
-            return np.full(len(df), 50.0)  # Return neutral RSI values on error
+            return np.full(max(len(df), period), 50.0)
     
     def _calculate_macd(self, df: pd.DataFrame, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> Dict[str, np.ndarray]:
         """Calculate MACD indicator with improved NaN handling"""
         try:
             logger.info(f"Calculating MACD with fast={fastperiod}, slow={slowperiod}, signal={signalperiod}")
             
-            # Calculate EMAs with min_periods to reduce initial NaN values
+            # Validate input data
+            if df.empty or 'Close' not in df.columns:
+                logger.error("Invalid input data for MACD calculation")
+                zeros = np.zeros(max(len(df), slowperiod))
+                return {'macd': zeros, 'signal': zeros, 'histogram': zeros}
+            
+            # Calculate EMAs with min_periods=1 to reduce NaN values
             fast_ema = df['Close'].ewm(span=fastperiod, adjust=False, min_periods=1).mean()
             slow_ema = df['Close'].ewm(span=slowperiod, adjust=False, min_periods=1).mean()
-            logger.info(f"EMAs calculated. Samples:\nFast EMA:\n{fast_ema.head()}\nSlow EMA:\n{slow_ema.head()}")
             
             # Calculate MACD line
             macd_line = fast_ema - slow_ema
-            logger.info(f"MACD line calculated. Sample:\n{macd_line.head()}")
             
-            # Calculate signal line with min_periods
+            # Calculate signal line with min_periods=1
             signal_line = macd_line.ewm(span=signalperiod, adjust=False, min_periods=1).mean()
-            logger.info(f"Signal line calculated. Sample:\n{signal_line.head()}")
             
             # Calculate histogram
             histogram = macd_line - signal_line
-            logger.info(f"Histogram calculated. Sample:\n{histogram.head()}")
             
-            # Ensure no NaN values
-            macd_line = macd_line.fillna(0)
-            signal_line = signal_line.fillna(0)
-            histogram = histogram.fillna(0)
+            # Fill any remaining NaN values with 0
+            macd_line = macd_line.fillna(0).values
+            signal_line = signal_line.fillna(0).values
+            histogram = histogram.fillna(0).values
             
-            logger.info(f"MACD NaN counts - MACD: {macd_line.isnull().sum()}, Signal: {signal_line.isnull().sum()}, Histogram: {histogram.isnull().sum()}")
+            logger.info(f"MACD calculated successfully. MACD range: {macd_line.min():.4f} - {macd_line.max():.4f}")
+            logger.info(f"MACD NaN counts - MACD: {pd.isna(macd_line).sum()}, Signal: {pd.isna(signal_line).sum()}, Histogram: {pd.isna(histogram).sum()}")
             
             return {
-                'macd': macd_line.values,
-                'signal': signal_line.values,
-                'histogram': histogram.values
+                'macd': macd_line,
+                'signal': signal_line, 
+                'histogram': histogram
             }
         except Exception as e:
             logger.error(f"Error calculating MACD: {str(e)}")
-            logger.error("Full traceback:", exc_info=True)
-            zeros = np.zeros(len(df))
+            zeros = np.zeros(max(len(df), slowperiod))
             return {'macd': zeros, 'signal': zeros, 'histogram': zeros}
     
     def _calculate_bollinger_bands(self, df: pd.DataFrame, period: int = 20, num_std: int = 2) -> Dict[str, np.ndarray]:
-        """Calculate Bollinger Bands"""
+        """Calculate Bollinger Bands with improved NaN handling"""
         try:
             logger.info(f"Calculating Bollinger Bands with period={period}, std={num_std}")
             
-            # Calculate middle band (SMA)
+            # Validate input data
+            if df.empty or 'Close' not in df.columns:
+                logger.error("Invalid input data for Bollinger Bands calculation")
+                zeros = np.zeros(max(len(df), period))
+                return {"upper": zeros, "middle": zeros, "lower": zeros}
+            
+            # Calculate middle band (SMA) with min_periods=1
             middle = df['Close'].rolling(window=period, min_periods=1).mean()
             
-            # Calculate standard deviation
+            # Calculate standard deviation with min_periods=1
             std = df['Close'].rolling(window=period, min_periods=1).std()
+            
+            # Fill any NaN in std with 0 to prevent NaN propagation
+            std = std.fillna(0)
             
             # Calculate upper and lower bands
             upper = middle + (std * num_std)
             lower = middle - (std * num_std)
             
+            # Fill any remaining NaN values
+            middle = middle.fillna(method='ffill').fillna(df['Close'].mean())
+            upper = upper.fillna(method='ffill').fillna(df['Close'].mean())
+            lower = lower.fillna(method='ffill').fillna(df['Close'].mean())
+            
+            logger.info(f"Bollinger Bands calculated successfully")
+            
             return {
-                "upper": upper.to_numpy(),
-                "middle": middle.to_numpy(),
-                "lower": lower.to_numpy()
+                "upper": upper.values,
+                "middle": middle.values,
+                "lower": lower.values
             }
         except Exception as e:
             logger.error(f"Error calculating Bollinger Bands: {str(e)}")
-            zeros = np.zeros(len(df))
+            close_mean = df['Close'].mean() if not df.empty and 'Close' in df.columns else 100
+            size = max(len(df), period) if not df.empty else period
             return {
-                "upper": zeros,
-                "middle": zeros,
-                "lower": zeros
+                "upper": np.full(size, close_mean),
+                "middle": np.full(size, close_mean),
+                "lower": np.full(size, close_mean)
             }
     
     def _calculate_sma(self, df: pd.DataFrame, period: int = 20) -> np.ndarray:
-        """Calculate Simple Moving Average"""
+        """Calculate Simple Moving Average with improved NaN handling"""
         try:
+            logger.info(f"Calculating SMA with period {period}")
+            
+            # Validate input data
+            if df.empty or 'Close' not in df.columns:
+                logger.error("Invalid input data for SMA calculation")
+                return np.full(max(len(df), period), df['Close'].mean() if not df.empty else 100.0)
+            
+            # Calculate SMA with min_periods=1 to reduce NaN values
             sma = df['Close'].rolling(window=period, min_periods=1).mean()
-            return sma.to_numpy()
+            
+            # Fill any remaining NaN values
+            sma = sma.fillna(method='ffill').fillna(df['Close'].mean())
+            
+            logger.info(f"SMA calculated successfully. Range: {sma.min():.2f} - {sma.max():.2f}")
+            return sma.values
         except Exception as e:
             logger.error(f"Error calculating SMA: {str(e)}")
-            return np.zeros(len(df))
+            close_mean = df['Close'].mean() if not df.empty and 'Close' in df.columns else 100.0
+            return np.full(max(len(df), period), close_mean)
     
     def _calculate_ema(self, df: pd.DataFrame, period: int = 20) -> np.ndarray:
-        """Calculate Exponential Moving Average"""
+        """Calculate Exponential Moving Average with improved NaN handling"""
         try:
-            ema = df['Close'].ewm(span=period, adjust=False).mean()
-            return ema.to_numpy()
+            logger.info(f"Calculating EMA with period {period}")
+            
+            # Validate input data
+            if df.empty or 'Close' not in df.columns:
+                logger.error("Invalid input data for EMA calculation")
+                return np.full(max(len(df), period), df['Close'].mean() if not df.empty else 100.0)
+            
+            # Calculate EMA with min_periods=1 to reduce NaN values
+            ema = df['Close'].ewm(span=period, adjust=False, min_periods=1).mean()
+            
+            # Fill any remaining NaN values
+            ema = ema.fillna(method='ffill').fillna(df['Close'].mean())
+            
+            logger.info(f"EMA calculated successfully. Range: {ema.min():.2f} - {ema.max():.2f}")
+            return ema.values
         except Exception as e:
             logger.error(f"Error calculating EMA: {str(e)}")
-            return np.zeros(len(df))
+            close_mean = df['Close'].mean() if not df.empty and 'Close' in df.columns else 100.0
+            return np.full(max(len(df), period), close_mean)
     
     def _get_default_stock_list(self) -> List[str]:
         """Get default list of stocks (e.g., Nifty 50)"""
@@ -757,114 +798,244 @@ class TechnicalAnalysis:
         }
     
     def _calculate_stochastic(self, df: pd.DataFrame, k_period: int = 14, d_period: int = 3) -> Dict[str, np.ndarray]:
-        """Calculate Stochastic Oscillator"""
-        stoch = momentum.StochasticOscillator(df['High'], df['Low'], df['Close'], window=k_period, smooth_window=d_period)
-        return {
-            "k": stoch.stoch().fillna(0).values,
-            "d": stoch.stoch_signal().fillna(0).values
-        }
+        """Calculate Stochastic Oscillator with improved NaN handling"""
+        try:
+            logger.info(f"Calculating Stochastic with k_period={k_period}, d_period={d_period}")
+            
+            # Validate input data
+            if df.empty or not all(col in df.columns for col in ['High', 'Low', 'Close']):
+                logger.error("Invalid input data for Stochastic calculation")
+                zeros = np.zeros(max(len(df), k_period))
+                return {"k": zeros, "d": zeros}
+            
+            # Calculate manually to have better control over NaN handling
+            lowest_low = df['Low'].rolling(window=k_period, min_periods=1).min()
+            highest_high = df['High'].rolling(window=k_period, min_periods=1).max()
+            
+            # Calculate %K
+            k_percent = 100 * ((df['Close'] - lowest_low) / (highest_high - lowest_low))
+            k_percent = k_percent.fillna(50)  # Fill NaN with neutral value
+            
+            # Calculate %D (smoothed %K)
+            d_percent = k_percent.rolling(window=d_period, min_periods=1).mean()
+            d_percent = d_percent.fillna(50)  # Fill NaN with neutral value
+            
+            # Ensure values are within valid range [0, 100]
+            k_values = np.clip(k_percent.values, 0, 100)
+            d_values = np.clip(d_percent.values, 0, 100)
+            
+            logger.info(f"Stochastic calculated successfully. K range: {k_values.min():.2f} - {k_values.max():.2f}")
+            
+            return {
+                "k": k_values,
+                "d": d_values
+            }
+        except Exception as e:
+            logger.error(f"Error calculating Stochastic: {str(e)}")
+            size = max(len(df), k_period) if not df.empty else k_period
+            default_values = np.full(size, 50.0)  # Neutral stochastic values
+            return {"k": default_values, "d": default_values}
     
     def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> np.ndarray:
-        """Calculate Average True Range"""
-        atr = volatility.AverageTrueRange(df['High'], df['Low'], df['Close'], window=period)
-        return atr.average_true_range().fillna(0).values
+        """Calculate Average True Range with improved NaN handling"""
+        try:
+            logger.info(f"Calculating ATR with period {period}")
+            
+            # Validate input data
+            if df.empty or not all(col in df.columns for col in ['High', 'Low', 'Close']):
+                logger.error("Invalid input data for ATR calculation")
+                return np.zeros(max(len(df), period))
+            
+            # Calculate True Range manually for better control
+            high_low = df['High'] - df['Low']
+            high_close_prev = abs(df['High'] - df['Close'].shift(1))
+            low_close_prev = abs(df['Low'] - df['Close'].shift(1))
+            
+            # True Range is the maximum of the three
+            true_range = pd.concat([high_low, high_close_prev, low_close_prev], axis=1).max(axis=1)
+            
+            # Fill any NaN values (usually first row)
+            true_range = true_range.fillna(high_low)
+            
+            # Calculate ATR as exponential moving average of True Range
+            atr = true_range.ewm(span=period, adjust=False, min_periods=1).mean()
+            
+            # Fill any remaining NaN values
+            atr = atr.fillna(true_range.mean())
+            
+            logger.info(f"ATR calculated successfully. Range: {atr.min():.4f} - {atr.max():.4f}")
+            return atr.values
+        except Exception as e:
+            logger.error(f"Error calculating ATR: {str(e)}")
+            # Return a reasonable default based on price range
+            if not df.empty and all(col in df.columns for col in ['High', 'Low']):
+                avg_range = (df['High'] - df['Low']).mean()
+                return np.full(len(df), max(avg_range, 1.0))
+            return np.ones(max(len(df), period))
     
     def calculate_obv(self, df: pd.DataFrame, params: Dict[str, Any]) -> Tuple[pd.Series, List[Dict[str, Any]]]:
         """
-        Calculate On-Balance Volume with signal line
+        Calculate On-Balance Volume with improved NaN handling
         params:
             signal_period: Period for signal line calculation
             ma_type: Moving average type (1 for SMA, 2 for EMA)
         """
-        signal_period = params.get('signal_period', 20)
-        ma_type = params.get('ma_type', 1)  # 1 for SMA, 2 for EMA
-        
-        # Calculate basic OBV using ta library
-        obv_indicator = volume.OnBalanceVolumeIndicator(
-            close=df['close'],
-            volume=df['volume']
-        )
-        obv = obv_indicator.on_balance_volume()
-        
-        # Calculate signal line based on ma_type
-        if ma_type == 2:  # EMA
-            signal_line = obv.ewm(span=signal_period, adjust=False).mean()
-        else:  # Default to SMA
-            signal_line = obv.rolling(window=signal_period).mean()
-        
-        # Generate signals
-        signals = []
-        for i in range(1, len(obv)):
-            if pd.isna(signal_line[i]) or pd.isna(signal_line[i-1]):
-                continue
+        try:
+            signal_period = params.get('signal_period', 20)
+            ma_type = params.get('ma_type', 1)  # 1 for SMA, 2 for EMA
             
-            if obv[i] > signal_line[i] and obv[i-1] <= signal_line[i-1]:
-                signals.append({
-                    'timestamp': df.index[i],
-                    'type': 'buy',
-                    'price': df['close'][i],
-                    'strength': 1
-                })
-            elif obv[i] < signal_line[i] and obv[i-1] >= signal_line[i-1]:
-                signals.append({
-                    'timestamp': df.index[i],
-                    'type': 'sell',
-                    'price': df['close'][i],
-                    'strength': 1
-                })
-        
-        return obv, signals
+            logger.info(f"Calculating OBV with signal_period={signal_period}, ma_type={ma_type}")
+            
+            # Handle different column name formats
+            close_col = 'Close' if 'Close' in df.columns else 'close'
+            volume_col = 'Volume' if 'Volume' in df.columns else 'volume'
+            
+            # Validate required columns exist
+            if close_col not in df.columns or volume_col not in df.columns:
+                logger.error(f"Required columns not found for OBV: {close_col}, {volume_col}")
+                empty_series = pd.Series(0, index=df.index)
+                return empty_series, []
+            
+            # Calculate OBV manually for better control
+            price_change = df[close_col].diff()
+            obv = pd.Series(0.0, index=df.index)
+            
+            for i in range(1, len(df)):
+                if pd.isna(price_change.iloc[i]) or pd.isna(df[volume_col].iloc[i]):
+                    obv.iloc[i] = obv.iloc[i-1]  # Carry forward previous value
+                elif price_change.iloc[i] > 0:
+                    obv.iloc[i] = obv.iloc[i-1] + df[volume_col].iloc[i]
+                elif price_change.iloc[i] < 0:
+                    obv.iloc[i] = obv.iloc[i-1] - df[volume_col].iloc[i]
+                else:
+                    obv.iloc[i] = obv.iloc[i-1]  # No change
+            
+            # Calculate signal line based on ma_type with min_periods=1
+            if ma_type == 2:  # EMA
+                signal_line = obv.ewm(span=signal_period, adjust=False, min_periods=1).mean()
+            else:  # Default to SMA
+                signal_line = obv.rolling(window=signal_period, min_periods=1).mean()
+            
+            # Fill any NaN values
+            signal_line = signal_line.fillna(method='ffill').fillna(0)
+            
+            # Generate signals with improved NaN handling
+            signals = []
+            for i in range(1, len(obv)):
+                if pd.isna(obv.iloc[i]) or pd.isna(signal_line.iloc[i]) or pd.isna(obv.iloc[i-1]) or pd.isna(signal_line.iloc[i-1]):
+                    continue
+                
+                curr_price = df[close_col].iloc[i] if not pd.isna(df[close_col].iloc[i]) else df[close_col].iloc[i-1]
+                
+                if obv.iloc[i] > signal_line.iloc[i] and obv.iloc[i-1] <= signal_line.iloc[i-1]:
+                    signals.append({
+                        'timestamp': df.index[i],
+                        'type': 'buy',
+                        'price': float(curr_price),
+                        'strength': 1
+                    })
+                elif obv.iloc[i] < signal_line.iloc[i] and obv.iloc[i-1] >= signal_line.iloc[i-1]:
+                    signals.append({
+                        'timestamp': df.index[i],
+                        'type': 'sell',
+                        'price': float(curr_price),
+                        'strength': 1
+                    })
+            
+            logger.info(f"OBV calculated successfully. Generated {len(signals)} signals")
+            return obv, signals
+        except Exception as e:
+            logger.error(f"Error calculating OBV: {str(e)}")
+            empty_series = pd.Series(0, index=df.index)
+            return empty_series, []
     
     def calculate_vwap(self, df: pd.DataFrame, params: Dict[str, Any]) -> Tuple[pd.Series, List[Dict[str, Any]]]:
         """
-        Calculate Volume Weighted Average Price with custom period and anchor
+        Calculate Volume Weighted Average Price with improved NaN handling
         params:
             period: Rolling window period
             anchor: Reset frequency (1: daily, 2: weekly, 3: monthly)
         """
-        period = params.get('period', 14)
-        anchor = params.get('anchor', 1)
-        
-        # Calculate typical price
-        typical_price = (df['high'] + df['low'] + df['close']) / 3
-        
-        # Calculate cumulative values based on anchor
-        if anchor == 2:  # Weekly
-            grouper = pd.Grouper(freq='W')
-        elif anchor == 3:  # Monthly
-            grouper = pd.Grouper(freq='M')
-        else:  # Daily
-            grouper = pd.Grouper(freq='D')
-        
-        # Group by the specified frequency
-        df['cumulative_volume'] = df['volume'].groupby(grouper).cumsum()
-        df['cumulative_pv'] = (typical_price * df['volume']).groupby(grouper).cumsum()
-        
-        # Calculate VWAP
-        vwap = df['cumulative_pv'].rolling(window=period).sum() / df['cumulative_volume'].rolling(window=period).sum()
-        
-        # Generate signals
-        signals = []
-        for i in range(1, len(df)):
-            if pd.isna(vwap[i]) or pd.isna(vwap[i-1]):
-                continue
+        try:
+            period = params.get('period', 14)
+            anchor = params.get('anchor', 1)
             
-            if df['close'][i] > vwap[i] and df['close'][i-1] <= vwap[i-1]:
-                signals.append({
-                    'timestamp': df.index[i],
-                    'type': 'buy',
-                    'price': df['close'][i],
-                    'strength': 1
-                })
-            elif df['close'][i] < vwap[i] and df['close'][i-1] >= vwap[i-1]:
-                signals.append({
-                    'timestamp': df.index[i],
-                    'type': 'sell',
-                    'price': df['close'][i],
-                    'strength': 1
-                })
-        
-        return vwap, signals
+            logger.info(f"Calculating VWAP with period={period}, anchor={anchor}")
+            
+            # Handle different column name formats
+            high_col = 'High' if 'High' in df.columns else 'high'
+            low_col = 'Low' if 'Low' in df.columns else 'low'
+            close_col = 'Close' if 'Close' in df.columns else 'close'
+            volume_col = 'Volume' if 'Volume' in df.columns else 'volume'
+            
+            # Validate required columns exist
+            required_cols = [high_col, low_col, close_col, volume_col]
+            if not all(col in df.columns for col in required_cols):
+                logger.error(f"Required columns not found for VWAP: {required_cols}")
+                empty_series = pd.Series(df[close_col].mean() if close_col in df.columns else 100, index=df.index)
+                return empty_series, []
+            
+            # Create a working copy to avoid modifying original dataframe
+            df_work = df.copy()
+            
+            # Calculate typical price with NaN handling
+            typical_price = (df_work[high_col] + df_work[low_col] + df_work[close_col]) / 3
+            typical_price = typical_price.fillna(df_work[close_col])
+            
+            # Simplified VWAP calculation without complex grouping
+            # Use rolling window approach instead
+            pv = typical_price * df_work[volume_col].fillna(0)
+            volume_filled = df_work[volume_col].fillna(0)
+            
+            # Calculate rolling VWAP
+            rolling_pv = pv.rolling(window=period, min_periods=1).sum()
+            rolling_volume = volume_filled.rolling(window=period, min_periods=1).sum()
+            
+            # Avoid division by zero
+            rolling_volume = rolling_volume.replace(0, 1)
+            vwap = rolling_pv / rolling_volume
+            
+            # Fill any remaining NaN values
+            vwap = vwap.fillna(typical_price)
+            
+            # Generate signals with improved NaN handling
+            signals = []
+            for i in range(1, len(df_work)):
+                if (pd.isna(vwap.iloc[i]) or pd.isna(vwap.iloc[i-1]) or 
+                    pd.isna(df_work[close_col].iloc[i]) or pd.isna(df_work[close_col].iloc[i-1])):
+                    continue
+                
+                curr_close = df_work[close_col].iloc[i]
+                prev_close = df_work[close_col].iloc[i-1]
+                curr_vwap = vwap.iloc[i]
+                prev_vwap = vwap.iloc[i-1]
+                
+                if curr_close > curr_vwap and prev_close <= prev_vwap:
+                    signals.append({
+                        'timestamp': df_work.index[i],
+                        'type': 'buy',
+                        'price': float(curr_close),
+                        'strength': 1
+                    })
+                elif curr_close < curr_vwap and prev_close >= prev_vwap:
+                    signals.append({
+                        'timestamp': df_work.index[i],
+                        'type': 'sell',
+                        'price': float(curr_close),
+                        'strength': 1
+                    })
+            
+            logger.info(f"VWAP calculated successfully. Generated {len(signals)} signals")
+            return vwap, signals
+        except Exception as e:
+            logger.error(f"Error calculating VWAP: {str(e)}")
+            # Return close price as fallback VWAP
+            close_col = 'Close' if 'Close' in df.columns else 'close'
+            if close_col in df.columns:
+                fallback_vwap = df[close_col].fillna(method='ffill').fillna(df[close_col].mean())
+            else:
+                fallback_vwap = pd.Series(100, index=df.index)
+            return fallback_vwap, []
     
     def _calculate_pivot_points(self, df: pd.DataFrame) -> Dict[str, float]:
         """Calculate Pivot Points"""

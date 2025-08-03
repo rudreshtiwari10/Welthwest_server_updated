@@ -2,10 +2,60 @@ import os
 from app import app
 import ssl
 from werkzeug.serving import WSGIRequestHandler
+import threading
+import time
+import schedule
+from datetime import datetime
+import pytz
+import logging
+from services.stock_service import get_top_gainers_losers
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Disable SSL verification warnings for development
 import urllib3
 urllib3.disable_warnings()
+
+# Function to check if current time is during market hours (9:15 AM - 3:30 PM IST, weekdays)
+def is_market_hours():
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist)
+    
+    # Check if it's a weekday (0 = Monday, 6 = Sunday)
+    if now.weekday() >= 5:  # Saturday or Sunday
+        return False
+    
+    # Check if time is between 9:15 AM and 3:30 PM
+    market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    
+    return market_open <= now <= market_close
+
+# Function to refresh top gainers and losers data
+def refresh_top_gainers_losers():
+    try:
+        if is_market_hours():
+            logger.info("Refreshing top gainers and losers data")
+            get_top_gainers_losers()  # This will update the cache
+            logger.info("Top gainers and losers data refreshed successfully")
+        else:
+            logger.info("Skipping top gainers/losers refresh - outside market hours")
+    except Exception as e:
+        logger.error(f"Error refreshing top gainers and losers: {str(e)}")
+
+# Function to run the scheduler in a separate thread
+def run_scheduler():
+    # Schedule the job to run every 15 minutes
+    schedule.every(15).minutes.do(refresh_top_gainers_losers)
+    
+    # Run the job once at startup to initialize data
+    refresh_top_gainers_losers()
+    
+    while True:
+        schedule.run_pending()
+        time.sleep(60)  # Check every minute
 
 # Custom request handler to suppress binary logging
 class CustomRequestHandler(WSGIRequestHandler):
@@ -45,6 +95,12 @@ if __name__ == "__main__":
         except ImportError:
             print("Warning: SSL dependencies not installed. Running in HTTP mode.")
             print("To enable HTTPS, install with: pip install pyOpenSSL")
+    
+    # Start the scheduler in a separate thread
+    logger.info("Starting the scheduler for top gainers and losers data")
+    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+    scheduler_thread.start()
+    logger.info("Scheduler thread started")
     
     print(f"Starting server on port {port}")
     if ssl_context:

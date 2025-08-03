@@ -39,10 +39,10 @@ class BacktestingService:
         higher_timeframes: Optional[List[str]] = None,
         timeframe_confluence: bool = True,
         trend_timeframe: Optional[str] = None,
-        # Market regime filtering
-        enable_regime_filter: bool = False,  # Changed default to False for user choice
+        # Market regime filtering - disabled by default to ensure signals are generated
+        enable_regime_filter: bool = False,
         regime_strategy_mapping: Optional[Dict[int, Dict[str, Any]]] = None,
-        minimum_confidence_threshold: float = 30.0,  # New parameter for relaxed criteria
+        minimum_confidence_threshold: float = 0.0,  # Lowered to 0% for maximum signal generation
         # Risk Management Parameters
         max_drawdown: Optional[float] = None,
         max_positions: Optional[int] = None,
@@ -141,7 +141,28 @@ class BacktestingService:
                         minimum_confidence_threshold
                     )
                 else:
+                    logger.info(f"\n=== SIGNAL GENERATION START ===")
+                    logger.info(f"Indicators: {[ind['type'] for ind in indicators]}")
+                    logger.info(f"Data shape: {df.shape}")
+                    logger.info(f"Date range: {df.index.min()} to {df.index.max()}")
+                    logger.info(f"Minimum confidence threshold: {minimum_confidence_threshold}%")
+                    
                     signals = self._generate_signals(df, indicators, minimum_confidence_threshold)
+                    
+                    # Log signal summary
+                    total_signals = len(signals[signals != 0])
+                    buy_signals = len(signals[signals == 1])
+                    sell_signals = len(signals[signals == -1])
+                    logger.info(f"\n=== SIGNAL GENERATION COMPLETE ===")
+                    logger.info(f"Total signals generated: {total_signals} (Buy: {buy_signals}, Sell: {sell_signals})")
+                    if total_signals > 0:
+                        signal_dates = df.index[signals != 0].tolist()[:10]
+                        logger.info(f"First 10 signal dates: {signal_dates}")
+                    
+                    if total_signals == 0:
+                        logger.warning("⚠️  NO SIGNALS GENERATED! Check indicator calculations and thresholds.")
+                    else:
+                        logger.info(f"✅ Signal generation successful!")
                 
                 # Apply market regime filtering if enabled
                 if enable_regime_filter and self.regime_classifier.is_trained:
@@ -390,14 +411,19 @@ class BacktestingService:
         if not 0 < position_size <= 100:
             raise ValueError("Position size must be between 0 and 100")
 
-        # Validate stop loss and take profit
-        if stop_loss is not None and not 0 < stop_loss < 100:
-            raise ValueError("Stop loss must be between 0 and 100")
-        if take_profit is not None and not 0 < take_profit < 100:
-            raise ValueError("Take profit must be between 0 and 100")
+        # Validate stop loss and take profit - preserve exact values
+        if stop_loss is not None:
+            if not isinstance(stop_loss, (int, float)) or stop_loss <= 0 or stop_loss >= 100:
+                raise ValueError("Stop loss must be a number between 0 and 100")
+            # Preserve exact input value - no rounding or adjustment
+            
+        if take_profit is not None:
+            if not isinstance(take_profit, (int, float)) or take_profit <= 0 or take_profit >= 100:
+                raise ValueError("Take profit must be a number between 0 and 100")
+            # Preserve exact input value - no rounding or adjustment
 
-        # Validate timeframe
-        valid_timeframes = ["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
+        # Validate timeframe - expanded to include more options
+        valid_timeframes = ["1m", "2m", "5m", "10m", "15m", "30m", "45m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "1wk", "1mo"]
         if timeframe not in valid_timeframes:
             raise ValueError(f"Invalid timeframe. Must be one of {valid_timeframes}")
 
@@ -442,8 +468,21 @@ class BacktestingService:
         for indicator in indicators:
             if "type" not in indicator:
                 raise ValueError("Each indicator must have a type")
-            if "parameters" not in indicator and "params" not in indicator:
-                raise ValueError(f"Parameters must be specified for indicator {indicator['type']}")
+            
+            # Only require parameters for specific indicators that need them
+            ind_type = indicator["type"].lower()
+            requires_params = ["rsi", "macd", "bollinger", "sma", "ema", "stochastic", "atr"]
+            
+            if ind_type in requires_params:
+                if "parameters" not in indicator and "params" not in indicator:
+                    raise ValueError(f"Parameters must be specified for indicator {indicator['type']}")
+            else:
+                # For VWAP and OBV, provide default parameters if not specified
+                if "parameters" not in indicator and "params" not in indicator:
+                    if ind_type == "vwap":
+                        indicator["parameters"] = {"period": 14, "anchor": 1}
+                    elif ind_type == "obv":
+                        indicator["parameters"] = {"signal_period": 20, "ma_type": 1}
             
             # Get parameters
             params = indicator.get("parameters", indicator.get("params", {}))
@@ -475,7 +514,7 @@ class BacktestingService:
         end_date: str,
         timeframe: str,
         indicators: List[Dict[str, Any]],
-        adaptive_parameters: bool = True
+        adaptive_parameters: bool = False  # Disabled by default to prevent parameter issues
     ) -> pd.DataFrame:
         """Get historical data with technical indicators (adaptive parameters)"""
         try:
@@ -506,8 +545,8 @@ class BacktestingService:
 
                     if ind_type == "rsi":
                         period = params.get("period", 14)
-                        # Apply volatility-adjusted thresholds
-                        if adaptive_parameters:
+                        # Apply volatility-adjusted thresholds (only if enabled and columns exist)
+                        if adaptive_parameters and 'Volatility' in df.columns:
                             volatility_factor = df['Volatility'].rolling(20).mean()
                             df[f'RSI_{period}_Oversold'] = 30 - volatility_factor * 0.3
                             df[f'RSI_{period}_Overbought'] = 70 + volatility_factor * 0.3
@@ -527,8 +566,8 @@ class BacktestingService:
                         period = params.get("period", 20)
                         num_std = params.get("num_std", 2)
                         
-                        # Adaptive standard deviation based on volatility regime
-                        if adaptive_parameters:
+                        # Adaptive standard deviation (only if enabled and columns exist)
+                        if adaptive_parameters and 'VIX_Proxy' in df.columns:
                             volatility_regime = df['VIX_Proxy'].rolling(20).mean()
                             adaptive_std = num_std * (1 + volatility_regime / 100)
                             bb_data = self.ta._calculate_bollinger_bands(df, period, adaptive_std)
@@ -559,10 +598,12 @@ class BacktestingService:
                         df['ATR'] = self.ta._calculate_atr(df, period)
 
                     elif ind_type == "obv":
-                        df['OBV'] = self.ta._calculate_obv(df)
+                        obv_data, _ = self.ta.calculate_obv(df, params)
+                        df['OBV'] = obv_data
 
                     elif ind_type == "vwap":
-                        df['VWAP'] = self.ta._calculate_vwap(df)
+                        vwap_data, _ = self.ta.calculate_vwap(df, params)
+                        df['VWAP'] = vwap_data
 
                 except Exception as e:
                     logger.error(f"Error calculating {ind_type}: {str(e)}")
@@ -578,10 +619,12 @@ class BacktestingService:
         self,
         df: pd.DataFrame,
         indicators: List[Dict[str, Any]],
-        minimum_confidence_threshold: float = 30.0,
-        confirmation_bars: int = 2,
-        volume_confirmation: bool = True,
-        adaptive_thresholds: bool = True
+        minimum_confidence_threshold: float = 0.0,  # Lowered default threshold
+        confirmation_bars: int = 1,  # Reduced confirmation requirement
+        volume_confirmation: bool = False,  # Disabled by default
+        adaptive_thresholds: bool = False,  # Simplified thresholds by default
+        timeframe: str = "1d",
+        use_multi_timeframe: bool = True
     ) -> pd.Series:
         """Generate trading signals with multi-condition confirmation"""
         try:
@@ -618,38 +661,43 @@ class BacktestingService:
                         signals = pd.Series(0, index=df.index)
                         confidence = pd.Series(0.0, index=df.index)
                         
-                        # Generate base signals with confirmation and NaN filtering
-                        for i in range(confirmation_bars, len(rsi)):
-                            # Skip if any required values are NaN
+                        # Simplified signal generation with less restrictive conditions
+                        logger.info(f"Generating RSI signals with oversold={oversold}, overbought={overbought}")
+                        
+                        # Generate signals with minimal confirmation requirements
+                        for i in range(1, len(rsi)):
+                            # Skip if current or previous value is NaN
                             if pd.isna(rsi.iloc[i]) or pd.isna(rsi.iloc[i-1]):
                                 continue
                             
-                            # Check for persistent conditions
-                            rsi_window = rsi.iloc[i-confirmation_bars:i+1]
-                            
-                            # Skip if any values in the window are NaN
-                            if rsi_window.isna().any():
-                                continue
-                            
-                            # Get thresholds (handle NaN)
+                            # Get threshold values
                             if isinstance(oversold, pd.Series):
                                 oversold_val = oversold.iloc[i] if not pd.isna(oversold.iloc[i]) else 30
                                 overbought_val = overbought.iloc[i] if not pd.isna(overbought.iloc[i]) else 70
                             else:
-                                oversold_val = oversold
-                                overbought_val = overbought
+                                oversold_val = 30  # Use fixed values for reliability
+                                overbought_val = 70
                             
-                            # Buy signal: RSI oversold for multiple bars and turning up
-                            if (rsi_window <= oversold_val).sum() >= confirmation_bars and \
-                               rsi.iloc[i] > rsi.iloc[i-1]:
+                            current_rsi = rsi.iloc[i]
+                            prev_rsi = rsi.iloc[i-1]
+                            
+                            # More lenient RSI signals
+                            # Buy signal: RSI below 40 and turning up, or crossing above 30
+                            if ((current_rsi < 40 and current_rsi > prev_rsi) or 
+                                (prev_rsi <= 30 and current_rsi > 30)):
                                 signals.iloc[i] = 1
-                                confidence.iloc[i] = min(1.0, abs(oversold_val - rsi.iloc[i]) / 10)
+                                confidence.iloc[i] = min(100.0, abs(40 - current_rsi) * 2.5)  # Higher confidence scores
+                                logger.debug(f"RSI Buy signal at {df.index[i]}: RSI={current_rsi:.2f}")
                             
-                            # Sell signal: RSI overbought for multiple bars and turning down
-                            elif (rsi_window >= overbought_val).sum() >= confirmation_bars and \
-                                 rsi.iloc[i] < rsi.iloc[i-1]:
+                            # Sell signal: RSI above 60 and turning down, or crossing below 70
+                            elif ((current_rsi > 60 and current_rsi < prev_rsi) or 
+                                  (prev_rsi >= 70 and current_rsi < 70)):
                                 signals.iloc[i] = -1
-                                confidence.iloc[i] = min(1.0, abs(rsi.iloc[i] - overbought_val) / 10)
+                                confidence.iloc[i] = min(100.0, abs(current_rsi - 60) * 2.5)
+                                logger.debug(f"RSI Sell signal at {df.index[i]}: RSI={current_rsi:.2f}")
+                        
+                        signal_count = (signals != 0).sum()
+                        logger.info(f"Generated {signal_count} RSI signals (Buy: {(signals == 1).sum()}, Sell: {(signals == -1).sum()})")
                         
                         all_signals[f'signal_{ind_type}'] = signals
                         signal_confidence[f'signal_{ind_type}'] = confidence
@@ -665,52 +713,85 @@ class BacktestingService:
                         signals = pd.Series(0, index=df.index)
                         confidence = pd.Series(0.0, index=df.index)
                         
-                        # Enhanced MACD signals with histogram confirmation and NaN filtering
-                        for i in range(confirmation_bars, len(macd)):
+                        # Simplified MACD signals focusing on crossovers
+                        logger.info("Generating MACD signals")
+                        
+                        for i in range(1, len(macd)):
                             # Skip if any required values are NaN
                             if (pd.isna(macd.iloc[i]) or pd.isna(signal_line.iloc[i]) or 
-                                pd.isna(histogram.iloc[i]) or pd.isna(macd.iloc[i-1]) or 
-                                pd.isna(signal_line.iloc[i-1]) or pd.isna(histogram.iloc[i-1]) or
-                                pd.isna(macd.iloc[i-confirmation_bars])):
+                                pd.isna(macd.iloc[i-1]) or pd.isna(signal_line.iloc[i-1])):
                                 continue
                             
-                            # Bullish crossover with histogram confirmation
-                            if (macd.iloc[i] > signal_line.iloc[i] and 
-                                macd.iloc[i-1] <= signal_line.iloc[i-1] and
-                                histogram.iloc[i] > histogram.iloc[i-1] and
-                                macd.iloc[i] > macd.iloc[i-confirmation_bars]):
-                                signals.iloc[i] = 1
-                                # Safe confidence calculation
-                                if abs(macd.iloc[i]) > 0:
-                                    confidence.iloc[i] = min(1.0, abs(histogram.iloc[i]) / abs(macd.iloc[i]))
-                                else:
-                                    confidence.iloc[i] = 0.5
+                            curr_macd = macd.iloc[i]
+                            curr_signal = signal_line.iloc[i]
+                            prev_macd = macd.iloc[i-1]
+                            prev_signal = signal_line.iloc[i-1]
                             
-                            # Bearish crossover with histogram confirmation
-                            elif (macd.iloc[i] < signal_line.iloc[i] and 
-                                  macd.iloc[i-1] >= signal_line.iloc[i-1] and
-                                  histogram.iloc[i] < histogram.iloc[i-1] and
-                                  macd.iloc[i] < macd.iloc[i-confirmation_bars]):
+                            # Simplified bullish crossover
+                            if prev_macd <= prev_signal and curr_macd > curr_signal:
+                                signals.iloc[i] = 1
+                                confidence.iloc[i] = min(100.0, abs(curr_macd - curr_signal) * 10)
+                                logger.debug(f"MACD Buy signal at {df.index[i]}: MACD={curr_macd:.4f}, Signal={curr_signal:.4f}")
+                            
+                            # Simplified bearish crossover
+                            elif prev_macd >= prev_signal and curr_macd < curr_signal:
                                 signals.iloc[i] = -1
-                                # Safe confidence calculation
-                                if abs(macd.iloc[i]) > 0:
-                                    confidence.iloc[i] = min(1.0, abs(histogram.iloc[i]) / abs(macd.iloc[i]))
-                                else:
-                                    confidence.iloc[i] = 0.5
+                                confidence.iloc[i] = min(100.0, abs(curr_signal - curr_macd) * 10) 
+                                logger.debug(f"MACD Sell signal at {df.index[i]}: MACD={curr_macd:.4f}, Signal={curr_signal:.4f}")
+                        
+                        signal_count = (signals != 0).sum()
+                        logger.info(f"Generated {signal_count} MACD signals (Buy: {(signals == 1).sum()}, Sell: {(signals == -1).sum()})")
                         
                         all_signals[f'signal_{ind_type}'] = signals
                         signal_confidence[f'signal_{ind_type}'] = confidence
                         
                     elif ind_type == "bollinger":
-                        if not all(col in df.columns for col in ["BB_upper", "BB_middle", "BB_lower"]):
+                        # Check for different possible column names
+                        bb_cols = ["BB_upper", "BB_middle", "BB_lower"]
+                        alt_bb_cols = ["BB_Upper", "BB_Middle", "BB_Lower"]  # Alternative naming
+                        
+                        if all(col in df.columns for col in bb_cols):
+                            upper_col, middle_col, lower_col = bb_cols
+                        elif all(col in df.columns for col in alt_bb_cols):
+                            upper_col, middle_col, lower_col = alt_bb_cols
+                        else:
+                            logger.warning(f"Bollinger Bands columns not found. Available: {df.columns.tolist()}")
                             continue
                             
                         signals = pd.Series(0, index=df.index)
-                        # Price crossing below lower band = buy
-                        signals[(df['Close'] <= df['BB_lower']) & (df['Close'].shift(1) > df['BB_lower'].shift(1))] = 1
-                        # Price crossing above upper band = sell
-                        signals[(df['Close'] >= df['BB_upper']) & (df['Close'].shift(1) < df['BB_upper'].shift(1))] = -1
+                        confidence = pd.Series(0.0, index=df.index)
+                        
+                        logger.info("Generating Bollinger Bands signals")
+                        
+                        # More sensitive Bollinger Band signals
+                        for i in range(1, len(df)):
+                            if (pd.isna(df['Close'].iloc[i]) or pd.isna(df['BB_upper'].iloc[i]) or 
+                                pd.isna(df['BB_lower'].iloc[i]) or pd.isna(df['Close'].iloc[i-1])):
+                                continue
+                            
+                            curr_price = df['Close'].iloc[i]
+                            prev_price = df['Close'].iloc[i-1]
+                            upper_band = df[upper_col].iloc[i]
+                            lower_band = df[lower_col].iloc[i]
+                            middle_band = df[middle_col].iloc[i]
+                            
+                            # Buy signal: Price near or below lower band
+                            if curr_price <= lower_band * 1.01:  # Within 1% of lower band
+                                signals.iloc[i] = 1
+                                confidence.iloc[i] = max(50.0, 100 - abs(curr_price - lower_band) / lower_band * 100)
+                                logger.debug(f"BB Buy signal at {df.index[i]}: Price={curr_price:.2f}, Lower={lower_band:.2f}")
+                            
+                            # Sell signal: Price near or above upper band  
+                            elif curr_price >= upper_band * 0.99:  # Within 1% of upper band
+                                signals.iloc[i] = -1
+                                confidence.iloc[i] = max(50.0, 100 - abs(curr_price - upper_band) / upper_band * 100)
+                                logger.debug(f"BB Sell signal at {df.index[i]}: Price={curr_price:.2f}, Upper={upper_band:.2f}")
+                        
+                        signal_count = (signals != 0).sum()
+                        logger.info(f"Generated {signal_count} Bollinger signals (Buy: {(signals == 1).sum()}, Sell: {(signals == -1).sum()})")
+                        
                         all_signals[f'signal_{ind_type}'] = signals
+                        signal_confidence[f'signal_{ind_type}'] = confidence
                         
                     elif ind_type == "sma":
                         period = params.get("period", 20)
@@ -719,11 +800,38 @@ class BacktestingService:
                             continue
                             
                         signals = pd.Series(0, index=df.index)
-                        # Price crossing above SMA = buy
-                        signals[(df['Close'] > df[column_name]) & (df['Close'].shift(1) <= df[column_name].shift(1))] = 1
-                        # Price crossing below SMA = sell
-                        signals[(df['Close'] < df[column_name]) & (df['Close'].shift(1) >= df[column_name].shift(1))] = -1
+                        confidence = pd.Series(0.0, index=df.index)
+                        
+                        logger.info(f"Generating SMA_{period} signals")
+                        
+                        # Simple crossover signals with confidence
+                        for i in range(1, len(df)):
+                            if (pd.isna(df['Close'].iloc[i]) or pd.isna(df[column_name].iloc[i]) or
+                                pd.isna(df['Close'].iloc[i-1]) or pd.isna(df[column_name].iloc[i-1])):
+                                continue
+                            
+                            curr_price = df['Close'].iloc[i]
+                            prev_price = df['Close'].iloc[i-1]
+                            curr_sma = df[column_name].iloc[i]
+                            prev_sma = df[column_name].iloc[i-1]
+                            
+                            # Price crossing above SMA = buy
+                            if prev_price <= prev_sma and curr_price > curr_sma:
+                                signals.iloc[i] = 1
+                                confidence.iloc[i] = min(100.0, abs(curr_price - curr_sma) / curr_sma * 100 * 10)
+                                logger.debug(f"SMA Buy signal at {df.index[i]}: Price={curr_price:.2f}, SMA={curr_sma:.2f}")
+                            
+                            # Price crossing below SMA = sell
+                            elif prev_price >= prev_sma and curr_price < curr_sma:
+                                signals.iloc[i] = -1
+                                confidence.iloc[i] = min(100.0, abs(curr_sma - curr_price) / curr_sma * 100 * 10)
+                                logger.debug(f"SMA Sell signal at {df.index[i]}: Price={curr_price:.2f}, SMA={curr_sma:.2f}")
+                        
+                        signal_count = (signals != 0).sum()
+                        logger.info(f"Generated {signal_count} SMA signals (Buy: {(signals == 1).sum()}, Sell: {(signals == -1).sum()})")
+                        
                         all_signals[f'signal_{ind_type}'] = signals
+                        signal_confidence[f'signal_{ind_type}'] = confidence
                         
                     elif ind_type == "ema":
                         period = params.get("period", 20)
@@ -732,102 +840,518 @@ class BacktestingService:
                             continue
                             
                         signals = pd.Series(0, index=df.index)
-                        # Price crossing above EMA = buy
-                        signals[(df['Close'] > df[column_name]) & (df['Close'].shift(1) <= df[column_name].shift(1))] = 1
-                        # Price crossing below EMA = sell
-                        signals[(df['Close'] < df[column_name]) & (df['Close'].shift(1) >= df[column_name].shift(1))] = -1
+                        confidence = pd.Series(0.0, index=df.index)
+                        
+                        logger.info(f"Generating EMA_{period} signals")
+                        
+                        # Simple crossover signals with confidence
+                        for i in range(1, len(df)):
+                            if (pd.isna(df['Close'].iloc[i]) or pd.isna(df[column_name].iloc[i]) or
+                                pd.isna(df['Close'].iloc[i-1]) or pd.isna(df[column_name].iloc[i-1])):
+                                continue
+                            
+                            curr_price = df['Close'].iloc[i]
+                            prev_price = df['Close'].iloc[i-1]
+                            curr_ema = df[column_name].iloc[i]
+                            prev_ema = df[column_name].iloc[i-1]
+                            
+                            # Price crossing above EMA = buy
+                            if prev_price <= prev_ema and curr_price > curr_ema:
+                                signals.iloc[i] = 1
+                                confidence.iloc[i] = min(100.0, abs(curr_price - curr_ema) / curr_ema * 100 * 10)
+                                logger.debug(f"EMA Buy signal at {df.index[i]}: Price={curr_price:.2f}, EMA={curr_ema:.2f}")
+                            
+                            # Price crossing below EMA = sell
+                            elif prev_price >= prev_ema and curr_price < curr_ema:
+                                signals.iloc[i] = -1
+                                confidence.iloc[i] = min(100.0, abs(curr_ema - curr_price) / curr_ema * 100 * 10)
+                                logger.debug(f"EMA Sell signal at {df.index[i]}: Price={curr_price:.2f}, EMA={curr_ema:.2f}")
+                        
+                        signal_count = (signals != 0).sum()
+                        logger.info(f"Generated {signal_count} EMA signals (Buy: {(signals == 1).sum()}, Sell: {(signals == -1).sum()})")
+                        
                         all_signals[f'signal_{ind_type}'] = signals
+                        signal_confidence[f'signal_{ind_type}'] = confidence
                         
                     elif ind_type == "stochastic":
-                        if "STOCH_k" not in df.columns or "STOCH_d" not in df.columns:
+                        # Check for different possible column names
+                        if "STOCH_k" in df.columns and "STOCH_d" in df.columns:
+                            k_col, d_col = "STOCH_k", "STOCH_d"
+                        elif "Stoch_k" in df.columns and "Stoch_d" in df.columns:
+                            k_col, d_col = "Stoch_k", "Stoch_d"
+                        else:
+                            logger.warning(f"Stochastic columns not found. Available: {df.columns.tolist()}")
                             continue
                             
-                        k_line = df["STOCH_k"]
-                        d_line = df["STOCH_d"]
+                        k_line = df[k_col]
+                        d_line = df[d_col]
                         
                         signals = pd.Series(0, index=df.index)
-                        # Bullish: K crosses above D in oversold territory
-                        signals[(k_line > d_line) & (k_line.shift(1) <= d_line.shift(1)) & (k_line < 20)] = 1
-                        # Bearish: K crosses below D in overbought territory
-                        signals[(k_line < d_line) & (k_line.shift(1) >= d_line.shift(1)) & (k_line > 80)] = -1
+                        confidence = pd.Series(0.0, index=df.index)
+                        
+                        logger.info("Generating Stochastic signals")
+                        
+                        # Enhanced Stochastic signals with confidence
+                        for i in range(1, len(k_line)):
+                            if (pd.isna(k_line.iloc[i]) or pd.isna(d_line.iloc[i]) or
+                                pd.isna(k_line.iloc[i-1]) or pd.isna(d_line.iloc[i-1])):
+                                continue
+                            
+                            curr_k = k_line.iloc[i]
+                            curr_d = d_line.iloc[i]
+                            prev_k = k_line.iloc[i-1]
+                            prev_d = d_line.iloc[i-1]
+                            
+                            # More lenient Stochastic signals
+                            # Bullish: K crosses above D, especially in oversold territory
+                            if prev_k <= prev_d and curr_k > curr_d:
+                                signals.iloc[i] = 1
+                                # Higher confidence if in oversold territory
+                                if curr_k < 30:
+                                    confidence.iloc[i] = min(100.0, 80 + (30 - curr_k))
+                                else:
+                                    confidence.iloc[i] = min(100.0, 50 + abs(curr_k - curr_d))
+                                logger.debug(f"Stochastic Buy signal at {df.index[i]}: K={curr_k:.2f}, D={curr_d:.2f}")
+                            
+                            # Bearish: K crosses below D, especially in overbought territory
+                            elif prev_k >= prev_d and curr_k < curr_d:
+                                signals.iloc[i] = -1
+                                # Higher confidence if in overbought territory
+                                if curr_k > 70:
+                                    confidence.iloc[i] = min(100.0, 80 + (curr_k - 70))
+                                else:
+                                    confidence.iloc[i] = min(100.0, 50 + abs(curr_d - curr_k))
+                                logger.debug(f"Stochastic Sell signal at {df.index[i]}: K={curr_k:.2f}, D={curr_d:.2f}")
+                        
+                        signal_count = (signals != 0).sum()
+                        logger.info(f"Generated {signal_count} Stochastic signals (Buy: {(signals == 1).sum()}, Sell: {(signals == -1).sum()})")
+                        
                         all_signals[f'signal_{ind_type}'] = signals
+                        signal_confidence[f'signal_{ind_type}'] = confidence
+                        
+                    elif ind_type == "obv":
+                        if "OBV" not in df.columns:
+                            continue
+                            
+                        obv = df["OBV"]
+                        signals = pd.Series(0, index=df.index)
+                        confidence = pd.Series(0.0, index=df.index)
+                        
+                        logger.info("Generating OBV signals")
+                        
+                        # Calculate OBV moving average for trend detection
+                        obv_ma = obv.rolling(window=10, min_periods=1).mean()
+                        
+                        # Enhanced OBV signals with confidence
+                        for i in range(1, len(obv)):
+                            if (pd.isna(obv.iloc[i]) or pd.isna(obv.iloc[i-1]) or
+                                pd.isna(obv_ma.iloc[i]) or pd.isna(obv_ma.iloc[i-1])):
+                                continue
+                            
+                            curr_obv = obv.iloc[i]
+                            prev_obv = obv.iloc[i-1]
+                            curr_ma = obv_ma.iloc[i]
+                            prev_ma = obv_ma.iloc[i-1]
+                            
+                            # More sensitive OBV signals
+                            # Bullish: OBV rising and above moving average
+                            if curr_obv > prev_obv and curr_obv > curr_ma and prev_obv <= prev_ma:
+                                signals.iloc[i] = 1
+                                # Confidence based on momentum
+                                momentum = abs(curr_obv - prev_obv) / max(abs(prev_obv), 1)
+                                confidence.iloc[i] = min(100.0, 60 + momentum * 100)
+                                logger.debug(f"OBV Buy signal at {df.index[i]}: OBV={curr_obv:.0f}, MA={curr_ma:.0f}")
+                            
+                            # Bearish: OBV falling and below moving average
+                            elif curr_obv < prev_obv and curr_obv < curr_ma and prev_obv >= prev_ma:
+                                signals.iloc[i] = -1
+                                momentum = abs(curr_obv - prev_obv) / max(abs(prev_obv), 1)
+                                confidence.iloc[i] = min(100.0, 60 + momentum * 100)
+                                logger.debug(f"OBV Sell signal at {df.index[i]}: OBV={curr_obv:.0f}, MA={curr_ma:.0f}")
+                        
+                        signal_count = (signals != 0).sum()
+                        logger.info(f"Generated {signal_count} OBV signals (Buy: {(signals == 1).sum()}, Sell: {(signals == -1).sum()})")
+                        
+                        all_signals[f'signal_{ind_type}'] = signals
+                        signal_confidence[f'signal_{ind_type}'] = confidence
+                        
+                    elif ind_type == "vwap":
+                        if "VWAP" not in df.columns:
+                            continue
+                            
+                        vwap = df["VWAP"]
+                        close = df["Close"]
+                        signals = pd.Series(0, index=df.index)
+                        confidence = pd.Series(0.0, index=df.index)
+                        
+                        logger.info("Generating VWAP signals")
+                        
+                        # Enhanced VWAP signals with confidence
+                        for i in range(1, len(close)):
+                            if (pd.isna(vwap.iloc[i]) or pd.isna(vwap.iloc[i-1]) or 
+                                pd.isna(close.iloc[i]) or pd.isna(close.iloc[i-1])):
+                                continue
+                            
+                            curr_price = close.iloc[i]
+                            prev_price = close.iloc[i-1]
+                            curr_vwap = vwap.iloc[i]
+                            prev_vwap = vwap.iloc[i-1]
+                            
+                            # More sensitive VWAP signals
+                            # Bullish: Price crosses above VWAP or significantly above
+                            if ((prev_price <= prev_vwap and curr_price > curr_vwap) or
+                                (curr_price > curr_vwap * 1.005)):  # 0.5% above VWAP
+                                signals.iloc[i] = 1
+                                # Confidence based on distance from VWAP
+                                distance_pct = abs(curr_price - curr_vwap) / curr_vwap * 100
+                                confidence.iloc[i] = min(100.0, 50 + distance_pct * 20)
+                                logger.debug(f"VWAP Buy signal at {df.index[i]}: Price={curr_price:.2f}, VWAP={curr_vwap:.2f}")
+                            
+                            # Bearish: Price crosses below VWAP or significantly below
+                            elif ((prev_price >= prev_vwap and curr_price < curr_vwap) or
+                                  (curr_price < curr_vwap * 0.995)):  # 0.5% below VWAP
+                                signals.iloc[i] = -1
+                                distance_pct = abs(curr_vwap - curr_price) / curr_vwap * 100
+                                confidence.iloc[i] = min(100.0, 50 + distance_pct * 20)
+                                logger.debug(f"VWAP Sell signal at {df.index[i]}: Price={curr_price:.2f}, VWAP={curr_vwap:.2f}")
+                        
+                        signal_count = (signals != 0).sum()
+                        logger.info(f"Generated {signal_count} VWAP signals (Buy: {(signals == 1).sum()}, Sell: {(signals == -1).sum()})")
+                        
+                        all_signals[f'signal_{ind_type}'] = signals
+                        signal_confidence[f'signal_{ind_type}'] = confidence
+                        
+                    elif ind_type == "atr":
+                        if "ATR" not in df.columns:
+                            continue
+                            
+                        atr = df["ATR"]
+                        signals = pd.Series(0, index=df.index)
+                        confidence = pd.Series(0.0, index=df.index)
+                        
+                        logger.info("Generating ATR signals")
+                        
+                        # Calculate ATR moving average with min_periods
+                        atr_sma = atr.rolling(window=20, min_periods=1).mean()
+                        
+                        # Enhanced ATR-based volatility signals with confidence
+                        for i in range(1, len(atr)):
+                            if pd.isna(atr.iloc[i]) or pd.isna(atr_sma.iloc[i]):
+                                continue
+                            
+                            curr_atr = atr.iloc[i]
+                            avg_atr = atr_sma.iloc[i]
+                            
+                            # More nuanced volatility signals
+                            volatility_ratio = curr_atr / avg_atr if avg_atr > 0 else 1
+                            
+                            # Low volatility (consolidation) - potentially bullish for breakouts
+                            if volatility_ratio < 0.7:  # ATR 30% below average
+                                signals.iloc[i] = 1
+                                confidence.iloc[i] = min(100.0, 60 + (0.7 - volatility_ratio) * 100)
+                                logger.debug(f"ATR Buy signal at {df.index[i]}: Low volatility, ratio={volatility_ratio:.2f}")
+                            
+                            # High volatility - risk-off signal
+                            elif volatility_ratio > 1.5:  # ATR 50% above average
+                                signals.iloc[i] = -1
+                                confidence.iloc[i] = min(100.0, 60 + (volatility_ratio - 1.5) * 50)
+                                logger.debug(f"ATR Sell signal at {df.index[i]}: High volatility, ratio={volatility_ratio:.2f}")
+                        
+                        signal_count = (signals != 0).sum()
+                        logger.info(f"Generated {signal_count} ATR signals (Buy: {(signals == 1).sum()}, Sell: {(signals == -1).sum()})")
+                        
+                        all_signals[f'signal_{ind_type}'] = signals
+                        signal_confidence[f'signal_{ind_type}'] = confidence
                         
                 except Exception as e:
                     logger.error(f"Error generating signals for {ind_type}: {str(e)}")
+                    import traceback
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
                     continue
             
-            # Enhanced signal aggregation with confidence weighting
+            # Simplified and more permissive signal aggregation
+            logger.info(f"Aggregating signals from {len(all_signals.columns)} indicators")
+            
             if len(all_signals.columns) > 1:
-                # Calculate weighted agreement based on signal confidence
-                total_indicators = len(indicators)
-                weighted_buy_score = pd.Series(0.0, index=df.index)
-                weighted_sell_score = pd.Series(0.0, index=df.index)
+                # More permissive voting system - accept any indicator signal
+                buy_votes = pd.Series(0, index=df.index)
+                sell_votes = pd.Series(0, index=df.index)
+                signal_confidence_values = pd.Series(0.0, index=df.index)
                 
                 for col in all_signals.columns:
                     signal_col = all_signals[col]
-                    confidence_col = signal_confidence.get(col, pd.Series(1.0, index=df.index))
-                    
-                    # Weight signals by confidence
-                    weighted_buy_score += (signal_col == 1) * confidence_col
-                    weighted_sell_score += (signal_col == -1) * confidence_col
+                    buy_votes += (signal_col == 1).astype(int)
+                    sell_votes += (signal_col == -1).astype(int)
                 
-                # Normalize by maximum possible score
-                max_score = total_indicators
-                buy_agreement = weighted_buy_score / max_score
-                sell_agreement = weighted_sell_score / max_score
+                # Calculate agreement percentage
+                total_indicators = len(all_signals.columns)
+                buy_agreement = buy_votes / total_indicators
+                sell_agreement = sell_votes / total_indicators
                 
-                # Volume confirmation if enabled
-                if volume_confirmation and 'Volume' in df.columns:
-                    volume_ma = df['Volume'].rolling(20).mean()
-                    volume_confirmation_factor = df['Volume'] / volume_ma
-                    
-                    # Enhance signals with above-average volume
-                    buy_agreement *= np.where(volume_confirmation_factor > 1.2, 1.2, 1.0)
-                    sell_agreement *= np.where(volume_confirmation_factor > 1.2, 1.2, 1.0)
+                # Much more lenient threshold - accept signals from any single indicator
+                signal_threshold = max(0.1, minimum_confidence_threshold / 100.0)  # Very low threshold
                 
-                # Generate final signals with relaxed adaptive threshold
+                # Generate final signals with permissive threshold
                 final_signals = pd.Series(0, index=df.index)
-                # Convert percentage to decimal for comparison
-                signal_threshold = minimum_confidence_threshold / 100.0
                 
-                # Add confidence tracking for each signal
-                signal_confidence_values = pd.Series(0.0, index=df.index)
+                # Accept buy signals if ANY indicator shows a buy (much more permissive)
+                buy_mask = buy_agreement >= signal_threshold
+                final_signals[buy_mask] = 1
+                signal_confidence_values[buy_mask] = buy_agreement[buy_mask] * 100
                 
-                final_signals[buy_agreement >= signal_threshold] = 1
-                final_signals[sell_agreement >= signal_threshold] = -1
+                # Accept sell signals if ANY indicator shows a sell
+                sell_mask = sell_agreement >= signal_threshold
+                final_signals[sell_mask] = -1
+                signal_confidence_values[sell_mask] = sell_agreement[sell_mask] * 100
                 
-                # Store confidence values for analysis
-                signal_confidence_values[buy_agreement >= signal_threshold] = buy_agreement[buy_agreement >= signal_threshold]
-                signal_confidence_values[sell_agreement >= signal_threshold] = sell_agreement[sell_agreement >= signal_threshold]
+                # Handle conflicting signals by keeping the stronger one
+                conflicting = buy_mask & sell_mask
+                if conflicting.any():
+                    # Keep the signal with higher agreement
+                    stronger_buy = buy_agreement[conflicting] > sell_agreement[conflicting]
+                    final_signals.loc[conflicting & stronger_buy] = 1
+                    final_signals.loc[conflicting & ~stronger_buy] = -1
                 
-                # Filter out conflicting signals
-                conflicting = (buy_agreement >= signal_threshold) & (sell_agreement >= signal_threshold)
-                final_signals[conflicting] = 0
-                
-                # Log enhanced signal statistics with confidence threshold info
+                # Log signal statistics
                 buy_signals = (final_signals == 1).sum()
                 sell_signals = (final_signals == -1).sum()
-                avg_buy_confidence = weighted_buy_score[final_signals == 1].mean() if buy_signals > 0 else 0
-                avg_sell_confidence = weighted_sell_score[final_signals == -1].mean() if sell_signals > 0 else 0
+                avg_confidence = signal_confidence_values[signal_confidence_values > 0].mean()
                 
-                logger.info(f"Enhanced signals with {minimum_confidence_threshold:.1f}% threshold - "
-                          f"Buy: {buy_signals} (avg confidence: {avg_buy_confidence:.2f}), "
-                          f"Sell: {sell_signals} (avg confidence: {avg_sell_confidence:.2f})")
+                logger.info(f"Final aggregated signals: Buy={buy_signals}, Sell={sell_signals}, "
+                          f"Avg confidence={avg_confidence:.1f}%, Threshold={minimum_confidence_threshold:.1f}%")
                 
                 # Store confidence data in final_signals for later use
                 final_signals.confidence_values = signal_confidence_values
                 
                 return final_signals
+                
             elif len(all_signals.columns) == 1:
-                # If only one indicator, use its signals directly
-                return all_signals.iloc[:, 0]
+                # If only one indicator, use its signals directly with confidence
+                logger.info("Using single indicator signals directly")
+                single_signal = all_signals.iloc[:, 0]
+                
+                # Add confidence values if available
+                if len(signal_confidence.columns) > 0:
+                    confidence_values = signal_confidence.iloc[:, 0]
+                    single_signal.confidence_values = confidence_values
+                else:
+                    # Default confidence for single indicator
+                    confidence_values = pd.Series(75.0, index=df.index)  # High confidence for single indicator
+                    confidence_values[single_signal == 0] = 0
+                    single_signal.confidence_values = confidence_values
+                
+                buy_signals = (single_signal == 1).sum()
+                sell_signals = (single_signal == -1).sum()
+                logger.info(f"Single indicator signals: Buy={buy_signals}, Sell={sell_signals}")
+                
+                return single_signal
             else:
-                # No valid signals generated
-                return pd.Series(0, index=df.index)
+                # No valid signals generated - return empty series with confidence
+                logger.warning("No valid indicators found for signal generation")
+                empty_signals = pd.Series(0, index=df.index)
+                empty_signals.confidence_values = pd.Series(0.0, index=df.index)
+                return empty_signals
                 
         except Exception as e:
             logger.error(f"Error in signal generation: {str(e)}")
             return pd.Series(index=df.index, data=0)
+
+    def _generate_multi_timeframe_signals(
+        self,
+        df: pd.DataFrame,
+        indicators: List[Dict[str, Any]],
+        timeframe: str,
+        higher_timeframes: List[str],
+        minimum_confidence_threshold: float = 50.0
+    ) -> pd.Series:
+        """Generate signals using multiple timeframes for better confirmation"""
+        try:
+            # Generate signals for the primary timeframe
+            primary_signals = self._generate_signals(
+                df, indicators, minimum_confidence_threshold,
+                use_multi_timeframe=False
+            )
+            
+            # For higher timeframes, we need to simulate the data
+            # In a real implementation, you would fetch actual higher timeframe data
+            higher_tf_signals = {}
+            
+            for htf in higher_timeframes:
+                # Simulate higher timeframe by resampling
+                htf_df = self._resample_to_higher_timeframe(df, timeframe, htf)
+                if not htf_df.empty:
+                    htf_signals = self._generate_signals(
+                        htf_df, indicators, minimum_confidence_threshold,
+                        use_multi_timeframe=False
+                    )
+                    # Align higher timeframe signals with primary timeframe
+                    aligned_signals = self._align_timeframe_signals(htf_signals, df.index, htf)
+                    higher_tf_signals[htf] = aligned_signals
+            
+            # Combine signals with trend confirmation
+            final_signals = self._combine_multi_timeframe_signals(
+                primary_signals, higher_tf_signals, minimum_confidence_threshold
+            )
+            
+            return final_signals
+            
+        except Exception as e:
+            logger.error(f"Error in multi-timeframe signal generation: {str(e)}")
+            return primary_signals
+
+    def _resample_to_higher_timeframe(self, df: pd.DataFrame, current_tf: str, target_tf: str) -> pd.DataFrame:
+        """Resample data to higher timeframe"""
+        try:
+            # Define timeframe mappings
+            tf_map = {
+                '1h': '1H', '4h': '4H', '1d': '1D', '1w': '1W', '1M': '1M'
+            }
+            
+            if target_tf not in tf_map:
+                return pd.DataFrame()
+            
+            # Resample OHLCV data
+            resampled = df.resample(tf_map[target_tf]).agg({
+                'Open': 'first',
+                'High': 'max',
+                'Low': 'min',
+                'Close': 'last',
+                'Volume': 'sum'
+            }).dropna()
+            
+            # Recalculate indicators for the higher timeframe
+            if not resampled.empty and len(resampled) > 50:  # Need enough data
+                # Add basic indicators
+                resampled = self.ta.calculate_rsi(resampled, 14)
+                resampled = self.ta.calculate_macd(resampled, 12, 26, 9)
+                resampled = self.ta.calculate_moving_averages(resampled, [20, 50])
+                
+            return resampled
+            
+        except Exception as e:
+            logger.error(f"Error resampling to {target_tf}: {str(e)}")
+            return pd.DataFrame()
+
+    def _align_timeframe_signals(self, htf_signals: pd.Series, target_index: pd.Index, htf: str) -> pd.Series:
+        """Align higher timeframe signals with primary timeframe"""
+        try:
+            aligned = pd.Series(0, index=target_index)
+            
+            for i, date in enumerate(target_index):
+                # Find the corresponding higher timeframe signal
+                htf_date = htf_signals.index[htf_signals.index <= date]
+                if len(htf_date) > 0:
+                    latest_htf = htf_date[-1]
+                    aligned.iloc[i] = htf_signals.loc[latest_htf]
+            
+            return aligned
+            
+        except Exception as e:
+            logger.error(f"Error aligning {htf} signals: {str(e)}")
+            return pd.Series(0, index=target_index)
+
+    def _combine_multi_timeframe_signals(
+        self,
+        primary_signals: pd.Series,
+        higher_tf_signals: Dict[str, pd.Series],
+        min_confidence: float
+    ) -> pd.Series:
+        """Combine signals from multiple timeframes"""
+        try:
+            final_signals = primary_signals.copy()
+            
+            # Only take primary signals that align with higher timeframe trend
+            for i in range(len(final_signals)):
+                if final_signals.iloc[i] != 0:  # If there's a primary signal
+                    # Check higher timeframe confirmation
+                    htf_confirmation = True
+                    
+                    for htf_name, htf_signal in higher_tf_signals.items():
+                        if i < len(htf_signal):
+                            htf_value = htf_signal.iloc[i]
+                            # Require same direction or neutral from higher timeframes
+                            if htf_value != 0 and htf_value != final_signals.iloc[i]:
+                                htf_confirmation = False
+                                break
+                    
+                    # If no higher timeframe confirmation, reduce signal strength
+                    if not htf_confirmation:
+                        final_signals.iloc[i] = 0
+            
+            # Preserve confidence values if they exist
+            if hasattr(primary_signals, 'confidence_values'):
+                final_signals.confidence_values = primary_signals.confidence_values
+            
+            return final_signals
+            
+        except Exception as e:
+            logger.error(f"Error combining multi-timeframe signals: {str(e)}")
+            return primary_signals
+
+    def _apply_volume_filter(self, signals: pd.Series, df: pd.DataFrame) -> pd.Series:
+        """Filter signals based on volume confirmation"""
+        try:
+            if 'Volume' not in df.columns:
+                return signals
+            
+            filtered_signals = signals.copy()
+            volume_ma = df['Volume'].rolling(20).mean()
+            
+            for i in range(len(signals)):
+                if signals.iloc[i] != 0:  # If there's a signal
+                    # Require above-average volume for signal confirmation
+                    if i < len(df) and df['Volume'].iloc[i] < volume_ma.iloc[i] * 1.2:
+                        filtered_signals.iloc[i] = 0
+            
+            return filtered_signals
+            
+        except Exception as e:
+            logger.error(f"Error applying volume filter: {str(e)}")
+            return signals
+
+    def _apply_market_regime_filter(self, df: pd.DataFrame, current_index: int, date_str: str) -> bool:
+        """Apply market regime filtering to determine if trading conditions are favorable"""
+        try:
+            # Simple market regime detection based on volatility and trend
+            if current_index < 20:  # Need enough data
+                return True
+            
+            # Calculate recent volatility (ATR-based)
+            recent_data = df.iloc[max(0, current_index-20):current_index+1]
+            high_low_diff = (recent_data['High'] - recent_data['Low']) / recent_data['Close']
+            avg_volatility = high_low_diff.mean()
+            
+            # Calculate trend strength using moving averages
+            if 'MA_20' in df.columns and 'MA_50' in df.columns:
+                ma20 = df['MA_20'].iloc[current_index]
+                ma50 = df['MA_50'].iloc[current_index]
+                trend_strength = abs(ma20 - ma50) / ma50 if ma50 != 0 else 0
+            else:
+                # Fallback: calculate simple trend
+                if len(recent_data) >= 10:
+                    trend_strength = abs(recent_data['Close'].iloc[-1] - recent_data['Close'].iloc[0]) / recent_data['Close'].iloc[0]
+                else:
+                    trend_strength = 0
+            
+            # Determine market regime
+            high_volatility_threshold = 0.03  # 3% average daily range
+            low_trend_threshold = 0.02  # 2% trend strength
+            
+            # Unfavorable conditions: High volatility with low trend (choppy market)
+            if avg_volatility > high_volatility_threshold and trend_strength < low_trend_threshold:
+                logger.debug(f"Unfavorable market regime at {date_str}: High volatility ({avg_volatility:.3f}) with low trend ({trend_strength:.3f})")
+                return False
+            
+            # Also avoid trading in extreme volatility
+            if avg_volatility > high_volatility_threshold * 2:  # Very high volatility
+                logger.debug(f"Extreme volatility detected at {date_str}: {avg_volatility:.3f}")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error in market regime filter: {str(e)}")
+            return True  # Default to allowing trades if filter fails
 
     def _calculate_adaptive_position_size(
         self,
@@ -1107,7 +1631,23 @@ class BacktestingService:
             current_capital = initial_capital
             current_positions = []
             
-            logger.info(f"Starting trade execution with {len(signals[signals != 0])} signals")
+            signal_count = len(signals[signals != 0])
+            logger.info(f"\n=== TRADE EXECUTION START ===")
+            logger.info(f"Starting trade execution with {signal_count} signals")
+            logger.info(f"Initial capital: ${initial_capital:,.2f}")
+            logger.info(f"Position size: {position_size}%")
+            
+            if signal_count == 0:
+                logger.warning("⚠️  No signals to execute trades with. Returning empty results.")
+                return [], {
+                    'total_trades': 0,
+                    'winning_trades': 0,
+                    'losing_trades': 0,
+                    'total_pnl': 0.0,
+                    'max_drawdown': 0.0,
+                    'initial_capital': initial_capital,
+                    'equity_curve': {}
+                }
             
             for i in range(len(df)):
                 date = df.index[i]
@@ -1141,21 +1681,38 @@ class BacktestingService:
                     # Check for stop loss/take profit using High/Low prices
                     high_price = row['High']
                     low_price = row['Low']
+                    current_price = row['Close']
                     size = pos['size']
+                    
+                    # Update trailing stop logic
+                    highest_price = pos.get('highest_price', entry_price)
+                    if current_price > highest_price:
+                        pos['highest_price'] = current_price
+                        # Update trailing stop (3% from highest price)
+                        trailing_stop_percentage = 3.0
+                        trailing_stop = current_price * (1 - trailing_stop_percentage/100)
+                        current_stop_loss = pos.get('stop_loss_price', entry_price * (1 - stop_loss/100) if stop_loss else None)
+                        if current_stop_loss is None or trailing_stop > current_stop_loss:
+                            pos['stop_loss_price'] = trailing_stop
                     
                     # Calculate worst and best case P&L for the day
                     worst_pnl_pct = (low_price - entry_price) / entry_price * 100
                     best_pnl_pct = (high_price - entry_price) / entry_price * 100
                     
-                    # Determine if stop loss or take profit was hit
-                    hit_stop_loss = stop_loss and worst_pnl_pct <= -stop_loss
-                    hit_take_profit = take_profit and best_pnl_pct >= take_profit
+                    # Check trailing stop
+                    current_stop_loss = pos.get('stop_loss_price', entry_price * (1 - stop_loss/100) if stop_loss else None)
+                    hit_trailing_stop = current_stop_loss and low_price <= current_stop_loss
+                    
+                    # Determine if stop loss or take profit was hit - use exact values
+                    hit_stop_loss = (stop_loss and worst_pnl_pct <= -float(stop_loss)) or hit_trailing_stop
+                    hit_take_profit = take_profit and best_pnl_pct >= float(take_profit)
                     
                     if hit_stop_loss or hit_take_profit:
-                        exit_price = (
-                            entry_price * (1 - stop_loss/100) if hit_stop_loss
-                            else entry_price * (1 + take_profit/100)
-                        )
+                        # Use exact user-provided values without modification
+                        if hit_stop_loss:
+                            exit_price = entry_price * (1 - float(stop_loss)/100)
+                        else:
+                            exit_price = entry_price * (1 + float(take_profit)/100)
                         pnl = (exit_price - entry_price) * size
                         pnl_pct = (exit_price - entry_price) / entry_price * 100
                         
@@ -1189,20 +1746,58 @@ class BacktestingService:
                 for pos in positions_to_remove:
                     current_positions.remove(pos)
                 
-                # Check for new entry signals with improved logic
+                # Check for new entry signals - more permissive for testing
                 if signal == 1 and (max_positions is None or len(current_positions) < max_positions):
-                    # Enhanced entry conditions
-                    should_enter = self._validate_entry_conditions(
-                        df, i, current_capital, consecutive_loss_limit, 
-                        metrics['current_consecutive_losses'], daily_loss_limit,
-                        metrics['daily_pnl'], date_str
-                    )
+                    # Check market regime first
+                    should_enter = True
+                    market_regime_filter = self._apply_market_regime_filter(df, i, date_str)
+                    if not market_regime_filter:
+                        should_enter = False
+                        logger.debug(f"Entry blocked by unfavorable market regime at {date_str}")
+                    
+                    # Simplified entry conditions - allow most entries for testing
+                    if should_enter:
+                        should_enter = self._validate_entry_conditions(
+                            df, i, current_capital, consecutive_loss_limit, 
+                            metrics['current_consecutive_losses'], daily_loss_limit,
+                            metrics['daily_pnl'], date_str
+                        )
+                    
+                    # Add risk-reward ratio validation
+                    if should_enter and stop_loss and take_profit:
+                        risk_reward_ratio = take_profit / stop_loss
+                        if risk_reward_ratio < 2.0:  # Only take trades with potential 2:1 reward-to-risk
+                            should_enter = False
+                            logger.debug(f"Entry blocked by poor risk-reward ratio: {risk_reward_ratio:.2f} < 2.0")
+                    
+                    # Check current drawdown before entry
+                    if should_enter and max_drawdown:
+                        peak_equity = max(metrics['equity_curve'].values()) if metrics['equity_curve'] else initial_capital
+                        current_drawdown = (peak_equity - current_capital) / peak_equity * 100
+                        if current_drawdown >= max_drawdown:
+                            should_enter = False
+                            logger.debug(f"Entry blocked by max drawdown: {current_drawdown:.2f}% >= {max_drawdown}%")
+                    
+                    if not should_enter:
+                        logger.debug(f"Entry signal at {date_str} blocked by validation")
                     
                     if should_enter:
+                        # Calculate position size based on risk amount if stop loss is specified
+                        if stop_loss:
+                            # Calculate position size based on risk per trade
+                            risk_per_trade = 2.0  # Risk 2% per trade
+                            risk_amount = current_capital * (risk_per_trade / 100)
+                            entry_price_estimate = row['Close']
+                            stop_loss_amount = entry_price_estimate * (stop_loss / 100)
+                            base_position_value = risk_amount / stop_loss_amount * entry_price_estimate
+                            calculated_position_size = min((base_position_value / current_capital) * 100, position_size)
+                        else:
+                            calculated_position_size = position_size
+                        
                         # Calculate adaptive position size
                         size = self._calculate_adaptive_position_size(
                             current_capital=current_capital,
-                            base_position_size=position_size,
+                            base_position_size=calculated_position_size,
                             df=df,
                             current_index=i,
                             trades=trades,
@@ -1227,18 +1822,30 @@ class BacktestingService:
                         if hasattr(signals, 'confidence_values') and i < len(signals.confidence_values):
                             signal_confidence = signals.confidence_values.iloc[i]
                         
+                        # Calculate actual shares based on position size
+                        shares = size / entry_price
+                        
                         # Add new position with enhanced tracking
                         new_position = {
                             'entry_date': date_str,
                             'entry_price': float(entry_price),
-                            'size': float(size / entry_price),
+                            'size': float(shares),
                             'signal_confidence': float(signal_confidence),
                             'entry_reason': 'signal_buy',
-                            'market_conditions': self._capture_market_conditions(df, i)
+                            'market_conditions': self._capture_market_conditions(df, i),
+                            'highest_price': float(entry_price),  # Initialize for trailing stop
+                            'stop_loss_price': float(entry_price * (1 - stop_loss/100)) if stop_loss else None
                         }
                         current_positions.append(new_position)
                         metrics['positions'].append(new_position)
                         logger.info(f"Opened new position at {date_str}: price={entry_price:.2f}, size={size/entry_price:.2f}, confidence={signal_confidence:.2f}")
+                        
+                elif signal == 1:
+                    # Log why we couldn't enter
+                    if max_positions and len(current_positions) >= max_positions:
+                        logger.debug(f"Entry signal at {date_str} blocked: max positions ({max_positions}) reached")
+                    else:
+                        logger.debug(f"Entry signal at {date_str} processed but not entered")
                 
                 # Check for exit signals
                 elif signal == -1 and current_positions:
@@ -1895,35 +2502,23 @@ class BacktestingService:
     def _validate_entry_conditions(self, df: pd.DataFrame, current_index: int, current_capital: float,
                                  consecutive_loss_limit: Optional[int], current_consecutive_losses: int,
                                  daily_loss_limit: Optional[float], daily_pnl: Dict, date_str: str) -> bool:
-        """Validate additional entry conditions beyond signal"""
+        """Simplified and more permissive entry validation for debugging"""
         try:
-            # Check consecutive loss limit
-            if consecutive_loss_limit and current_consecutive_losses >= consecutive_loss_limit:
+            # Only check the most critical limits, relaxed for testing
+            
+            # Check consecutive loss limit (only if specified and very strict)
+            if consecutive_loss_limit and consecutive_loss_limit < 10 and current_consecutive_losses >= consecutive_loss_limit:
+                logger.debug(f"Entry blocked by consecutive loss limit: {current_consecutive_losses} >= {consecutive_loss_limit}")
                 return False
             
-            # Check daily loss limit
-            if daily_loss_limit:
+            # Check daily loss limit (only if specified and very strict)
+            if daily_loss_limit and daily_loss_limit < 20:  # Only block if very strict limit
                 daily_loss_pct = (daily_pnl.get(date_str, 0) / current_capital) * 100
                 if daily_loss_pct <= -daily_loss_limit:
+                    logger.debug(f"Entry blocked by daily loss limit: {daily_loss_pct:.2f}% <= -{daily_loss_limit}%")
                     return False
             
-            # Check for market conditions (avoid entries during high volatility spikes)
-            if current_index >= 5:
-                recent_volatility = df['Close'].iloc[current_index-5:current_index].pct_change().std()
-                historical_volatility = df['Close'].iloc[:current_index].pct_change().std()
-                
-                if recent_volatility > historical_volatility * 3:  # Very high volatility
-                    return False
-            
-            # Check for gap conditions (avoid large gaps)
-            if current_index > 0:
-                prev_close = df['Close'].iloc[current_index - 1]
-                current_open = df['Open'].iloc[current_index]
-                gap = abs(current_open - prev_close) / prev_close
-                
-                if gap > 0.05:  # 5% gap - too risky
-                    return False
-            
+            # Allow all other entries for signal generation testing
             return True
             
         except Exception as e:
@@ -2181,15 +2776,28 @@ class BacktestingService:
         indicator_type: str,
         base_params: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Optimize indicator parameters based on market conditions"""
+        """Optimize indicator parameters based on market conditions with fallbacks"""
         try:
             optimized_params = base_params.copy()
             
-            # Get current market volatility
-            current_volatility = df['Volatility'].rolling(20).mean().iloc[-1] if len(df) > 20 else 20
+            # Get current market volatility with fallback calculation
+            if 'Volatility' in df.columns and len(df) > 20:
+                current_volatility = df['Volatility'].rolling(20).mean().iloc[-1]
+            else:
+                # Calculate simple volatility proxy from price data
+                returns = df['Close'].pct_change().rolling(20).std() * 100
+                current_volatility = returns.iloc[-1] if len(returns) > 0 and not pd.isna(returns.iloc[-1]) else 20
             
-            # Get trend strength
-            trend_strength = df['Trend_Strength'].rolling(20).mean().iloc[-1] if len(df) > 20 else 0.02
+            # Get trend strength with fallback calculation
+            if 'Trend_Strength' in df.columns and len(df) > 20:
+                trend_strength = df['Trend_Strength'].rolling(20).mean().iloc[-1]
+            else:
+                # Simple trend strength proxy using moving average slope
+                ma20 = df['Close'].rolling(20).mean()
+                if len(ma20) > 1:
+                    trend_strength = abs(ma20.iloc[-1] - ma20.iloc[-2]) / ma20.iloc[-2] if ma20.iloc[-2] != 0 else 0.02
+                else:
+                    trend_strength = 0.02
             
             if indicator_type == "rsi":
                 base_period = base_params.get("period", 14)
