@@ -1070,6 +1070,146 @@ def market_indices():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/yahoo-suggest', methods=['GET'])
+def yahoo_suggest():
+    """
+    Get stock suggestions based on search query
+    Returns stocks that match the search query for autocomplete
+    """
+    try:
+        query = request.args.get('q', '').strip().upper()
+        
+        if not query:
+            return jsonify({"quotes": []}), 200
+        
+        if len(query) < 1:
+            return jsonify({"quotes": []}), 200
+        
+        # Comprehensive list of Indian stocks
+        indian_stocks = [
+            # NIFTY 50 stocks
+            {"symbol": "RELIANCE.NS", "name": "Reliance Industries Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "TCS.NS", "name": "Tata Consultancy Services Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "HDFCBANK.NS", "name": "HDFC Bank Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "INFY.NS", "name": "Infosys Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "ICICIBANK.NS", "name": "ICICI Bank Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "SBIN.NS", "name": "State Bank of India", "exchange": "NSE", "type": "equity"},
+            {"symbol": "HINDUNILVR.NS", "name": "Hindustan Unilever Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "BHARTIARTL.NS", "name": "Bharti Airtel Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "ITC.NS", "name": "ITC Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "LT.NS", "name": "Larsen & Toubro Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "AXISBANK.NS", "name": "Axis Bank Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "MARUTI.NS", "name": "Maruti Suzuki India Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "ASIANPAINT.NS", "name": "Asian Paints Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "TATAMOTORS.NS", "name": "Tata Motors Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "WIPRO.NS", "name": "Wipro Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "BAJFINANCE.NS", "name": "Bajaj Finance Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "HCLTECH.NS", "name": "HCL Technologies Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "SUNPHARMA.NS", "name": "Sun Pharmaceutical Industries Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "TITAN.NS", "name": "Titan Company Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "NTPC.NS", "name": "NTPC Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "ONGC.NS", "name": "Oil & Natural Gas Corporation Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "POWERGRID.NS", "name": "Power Grid Corporation of India Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "COALINDIA.NS", "name": "Coal India Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "ULTRACEMCO.NS", "name": "UltraTech Cement Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "TECHM.NS", "name": "Tech Mahindra Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "BAJAJFINSV.NS", "name": "Bajaj Finserv Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "DRREDDY.NS", "name": "Dr. Reddy's Laboratories Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "NESTLEIND.NS", "name": "Nestle India Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "ADANIPORTS.NS", "name": "Adani Ports and Special Economic Zone Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "GRASIM.NS", "name": "Grasim Industries Ltd", "exchange": "NSE", "type": "equity"},
+            
+            # Additional popular stocks
+            {"symbol": "HDFC.NS", "name": "Housing Development Finance Corporation Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "KOTAKBANK.NS", "name": "Kotak Mahindra Bank Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "JSWSTEEL.NS", "name": "JSW Steel Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "TATASTEEL.NS", "name": "Tata Steel Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "HINDALCO.NS", "name": "Hindalco Industries Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "BPCL.NS", "name": "Bharat Petroleum Corporation Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "HEROMOTOCO.NS", "name": "Hero MotoCorp Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "TATACONSUM.NS", "name": "Tata Consumer Products Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "DIVISLAB.NS", "name": "Divi's Laboratories Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "BRITANNIA.NS", "name": "Britannia Industries Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "CIPLA.NS", "name": "Cipla Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "SHREECEM.NS", "name": "Shree Cement Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "EICHERMOT.NS", "name": "Eicher Motors Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "APOLLOHOSP.NS", "name": "Apollo Hospitals Enterprise Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "ADANIENT.NS", "name": "Adani Enterprises Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "ADANIGREEN.NS", "name": "Adani Green Energy Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "BAJAJ-AUTO.NS", "name": "Bajaj Auto Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "INDUSINDBK.NS", "name": "IndusInd Bank Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "GODREJCP.NS", "name": "Godrej Consumer Products Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "MOTHERSUMI.NS", "name": "Motherson Sumi Systems Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "PIDILITIND.NS", "name": "Pidilite Industries Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "DABUR.NS", "name": "Dabur India Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "MARICO.NS", "name": "Marico Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "VEDL.NS", "name": "Vedanta Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "SAIL.NS", "name": "Steel Authority of India Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "BANKBARODA.NS", "name": "Bank of Baroda", "exchange": "NSE", "type": "equity"},
+            {"symbol": "PNB.NS", "name": "Punjab National Bank", "exchange": "NSE", "type": "equity"},
+            {"symbol": "CANBK.NS", "name": "Canara Bank", "exchange": "NSE", "type": "equity"},
+            {"symbol": "UNIONBANK.NS", "name": "Union Bank of India", "exchange": "NSE", "type": "equity"},
+            {"symbol": "IOCL.NS", "name": "Indian Oil Corporation Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "HPCL.NS", "name": "Hindustan Petroleum Corporation Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "GAIL.NS", "name": "GAIL (India) Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "NMDC.NS", "name": "NMDC Ltd", "exchange": "NSE", "type": "equity"},
+            
+            # IT Sector
+            {"symbol": "MPHASIS.NS", "name": "Mphasis Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "LTI.NS", "name": "L&T Infotech Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "MINDTREE.NS", "name": "Mindtree Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "COFORGE.NS", "name": "Coforge Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "PERSISTENT.NS", "name": "Persistent Systems Ltd", "exchange": "NSE", "type": "equity"},
+            
+            # Banking & Financial Services
+            {"symbol": "YESBANK.NS", "name": "Yes Bank Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "FEDERALBNK.NS", "name": "Federal Bank Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "BANDHANBNK.NS", "name": "Bandhan Bank Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "RBLBANK.NS", "name": "RBL Bank Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "MUTHOOTFIN.NS", "name": "Muthoot Finance Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "CHOLAFIN.NS", "name": "Cholamandalam Investment and Finance Company Ltd", "exchange": "NSE", "type": "equity"},
+            
+            # Pharma & Healthcare
+            {"symbol": "LUPIN.NS", "name": "Lupin Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "BIOCON.NS", "name": "Biocon Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "CADILAHC.NS", "name": "Cadila Healthcare Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "AUROPHARMA.NS", "name": "Aurobindo Pharma Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "TORNTPHARM.NS", "name": "Torrent Pharmaceuticals Ltd", "exchange": "NSE", "type": "equity"},
+            {"symbol": "ALKEM.NS", "name": "Alkem Laboratories Ltd", "exchange": "NSE", "type": "equity"},
+            
+            # Market Indices
+            {"symbol": "^NSEI", "name": "NIFTY 50", "exchange": "NSE", "type": "index"},
+            {"symbol": "^BSESN", "name": "BSE SENSEX", "exchange": "BSE", "type": "index"},
+            {"symbol": "^CNXIT", "name": "NIFTY IT", "exchange": "NSE", "type": "index"},
+            {"symbol": "^NSEBANK", "name": "NIFTY BANK", "exchange": "NSE", "type": "index"},
+        ]
+        
+        # Filter stocks based on query
+        matching_stocks = []
+        
+        # First, find exact matches with symbol
+        for stock in indian_stocks:
+            symbol_base = stock["symbol"].replace(".NS", "").replace(".BO", "").replace("^", "")
+            if symbol_base.startswith(query):
+                matching_stocks.append(stock)
+        
+        # Then, find matches in company names
+        for stock in indian_stocks:
+            if stock not in matching_stocks:  # Avoid duplicates
+                if query in stock["name"].upper():
+                    matching_stocks.append(stock)
+        
+        # Limit results to top 10 matches
+        matching_stocks = matching_stocks[:10]
+        
+        return jsonify({
+            "quotes": matching_stocks
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in yahoo-suggest: {str(e)}")
+        return jsonify({"quotes": []}), 200
+
 @app.route('/api/top-gainers-losers', methods=['GET'])
 def top_gainers_losers():
     """
