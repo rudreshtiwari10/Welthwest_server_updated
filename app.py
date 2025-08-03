@@ -1801,6 +1801,114 @@ def run_backtest():
         logger.error(f"Error running backtest: {str(e)}", exc_info=True)
         return jsonify({"error": "An error occurred while running the backtest"}), 500 
 
+@app.route('/api/backtesting/newrun', methods=['POST'])
+@jwt_required()
+@validate_json_request
+@require_subscription_feature('backtest')
+def run_new_backtest():
+    """Run comprehensive backtest using IndianStockStrategyBuilder - Colab replication"""
+    try:
+        data = request.get_json()
+        
+        # Extract and validate all Colab parameters
+        required_fields = ['stock_symbol', 'selected_indicators', 'voting_threshold', 
+                          'period', 'timeframe', 'initial_capital', 'position_size_pct']
+        
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+        
+        # Extract parameters
+        symbol = data['stock_symbol']
+        indicators = data['selected_indicators']
+        voting_threshold = float(data['voting_threshold'])
+        period = data['period']
+        timeframe = data['timeframe']
+        initial_capital = float(data['initial_capital'])
+        position_size_pct = float(data['position_size_pct'])
+        risk_reward_ratio = float(data.get('risk_reward_ratio', 2.0))
+        max_drawdown_pct = float(data.get('max_drawdown_pct', 0.05))
+        
+        # Optional Monte Carlo parameters
+        monte_carlo_simulations = int(data.get('monte_carlo_simulations', 0))
+        confidence_level = float(data.get('confidence_level', 0.95))
+        
+        # Initialize builder and fetch data
+        from services.backtesting_engine import IndianStockStrategyBuilder
+        builder = IndianStockStrategyBuilder()
+        
+        df = builder.fetch_stock_data(symbol, period, timeframe)
+        if df is None or df.empty:
+            return jsonify({"error": f"No data found for symbol: {symbol}"}), 404
+        
+        # Run indicator and signal pipeline
+        df = builder.calculate_indicators(df, indicators)
+        df = builder.generate_voting_signals(df, indicators, voting_threshold)
+        
+        # Run backtest
+        trades_df, equity_df, metrics = builder.backtest_strategy(
+            df, initial_capital, position_size_pct, risk_reward_ratio, max_drawdown_pct
+        )
+        
+        # Monte Carlo analysis (optional)
+        mc_stats = None
+        mc_results = None
+        if monte_carlo_simulations > 0 and not trades_df.empty:
+            mc_stats, mc_results = builder.monte_carlo_analysis(
+                trades_df, initial_capital, monte_carlo_simulations, confidence_level
+            )
+        
+        # Create visualizations
+        candlestick_chart = builder.create_candlestick_chart(df, trades_df)
+        equity_chart = builder.create_equity_curve_chart(equity_df)
+        drawdown_chart = builder.create_drawdown_chart(equity_df)
+        
+        # Serialize dataframes and prepare response
+        response = {
+            "success": True,
+            "data": {
+                "metrics": metrics,
+                "trades": trades_df.to_dict(orient='records') if not trades_df.empty else [],
+                "equity_curve": equity_df.to_dict(orient='records'),
+                "stock_data": df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'Signal']].to_dict(orient='records'),
+                "charts": {
+                    "candlestick": candlestick_chart.to_json(),
+                    "equity_curve": equity_chart.to_json(),
+                    "drawdown": drawdown_chart.to_json()
+                }
+            }
+        }
+        
+        # Add Monte Carlo results if available
+        if mc_stats:
+            response["data"]["monte_carlo"] = {
+                "statistics": mc_stats,
+                "results": mc_results.to_dict(orient='records') if mc_results is not None else []
+            }
+        
+        # Add summary statistics
+        response["data"]["summary"] = {
+            "symbol": symbol,
+            "period": period,
+            "timeframe": timeframe,
+            "total_data_points": len(df),
+            "indicators_used": list(indicators.keys()),
+            "voting_threshold": voting_threshold,
+            "backtest_period": {
+                "start_date": df['Date'].iloc[0].strftime('%Y-%m-%d'),
+                "end_date": df['Date'].iloc[-1].strftime('%Y-%m-%d')
+            }
+        }
+        
+        return jsonify(response), 200
+        
+    except ValueError as e:
+        logger.error(f"Validation error in new backtest: {str(e)}")
+        return jsonify({"error": f"Invalid parameter: {str(e)}"}), 400
+    except Exception as e:
+        logger.error(f"Error running new backtest: {str(e)}", exc_info=True)
+        return jsonify({"error": "An error occurred while running the backtest"}), 500
+
 # Subscription routes
 @app.route('/api/user/subscription', methods=['GET'])
 @jwt_required()
