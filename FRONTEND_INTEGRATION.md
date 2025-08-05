@@ -183,7 +183,7 @@ function MarketIndices() {
   const [indices, setIndices] = useState(null);
   
   useEffect(() => {
-    fetch(`http://localhost:5000/api/market-indices`)
+   fetch(`http://localhost:5000/api/market-indices`)
       .then(response => response.json())
       .then(data => setIndices(data.indices))
       .catch(error => console.error('Error fetching indices:', error));
