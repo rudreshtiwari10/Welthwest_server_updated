@@ -327,6 +327,47 @@ class RazorpayPaymentService:
             
             logger.info(f"Payment verified and subscription activated for order {razorpay_order_id}")
             
+            # Send payment confirmation email
+            try:
+                from services.email_service import email_service
+                from services.user_service import UserService
+                
+                user_service = UserService()
+                user_data = user_service.get_user_by_id(str(payment_record['user_id']))
+                
+                if user_data:
+                    # Prepare plan details
+                    plan_details = {
+                        'name': payment_record.get('plan_tier', 'Unknown Plan').title(),
+                        'price': payment_record.get('amount', 0) / 100,
+                        'billing_cycle': payment_record.get('billing_cycle', 'monthly'),
+                        'amount': payment_record.get('amount', 0),
+                        'features': self._get_plan_features(payment_record.get('plan_tier'))
+                    }
+                    
+                    # Prepare payment details for email
+                    payment_details_email = {
+                        'razorpay_payment_id': razorpay_payment_id,
+                        'razorpay_order_id': razorpay_order_id
+                    }
+                    
+                    # Send email
+                    email_sent = email_service.send_payment_confirmation_email(
+                        user_email=user_data['email'],
+                        user_name=user_data.get('username', 'User'),
+                        plan_details=plan_details,
+                        payment_details=payment_details_email
+                    )
+                    
+                    if email_sent:
+                        logger.info(f"Payment confirmation email sent to {user_data['email']}")
+                    else:
+                        logger.warning(f"Failed to send payment confirmation email to {user_data['email']}")
+                        
+            except Exception as email_error:
+                logger.error(f"Error sending payment confirmation email: {str(email_error)}")
+                # Don't fail the payment verification if email fails
+            
             return {
                 "success": True,
                 "payment_id": razorpay_payment_id,
@@ -739,3 +780,45 @@ class RazorpayPaymentService:
                 "error": "Cleanup failed",
                 "message": str(e)
             }
+    
+    def _get_plan_features(self, plan_tier: str) -> List[str]:
+        """Get features list for a plan tier"""
+        features_map = {
+            'FREE': [
+                'Basic stock analysis',
+                '3 backtests per day',
+                '10 AI queries per day',
+                'Delayed market data (15 min)'
+            ],
+            'BASIC': [
+                'Advanced stock analysis',
+                '25 backtests per day',
+                '50 AI queries per day',
+                'Real-time market data',
+                'Technical indicators',
+                'Email support'
+            ],
+            'PRO': [
+                'Premium stock analysis',
+                '100 backtests per day',
+                '200 AI queries per day',
+                'Real-time market data',
+                'Advanced technical indicators',
+                'Portfolio management',
+                'Custom strategies',
+                'Priority email support'
+            ],
+            'ENTERPRISE': [
+                'Enterprise stock analysis',
+                'Unlimited backtests',
+                'Unlimited AI queries',
+                'Real-time market data',
+                'All technical indicators',
+                'Advanced portfolio management',
+                'Custom strategies & alerts',
+                'API access',
+                'Dedicated support'
+            ]
+        }
+        
+        return features_map.get(plan_tier, [])

@@ -14,6 +14,7 @@ from services.user_service import UserService
 from services.ai_service import AIModelService
 from services.subscription_service import SubscriptionService
 from services.razorpay_service import RazorpayPaymentService
+from services.email_service import email_service
 from middleware.subscription_middleware import require_subscription_feature, check_market_data_access
 import os
 import requests
@@ -114,9 +115,16 @@ def create_app():
     allowed_origins = [frontend_url]
     
     CORS(app, resources={
-        r"/api/*": {"origins": allowed_origins},
+        r"/api/*": {
+            "origins": allowed_origins,
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization"]
+        },
         r"/": {"origins": allowed_origins}
     })
+    
+    # Initialize email service
+    email_service.init_app(app)
 
     # Error handlers
     @app.errorhandler(RequestEntityTooLarge)
@@ -2089,6 +2097,99 @@ def upgrade_subscription():
         
     return jsonify({"message": message}), 200
 
+@app.route('/api/user/subscription/cancel', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def cancel_subscription():
+    """Cancel user's subscription and downgrade to FREE tier"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        # Get cancellation reason (optional)
+        reason = data.get('reason', 'User requested cancellation')
+        
+        # Cancel subscription
+        success, message = subscription_service.cancel_subscription(user_id, reason)
+        
+        if not success:
+            return jsonify({
+                "success": False,
+                "error": message
+            }), 400
+        
+        # Send cancellation email notification
+        try:
+            from services.email_service import email_service
+            from services.user_service import UserService
+            
+            user_service_instance = UserService()
+            user_data = user_service_instance.get_user_by_id(user_id)
+            
+            if user_data:
+                # Get cancellation info
+                cancellation_info = subscription_service.get_cancellation_info(user_id)
+                
+                if cancellation_info:
+                    # Send cancellation email
+                    email_sent = email_service.send_subscription_upgrade_email(
+                        user_email=user_data['email'],
+                        user_name=user_data.get('username', 'User'),
+                        old_plan=cancellation_info.get('cancelled_tier', 'PAID'),
+                        new_plan='FREE',
+                        upgrade_date=datetime.now().strftime('%B %d, %Y')
+                    )
+                    
+                    if email_sent:
+                        logger.info(f"Cancellation notification email sent to {user_data['email']}")
+                    else:
+                        logger.warning(f"Failed to send cancellation email to {user_data['email']}")
+                        
+        except Exception as email_error:
+            logger.error(f"Error sending cancellation email: {str(email_error)}")
+            # Don't fail the cancellation if email fails
+        
+        return jsonify({
+            "success": True,
+            "message": message
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error cancelling subscription: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to cancel subscription",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/user/subscription/cancellation-info', methods=['GET'])
+@jwt_required()
+def get_cancellation_info():
+    """Get cancellation information for user's subscription"""
+    try:
+        user_id = get_jwt_identity()
+        
+        cancellation_info = subscription_service.get_cancellation_info(user_id)
+        
+        if cancellation_info:
+            return jsonify({
+                "success": True,
+                "cancellation_info": cancellation_info
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "message": "No cancellation information found"
+            }), 404
+            
+    except Exception as e:
+        logger.error(f"Error getting cancellation info: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to get cancellation information",
+            "message": str(e)
+        }), 500
+
 @app.route('/api/user/usage', methods=['GET'])
 @jwt_required()
 def get_usage_metrics():
@@ -2475,6 +2576,158 @@ def update_billing_details():
         return jsonify({
             "success": False,
             "error": "Failed to update billing details",
+            "message": str(e)
+        }), 500
+
+# Email service endpoints
+@app.route('/api/email/send', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def send_email():
+    """Send custom email (admin only)"""
+    try:
+        # Check if user is admin
+        user_id = get_jwt_identity()
+        user = user_service.get_user_by_id(user_id)
+        if not user or user.get('role') != 'admin':
+            return jsonify({"error": "Unauthorized access"}), 403
+            
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['to', 'subject', 'template']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({
+                    "success": False,
+                    "error": f"Missing required field: {field}"
+                }), 400
+        
+        # Send email
+        email_sent = email_service.send_email(
+            to=data['to'],
+            subject=data['subject'],
+            template=data['template'],
+            context=data.get('context', {}),
+            attachments=data.get('attachments', [])
+        )
+        
+        if email_sent:
+            return jsonify({
+                "success": True,
+                "message": "Email sent successfully"
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Failed to send email"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error sending email: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to send email",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/email/send-welcome', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def send_welcome_email():
+    """Send welcome email to user"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        # Get recipient details
+        target_user_id = data.get('user_id')
+        if target_user_id:
+            # Admin sending to another user
+            user = user_service.get_user_by_id(user_id)
+            if not user or user.get('role') != 'admin':
+                return jsonify({"error": "Unauthorized access"}), 403
+            target_user = user_service.get_user_by_id(target_user_id)
+        else:
+            # User sending to themselves
+            target_user = user_service.get_user_by_id(user_id)
+        
+        if not target_user:
+            return jsonify({"error": "User not found"}), 404
+        
+        # Send welcome email
+        email_sent = email_service.send_welcome_email(
+            user_email=target_user['email'],
+            user_name=target_user.get('username', 'User')
+        )
+        
+        if email_sent:
+            return jsonify({
+                "success": True,
+                "message": "Welcome email sent successfully"
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Failed to send welcome email"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error sending welcome email: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to send welcome email",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/email/send-subscription-upgrade', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def send_subscription_upgrade_email():
+    """Send subscription upgrade notification email"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['old_plan', 'new_plan']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({
+                    "success": False,
+                    "error": f"Missing required field: {field}"
+                }), 400
+        
+        # Get user details
+        user = user_service.get_user_by_id(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+        
+        # Send upgrade email
+        email_sent = email_service.send_subscription_upgrade_email(
+            user_email=user['email'],
+            user_name=user.get('username', 'User'),
+            old_plan=data['old_plan'],
+            new_plan=data['new_plan'],
+            upgrade_date=datetime.now().strftime('%B %d, %Y')
+        )
+        
+        if email_sent:
+            return jsonify({
+                "success": True,
+                "message": "Upgrade notification email sent successfully"
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Failed to send upgrade notification email"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error sending upgrade notification email: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to send upgrade notification email",
             "message": str(e)
         }), 500
 

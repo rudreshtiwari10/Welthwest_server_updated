@@ -569,4 +569,124 @@ class SubscriptionService:
             return {
                 "success": False,
                 "error": str(e)
-            } 
+            }
+    
+    def cancel_subscription(self, user_id: str, reason: str = "User requested") -> Tuple[bool, str]:
+        """Cancel user's subscription and downgrade to FREE tier"""
+        try:
+            # Check if user exists
+            user = self.users.find_one({"_id": ObjectId(user_id)})
+            if not user:
+                return False, "User not found"
+            
+            # Check if user has a subscription
+            if "subscription" not in user:
+                return False, "User has no subscription"
+            
+            current_tier = user["subscription"].get("tier", "FREE")
+            
+            # If already on FREE tier, nothing to cancel
+            if current_tier == "FREE":
+                return False, "User is already on FREE tier"
+            
+            # Store cancellation information
+            cancellation_info = {
+                "cancelled_at": datetime.utcnow(),
+                "cancelled_tier": current_tier,
+                "reason": reason,
+                "cancelled_by": "user"
+            }
+            
+            # Update subscription to FREE tier with cancellation info
+            update_data = {
+                "$set": {
+                    "subscription.tier": "FREE",
+                    "subscription.expires_at": None,  # FREE tier doesn't expire
+                    "subscription.cancelled_at": cancellation_info["cancelled_at"],
+                    "subscription.previous_tier": current_tier,
+                    "subscription.cancellation_reason": reason,
+                    "subscription.limits": self.config.SUBSCRIPTION_TIERS["FREE"]["limits"],
+                    "updated_at": datetime.utcnow()
+                },
+                "$push": {
+                    "subscription.history": {
+                        "action": "cancelled",
+                        "from_tier": current_tier,
+                        "to_tier": "FREE",
+                        "timestamp": datetime.utcnow(),
+                        "reason": reason
+                    }
+                }
+            }
+            
+            # Perform the update
+            result = self.users.update_one(
+                {"_id": ObjectId(user_id)},
+                update_data
+            )
+            
+            if result.modified_count > 0:
+                logger.info(f"Successfully cancelled subscription for user {user_id}. Downgraded from {current_tier} to FREE")
+                
+                # Reset usage counters for new limits
+                self._reset_usage_counters(user_id)
+                
+                return True, f"Subscription cancelled successfully. Downgraded from {current_tier} to FREE tier."
+            else:
+                logger.error(f"Failed to cancel subscription for user {user_id}")
+                return False, "Failed to update subscription"
+                
+        except Exception as e:
+            logger.error(f"Error canceling subscription for user {user_id}: {str(e)}")
+            return False, f"Error canceling subscription: {str(e)}"
+    
+    def get_cancellation_info(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get cancellation information for a user if their subscription was cancelled"""
+        try:
+            user = self.users.find_one({"_id": ObjectId(user_id)})
+            if not user or "subscription" not in user:
+                return None
+            
+            subscription = user["subscription"]
+            
+            # Check if subscription was cancelled
+            if "cancelled_at" not in subscription:
+                return None
+            
+            return {
+                "cancelled_at": subscription.get("cancelled_at"),
+                "cancelled_tier": subscription.get("previous_tier"),
+                "reason": subscription.get("cancellation_reason"),
+                "current_tier": subscription.get("tier", "FREE")
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting cancellation info for user {user_id}: {str(e)}")
+            return None
+    
+    def _reset_usage_counters(self, user_id: str) -> bool:
+        """Reset usage counters when subscription changes"""
+        try:
+            current_time = datetime.utcnow()
+            
+            reset_data = {
+                "$set": {
+                    "subscription.usage.daily.backtest_count": 0,
+                    "subscription.usage.daily.llm_query_count": 0,
+                    "subscription.usage.daily.last_reset": current_time,
+                    "subscription.usage.monthly.backtest_count": 0,
+                    "subscription.usage.monthly.llm_query_count": 0,
+                    "subscription.usage.monthly.last_reset": current_time
+                }
+            }
+            
+            result = self.users.update_one(
+                {"_id": ObjectId(user_id)},
+                reset_data
+            )
+            
+            return result.modified_count > 0
+            
+        except Exception as e:
+            logger.error(f"Error resetting usage counters for user {user_id}: {str(e)}")
+            return False 
