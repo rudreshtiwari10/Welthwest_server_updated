@@ -177,22 +177,91 @@ class RazorpayPaymentService:
     def verify_payment_signature(self, razorpay_payment_id: str, razorpay_order_id: str, razorpay_signature: str) -> Dict[str, Any]:
         """Verify payment signature and process successful payment"""
         try:
-            # Create signature string
-            payload = f"{razorpay_order_id}|{razorpay_payment_id}"
-            expected_signature = hmac.new(
-                self.config.RAZORPAY_KEY_SECRET.encode('utf-8'),
-                payload.encode('utf-8'),
-                hashlib.sha256
-            ).hexdigest()
+            logger.info(f"Starting payment verification for order {razorpay_order_id}")
+            logger.info(f"Payment ID: {razorpay_payment_id}")
+            logger.info(f"Signature provided: {razorpay_signature[:20]}...")  # Log only first 20 chars for security
             
-            # Verify signature
-            if not hmac.compare_digest(expected_signature, razorpay_signature):
-                logger.warning(f"Invalid payment signature for order {razorpay_order_id}")
+            # Check if Razorpay is properly configured
+            if not self.config.RAZORPAY_KEY_ID or not self.config.RAZORPAY_KEY_SECRET:
+                logger.error("Razorpay credentials not configured properly")
                 return {
                     "success": False,
-                    "error": "Invalid signature",
-                    "message": "Payment verification failed"
+                    "error": "Configuration error",
+                    "message": "Payment gateway not configured properly"
                 }
+            
+            # Check if order exists in database
+            order_record = self.orders.find_one({"razorpay_order_id": razorpay_order_id})
+            if not order_record:
+                logger.error(f"Order {razorpay_order_id} not found in database")
+                return {
+                    "success": False,
+                    "error": "Order not found",
+                    "message": "Invalid order ID"
+                }
+            
+            # Use Razorpay's official utility method for signature verification
+            params_dict = {
+                'razorpay_order_id': razorpay_order_id,
+                'razorpay_payment_id': razorpay_payment_id,
+                'razorpay_signature': razorpay_signature
+            }
+            
+            logger.info(f"Verifying signature with Key ID: {self.config.RAZORPAY_KEY_ID[:10]}...")
+            
+            # Handle debug mode case
+            if razorpay_signature == 'debug_mode_no_signature':
+                logger.warning("Debug mode: Skipping signature verification")
+                if not self.config.DEBUG:
+                    return {
+                        "success": False,
+                        "error": "Invalid signature",
+                        "message": "Debug signature used in production mode"
+                    }
+                # In debug mode, we'll skip signature verification
+                logger.info("Debug mode: Payment signature verification skipped")
+            else:
+                try:
+                    # Verify signature using Razorpay's official method
+                    self.client.utility.verify_payment_signature(params_dict)
+                    logger.info(f"Payment signature verified successfully for order {razorpay_order_id}")
+                except razorpay.errors.SignatureVerificationError as e:
+                    logger.warning(f"Invalid payment signature for order {razorpay_order_id}: {str(e)}")
+                    
+                    # Additional debugging information
+                    expected_payload = f"{razorpay_order_id}|{razorpay_payment_id}"
+                    logger.info(f"Expected payload for signature: {expected_payload}")
+                    logger.info(f"Received signature length: {len(razorpay_signature)}")
+                    logger.info(f"Signature format appears valid: {razorpay_signature.isalnum()}")
+                    
+                    # Manual signature verification for debugging
+                    try:
+                        import hmac
+                        import hashlib
+                        expected_signature = hmac.new(
+                            self.config.RAZORPAY_KEY_SECRET.encode('utf-8'),
+                            expected_payload.encode('utf-8'),
+                            hashlib.sha256
+                        ).hexdigest()
+                        logger.info(f"Manual signature calculation - Expected: {expected_signature[:20]}...")
+                        logger.info(f"Manual signature calculation - Received: {razorpay_signature[:20]}...")
+                        logger.info(f"Manual verification result: {expected_signature == razorpay_signature}")
+                    except Exception as manual_e:
+                        logger.error(f"Manual signature calculation failed: {manual_e}")
+                    
+                    return {
+                        "success": False,
+                        "error": "Invalid signature",
+                        "message": "Payment verification failed - signature mismatch. Please ensure you're using the correct Razorpay credentials and the payment was made in the correct environment."
+                    }
+                except Exception as e:
+                    logger.error(f"Error during signature verification for order {razorpay_order_id}: {str(e)}")
+                    logger.error(f"Exception type: {type(e).__name__}")
+                    return {
+                        "success": False,
+                        "error": "Signature verification error",
+                        "message": f"Payment verification failed: {str(e)}"
+                    }
             
             # Get payment details from Razorpay
             try:
