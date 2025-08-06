@@ -140,12 +140,15 @@ class UserService:
         
         # Return user data without password
         return {
-            "id": str(user["_id"]),
-            "username": user["username"],
+            "_id": str(user["_id"]),
+            "username": user.get("username", ""),
             "email": user["email"],
             "first_name": user.get("first_name", ""),
             "last_name": user.get("last_name", ""),
             "avatar_url": user.get("avatar_url", ""),
+            "profile_picture": user.get("profile_picture", ""),
+            "google_id": user.get("google_id", ""),
+            "is_google_user": user.get("is_google_user", False),
             "role": user.get("role", "user"),
             "subscription": user.get("subscription", {
                 "tier": "FREE",
@@ -165,6 +168,86 @@ class UserService:
                 }
             })
         }
+    
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        """Get user by email"""
+        user = self.users.find_one({"email": email})
+        
+        if not user:
+            return None
+        
+        # Convert user to dict with string ID
+        user_data = self.get_user_by_id(user["_id"])
+        return user_data
+    
+    def get_user_by_google_id(self, google_id: str) -> Optional[Dict[str, Any]]:
+        """Get user by Google ID"""
+        user = self.users.find_one({"google_id": google_id})
+        
+        if not user:
+            return None
+        
+        # Convert user to dict with string ID
+        user_data = self.get_user_by_id(user["_id"])
+        return user_data
+    
+    def create_user(self, user_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Create a new user with the provided data"""
+        # Check if email already exists
+        if self.get_user_by_email(user_data["email"]):
+            return None
+        
+        # Check if Google ID already exists if provided
+        if "google_id" in user_data and user_data["google_id"]:
+            if self.get_user_by_google_id(user_data["google_id"]):
+                return None
+        
+        # Set default values
+        user = {
+            "email": user_data["email"],
+            "username": user_data.get("email", "").split("@")[0],  # Default username from email
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+            "first_name": user_data.get("name", "").split(" ")[0] if user_data.get("name") else "",
+            "last_name": " ".join(user_data.get("name", "").split(" ")[1:]) if user_data.get("name") and len(user_data.get("name", "").split(" ")) > 1 else "",
+            "avatar_url": user_data.get("picture", ""),
+            "profile_picture": user_data.get("picture", ""),
+            "google_id": user_data.get("google_id", ""),
+            "is_google_user": user_data.get("is_google_user", False),
+            "watchlists": []
+        }
+        
+        try:
+            # Insert user into database
+            result = self.users.insert_one(user)
+            
+            if result.inserted_id:
+                # Return user data
+                user_data = self.get_user_by_id(result.inserted_id)
+                return user_data
+            
+            return None
+        except Exception as e:
+            print(f"Error creating user: {str(e)}")
+            return None
+    
+    def update_user(self, user_id: str, update_data: Dict[str, Any]) -> bool:
+        """Update user data"""
+        try:
+            object_id = ObjectId(user_id)
+        except:
+            return False
+        
+        # Add updated timestamp
+        update_data["updated_at"] = datetime.utcnow()
+        
+        # Update user
+        result = self.users.update_one(
+            {"_id": object_id},
+            {"$set": update_data}
+        )
+        
+        return result.modified_count > 0
     
     def update_user_profile(self, user_id: str, profile_data: Dict[str, Any]) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """Update user profile"""
@@ -199,14 +282,18 @@ class UserService:
             "user_id": user_id,
             "token": token,
             "created_at": datetime.utcnow(),
-            "expires_at": datetime.utcnow() + timedelta(days=30)
+            "expires_at": datetime.utcnow() + timedelta(days=30)  # 30-day expiry
         }
         
-        result = self.tokens.insert_one(token_data)
-        return bool(result.inserted_id)
+        try:
+            result = self.tokens.insert_one(token_data)
+            return bool(result.inserted_id)
+        except Exception as e:
+            print(f"Error storing refresh token: {str(e)}")
+            return False
     
     def validate_refresh_token(self, token: str) -> Optional[str]:
-        """Validate refresh token and return user ID if valid"""
+        """Validate a refresh token and return user ID if valid"""
         token_data = self.tokens.find_one({
             "token": token,
             "expires_at": {"$gt": datetime.utcnow()}
@@ -218,114 +305,118 @@ class UserService:
         return None
     
     def invalidate_refresh_token(self, token: str) -> bool:
-        """Remove refresh token from database"""
+        """Remove a refresh token from database"""
         result = self.tokens.delete_one({"token": token})
         return result.deleted_count > 0
     
     def save_backtest_result(self, user_id: str, backtest_data: Dict[str, Any]) -> bool:
-        """Save backtest result for a user"""
+        """Save backtest result to user's history"""
         try:
-            # Initialize backtesting collection if not exists
-            if not hasattr(self, 'backtests'):
-                self.backtests = self.db.user_backtests
-            
-            backtest_record = {
+            # Create backtest document
+            backtest = {
                 "user_id": user_id,
-                "backtest_data": backtest_data,
                 "created_at": datetime.utcnow(),
-                "type": "backtest"
+                "data": backtest_data,
+                "name": backtest_data.get("name", f"Backtest {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"),
+                "symbol": backtest_data.get("symbol", "Unknown"),
+                "strategy": backtest_data.get("strategy", "Custom"),
+                "performance": backtest_data.get("performance", {})
             }
             
-            result = self.backtests.insert_one(backtest_record)
+            # Insert backtest into database
+            result = self.db.backtests.insert_one(backtest)
             return bool(result.inserted_id)
         except Exception as e:
-            logger.error(f"Error saving backtest result: {str(e)}")
+            print(f"Error saving backtest result: {str(e)}")
             return False
     
     def save_ai_analysis_result(self, user_id: str, analysis_data: Dict[str, Any]) -> bool:
-        """Save AI analysis result for a user"""
+        """Save AI analysis result to user's history"""
         try:
-            # Initialize AI analysis collection if not exists
-            if not hasattr(self, 'ai_analyses'):
-                self.ai_analyses = self.db.user_ai_analyses
-            
-            analysis_record = {
+            # Create analysis document
+            analysis = {
                 "user_id": user_id,
-                "analysis_data": analysis_data,
                 "created_at": datetime.utcnow(),
-                "type": "ai_analysis"
+                "data": analysis_data,
+                "name": analysis_data.get("name", f"Analysis {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"),
+                "symbol": analysis_data.get("symbol", "Unknown"),
+                "model": analysis_data.get("model", "Unknown"),
+                "summary": analysis_data.get("summary", "")
             }
             
-            result = self.ai_analyses.insert_one(analysis_record)
+            # Insert analysis into database
+            result = self.db.ai_analyses.insert_one(analysis)
             return bool(result.inserted_id)
         except Exception as e:
-            logger.error(f"Error saving AI analysis result: {str(e)}")
+            print(f"Error saving AI analysis result: {str(e)}")
             return False
     
     def save_chat_history(self, user_id: str, chat_data: Dict[str, Any]) -> bool:
-        """Save chat history for a user"""
+        """Save chat history to user's history"""
         try:
-            # Initialize chat history collection if not exists
-            if not hasattr(self, 'chat_histories'):
-                self.chat_histories = self.db.user_chat_histories
-            
-            chat_record = {
+            # Create chat document
+            chat = {
                 "user_id": user_id,
-                "chat_data": chat_data,
                 "created_at": datetime.utcnow(),
-                "type": "chat_history"
+                "data": chat_data,
+                "name": chat_data.get("name", f"Chat {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"),
+                "model": chat_data.get("model", "Unknown"),
+                "summary": chat_data.get("summary", "")
             }
             
-            result = self.chat_histories.insert_one(chat_record)
+            # Insert chat into database
+            result = self.db.chat_history.insert_one(chat)
             return bool(result.inserted_id)
         except Exception as e:
-            logger.error(f"Error saving chat history: {str(e)}")
+            print(f"Error saving chat history: {str(e)}")
             return False
     
     def get_user_backtests(self, user_id: str, limit: int = 10, skip: int = 0) -> List[Dict[str, Any]]:
-        """Get user's backtest results"""
+        """Get user's saved backtest results"""
         try:
-            if not hasattr(self, 'backtests'):
-                self.backtests = self.db.user_backtests
-            
-            results = list(self.backtests.find(
+            backtests = list(self.db.backtests.find(
                 {"user_id": user_id},
-                {"_id": 0}  # Exclude MongoDB ObjectId
+                {"data": 0}  # Exclude full data for listing
             ).sort("created_at", -1).skip(skip).limit(limit))
             
-            return results
+            # Convert ObjectIds to strings
+            for backtest in backtests:
+                backtest["_id"] = str(backtest["_id"])
+            
+            return backtests
         except Exception as e:
-            logger.error(f"Error retrieving user backtests: {str(e)}")
+            print(f"Error getting user backtests: {str(e)}")
             return []
     
     def get_user_ai_analyses(self, user_id: str, limit: int = 10, skip: int = 0) -> List[Dict[str, Any]]:
-        """Get user's AI analysis results"""
+        """Get user's saved AI analysis results"""
         try:
-            if not hasattr(self, 'ai_analyses'):
-                self.ai_analyses = self.db.user_ai_analyses
-            
-            results = list(self.ai_analyses.find(
+            analyses = list(self.db.ai_analyses.find(
                 {"user_id": user_id},
-                {"_id": 0}  # Exclude MongoDB ObjectId
+                {"data": 0}  # Exclude full data for listing
             ).sort("created_at", -1).skip(skip).limit(limit))
             
-            return results
+            # Convert ObjectIds to strings
+            for analysis in analyses:
+                analysis["_id"] = str(analysis["_id"])
+            
+            return analyses
         except Exception as e:
-            logger.error(f"Error retrieving user AI analyses: {str(e)}")
+            print(f"Error getting user AI analyses: {str(e)}")
             return []
     
     def get_user_chat_history(self, user_id: str, limit: int = 50, skip: int = 0) -> List[Dict[str, Any]]:
-        """Get user's chat history"""
+        """Get user's saved chat history"""
         try:
-            if not hasattr(self, 'chat_histories'):
-                self.chat_histories = self.db.user_chat_histories
-            
-            results = list(self.chat_histories.find(
-                {"user_id": user_id},
-                {"_id": 0}  # Exclude MongoDB ObjectId
+            chats = list(self.db.chat_history.find(
+                {"user_id": user_id}
             ).sort("created_at", -1).skip(skip).limit(limit))
             
-            return results
+            # Convert ObjectIds to strings
+            for chat in chats:
+                chat["_id"] = str(chat["_id"])
+            
+            return chats
         except Exception as e:
-            logger.error(f"Error retrieving user chat history: {str(e)}")
-            return [] 
+            print(f"Error getting user chat history: {str(e)}")
+            return []

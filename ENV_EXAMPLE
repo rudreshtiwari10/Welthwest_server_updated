@@ -60,4 +60,8 @@ RAZORPAY_KEY_ID=rzp_test_your_key_id
 RAZORPAY_KEY_SECRET=your_key_secret
 RAZORPAY_WEBHOOK_SECRET=your_webhook_secret
 RAZORPAY_ENVIRONMENT=test
-RAZORPAY_CURRENCY=INR 
+RAZORPAY_CURRENCY=INR
+
+# Google OAuth Configuration
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret 

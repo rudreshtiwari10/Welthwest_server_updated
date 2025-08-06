@@ -15,6 +15,7 @@ from services.ai_service import AIModelService
 from services.subscription_service import SubscriptionService
 from services.razorpay_service import RazorpayPaymentService
 from services.email_service import email_service
+from services.google_auth_service import GoogleAuthService
 from middleware.subscription_middleware import require_subscription_feature, check_market_data_access
 import os
 import requests
@@ -226,6 +227,17 @@ def register():
     # Store refresh token
     user_service.store_refresh_token(user_data['id'], refresh_token)
     
+    # Send welcome email to new user
+    try:
+        email_service.send_welcome_email(
+            user_email=user_data['email'],
+            user_name=user_data['username']
+        )
+        logger.info(f"Welcome email sent to {user_data['email']}")
+    except Exception as e:
+        logger.error(f"Failed to send welcome email to {user_data['email']}: {str(e)}")
+        # Don't fail registration if email fails
+    
     return jsonify({
         "message": "Registration successful",
         "user": user_data,
@@ -233,6 +245,42 @@ def register():
         "access_token": access_token,
         "refresh_token": refresh_token
     }), 201
+
+@app.route('/api/auth/google', methods=['POST'])
+@validate_json_request
+def google_auth():
+    try:
+        data = request.get_json()
+        token = data.get('token')
+        
+        if not token:
+            return jsonify({"error": "Token is required"}), 400
+            
+        google_auth_service = GoogleAuthService()
+        user = google_auth_service.verify_google_token(token)
+        
+        if not user:
+            return jsonify({"error": "Invalid Google token"}), 401
+            
+        # Create access and refresh tokens
+        access_token = create_access_token(identity=str(user['_id']))
+        refresh_token = create_refresh_token(identity=str(user['_id']))
+        
+        return jsonify({
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "user": {
+                "id": str(user['_id']),
+                "email": user['email'],
+                "name": user.get('name', ''),
+                "profile_picture": user.get('profile_picture', ''),
+                "is_google_user": True
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in Google authentication: {str(e)}")
+        return jsonify({"error": "Authentication failed"}), 500
 
 @app.route('/api/auth/login', methods=['POST'])
 @validate_json_request

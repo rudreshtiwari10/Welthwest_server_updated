@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Auth Test</title>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            margin-top: 40px;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+        pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        button {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background-color: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #3367d6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Google Authentication Test</h1>
+        <p>This page tests the Google authentication flow. Click the button below to sign in with Google.</p>
+        
+        <div id="g_id_onload"
+            data-client_id="YOUR_GOOGLE_CLIENT_ID"
+            data-callback="handleCredentialResponse"
+            data-auto_prompt="false">
+        </div>
+        
+        <div class="g_id_signin"
+            data-type="standard"
+            data-size="large"
+            data-theme="outline"
+            data-text="sign_in_with"
+            data-shape="rectangular"
+            data-logo_alignment="left">
+        </div>
+        
+        <div class="result" id="result" style="display: none;">
+            <h2>Authentication Result</h2>
+            <div id="token-section">
+                <h3>ID Token</h3>
+                <pre id="id-token"></pre>
+                <button onclick="copyToClipboard('id-token')">Copy Token</button>
+            </div>
+            
+            <div id="api-result-section" style="display: none;">
+                <h3>API Response</h3>
+                <pre id="api-result"></pre>
+            </div>
+            
+            <div id="api-test-section">
+                <h3>Test API Call</h3>
+                <button onclick="testApiCall()">Test Backend API</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Replace with your backend API URL
+        const API_URL = 'http://localhost:8000/api/auth/google';
+        
+        function handleCredentialResponse(response) {
+            // Display the ID token
+            document.getElementById('result').style.display = 'block';
+            document.getElementById('id-token').textContent = response.credential;
+            
+            // Store token in session storage
+            sessionStorage.setItem('google_token', response.credential);
+        }
+        
+        function copyToClipboard(elementId) {
+            const element = document.getElementById(elementId);
+            const text = element.textContent;
+            
+            navigator.clipboard.writeText(text).then(() => {
+                alert('Token copied to clipboard!');
+            }).catch(err => {
+                console.error('Failed to copy text: ', err);
+            });
+        }
+        
+        function testApiCall() {
+            const token = sessionStorage.getItem('google_token');
+            if (!token) {
+                alert('No token available. Please sign in first.');
+                return;
+            }
+            
+            // Show loading state
+            const apiTestButton = document.querySelector('#api-test-section button');
+            const originalText = apiTestButton.textContent;
+            apiTestButton.textContent = 'Loading...';
+            apiTestButton.disabled = true;
+            
+            // Make API call to backend
+            fetch(API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ token })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                // Show API result
+                document.getElementById('api-result-section').style.display = 'block';
+                document.getElementById('api-result').textContent = JSON.stringify(data, null, 2);
+            })
+            .catch(error => {
+                document.getElementById('api-result-section').style.display = 'block';
+                document.getElementById('api-result').textContent = `Error: ${error.message}`;
+            })
+            .finally(() => {
+                // Reset button state
+                apiTestButton.textContent = originalText;
+                apiTestButton.disabled = false;
+            });
+        }
+        
+        // Update the client ID from URL parameters if provided
+        window.onload = function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const clientId = urlParams.get('client_id');
+            if (clientId) {
+                document.getElementById('g_id_onload').setAttribute('data-client_id', clientId);
+                console.log('Using client ID from URL parameter:', clientId);
+            }
+        };
+    </script>
+</body>
+</html>
