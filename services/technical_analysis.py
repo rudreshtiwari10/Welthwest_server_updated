@@ -4,6 +4,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from ta import momentum, trend, volatility, volume
 from services.stock_service import get_ohlc_data, format_indian_ticker
 from services.cache_service import get_cached_data, set_cached_data
+from datetime import datetime, timedelta
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -14,10 +15,30 @@ class TechnicalAnalysis:
         self.default_period = "1y"
         self.default_interval = "1d"
         
+    def _convert_period_to_dates(self, period_str):
+        """Convert period string like '1y', '6mo', '3mo', '1mo' to start and end dates"""
+        end_date = datetime.now()
+        
+        if period_str == "1y":
+            start_date = end_date - timedelta(days=365)
+        elif period_str == "6mo":
+            start_date = end_date - timedelta(days=180)
+        elif period_str == "3mo":
+            start_date = end_date - timedelta(days=90)
+        elif period_str == "1mo":
+            start_date = end_date - timedelta(days=30)
+        elif period_str == "1d":
+            start_date = end_date - timedelta(days=1)
+        else:
+            start_date = end_date - timedelta(days=365)  # default to 1 year
+            
+        return start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')
+        
     def calculate_indicators(self, ticker: str, indicators: List[str], params: Dict = None) -> Dict[str, Any]:
         """Calculate technical indicators for a given stock"""
-        # Get historical data
-        df = get_ohlc_data(ticker, self.default_period, self.default_interval)
+        # Get historical data - convert period to proper date range
+        start_date, end_date = self._convert_period_to_dates(self.default_period)
+        df = get_ohlc_data(ticker, start_date, end_date, self.default_interval)
         if df.empty:
             return {"error": "No data available for the ticker"}
             
@@ -282,7 +303,8 @@ class TechnicalAnalysis:
         results = {}
         for ticker in tickers:
             try:
-                df = get_ohlc_data(ticker, "1mo", "1d")  # Use shorter period for screening
+                start_date, end_date = self._convert_period_to_dates("1mo")
+                df = get_ohlc_data(ticker, start_date, end_date, "1d")  # Use shorter period for screening
                 if not df.empty:
                     matches_criteria = self._evaluate_screening_criteria(df, criteria)
                     if matches_criteria:
@@ -294,7 +316,8 @@ class TechnicalAnalysis:
     
     def get_support_resistance(self, ticker: str) -> Dict[str, Any]:
         """Calculate support and resistance levels"""
-        df = get_ohlc_data(ticker, "1y", "1d")
+        start_date, end_date = self._convert_period_to_dates("1y")
+        df = get_ohlc_data(ticker, start_date, end_date, "1d")
         if df.empty:
             return {"error": "No data available"}
             
@@ -313,7 +336,8 @@ class TechnicalAnalysis:
     
     def identify_patterns(self, ticker: str) -> Dict[str, Any]:
         """Identify chart patterns"""
-        df = get_ohlc_data(ticker, "6mo", "1d")
+        start_date, end_date = self._convert_period_to_dates("6mo")
+        df = get_ohlc_data(ticker, start_date, end_date, "1d")
         if df.empty:
             return {"error": "No data available"}
             
@@ -327,7 +351,8 @@ class TechnicalAnalysis:
     
     def get_trading_signals(self, ticker: str) -> Dict[str, Any]:
         """Generate trading signals based on multiple indicators"""
-        df = get_ohlc_data(ticker, "3mo", "1d")
+        start_date, end_date = self._convert_period_to_dates("3mo")
+        df = get_ohlc_data(ticker, start_date, end_date, "1d")
         if df.empty:
             return {"error": "No data available"}
             

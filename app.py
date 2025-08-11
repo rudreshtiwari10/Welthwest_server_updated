@@ -6,7 +6,7 @@ from flask_jwt_extended import (
 )
 from services.stock_service import (
     get_historical_data, get_live_data, validate_ticker,
-    get_ohlc_data, get_market_indices, get_top_gainers_losers
+    get_ohlc_data, get_market_indices, get_top_gainers_losers, get_stock_fundamentals
 )
 from services.upstox_service import upstox_api
 from services.utils import normalize_data, calculate_statistics
@@ -110,6 +110,11 @@ def create_app():
     app.config["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "dev-secret-key")
     app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=1)
     app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=30)
+    
+    # Add clock skew tolerance to handle timing issues (especially with Google Auth)
+    # This allows tokens to be valid 30 seconds before their nbf (not before) time
+    # and 30 seconds after their exp (expires) time to handle clock drift
+    app.config["JWT_DECODE_LEEWAY"] = timedelta(seconds=int(os.environ.get("JWT_DECODE_LEEWAY", 30)))
     
     # Configure CORS with specific origins
     frontend_url = os.environ.get("FRONTEND_URL", "*")
@@ -254,17 +259,32 @@ def google_auth():
         token = data.get('token')
         
         if not token:
+            logger.warning("Google auth attempted without token")
             return jsonify({"error": "Token is required"}), 400
             
+        logger.info("Processing Google authentication request")
+        
         google_auth_service = GoogleAuthService()
         user = google_auth_service.verify_google_token(token)
         
         if not user:
+            logger.warning("Google token verification failed")
             return jsonify({"error": "Invalid Google token"}), 401
             
-        # Create access and refresh tokens
+        logger.info(f"Google token verified successfully for user: {user.get('email', 'unknown')}")
+        
+        # Create access and refresh tokens with current timestamp
+        import time
+        current_time = int(time.time())
+        logger.info(f"Creating JWT tokens at timestamp: {current_time}")
+        
         access_token = create_access_token(identity=str(user['_id']))
         refresh_token = create_refresh_token(identity=str(user['_id']))
+        
+        logger.info("JWT tokens created successfully for Google user")
+        
+        # Store refresh token
+        user_service.store_refresh_token(user['_id'], refresh_token)
         
         return jsonify({
             "access_token": access_token,
@@ -279,8 +299,8 @@ def google_auth():
         }), 200
         
     except Exception as e:
-        logger.error(f"Error in Google authentication: {str(e)}")
-        return jsonify({"error": "Authentication failed"}), 500
+        logger.error(f"Error in Google authentication: {str(e)}", exc_info=True)
+        return jsonify({"error": "Authentication failed", "details": str(e)}), 500
 
 @app.route('/api/auth/login', methods=['POST'])
 @validate_json_request
@@ -527,13 +547,17 @@ def anonymous_chat():
         # Clean the entire AI response for JSON serialization
         clean_ai_response = convert_to_serializable(ai_response)
         
+        # Get updated usage information
+        remaining_usage = session_service.get_remaining_usage(session_id)
+        
         # Prepare response data with explicit type conversions
         response_data = {
             "session_id": str(session_id),
             "response": str(clean_ai_response.get('analysis', 'Sorry, I could not process your request.')),
             "model": str(clean_ai_response.get('model', model)),
             "stock_data": clean_ai_response.get('stock_data', {}),
-            "remaining_messages": int(remaining) if remaining > 0 else 0,
+            "remaining_messages": int(remaining) if remaining > 0 else 0,  # Legacy field for backward compatibility
+            "remaining_usage": remaining_usage,
             "login_required": bool(login_required)
         }
         
@@ -546,6 +570,154 @@ def anonymous_chat():
         logger.error(f"Error in anonymous chat endpoint: {str(e)}", exc_info=True)
         return jsonify({
             "error": "An unexpected error occurred",
+            "details": str(e)
+        }), 500
+
+# Anonymous Backtesting endpoint with session tracking
+@app.route('/api/backtest/anonymous', methods=['POST'])
+@validate_json_request
+def anonymous_backtest():
+    """Run backtest using session-based usage tracking"""
+    try:
+        data = request.get_json()
+        
+        # Get or create session ID
+        session_id = data.get('session_id')
+        if not session_id:
+            session_id = session_service.create_anonymous_session()
+            return jsonify({
+                "session_id": session_id,
+                "message": "Please include this session_id in future requests",
+                "login_required": False
+            }), 200
+        
+        # Check if user can run more backtests
+        can_backtest = session_service.check_can_backtest(session_id)
+        if not can_backtest:
+            remaining_usage = session_service.get_remaining_usage(session_id)
+            return jsonify({
+                "error": "Backtest limit reached",
+                "login_required": True,
+                "remaining_usage": remaining_usage
+            }), 403
+        
+        # Remove session_id from parameters before processing
+        backtest_params = {k: v for k, v in data.items() if k != 'session_id'}
+        
+        # Initialize backtesting service
+        backtesting_service = BacktestingService()
+        
+        # Run the backtest
+        result = backtesting_service.comprehensive_backtest(
+            ticker=backtest_params.get('stock_symbol'),
+            selected_indicators=backtest_params.get('selected_indicators', {}),
+            voting_threshold=backtest_params.get('voting_threshold', 0.6),
+            period=backtest_params.get('period', '1y'),
+            timeframe=backtest_params.get('timeframe', '1d'),
+            initial_capital=backtest_params.get('initial_capital', 100000),
+            position_size_pct=backtest_params.get('position_size_pct', 0.1),
+            risk_reward_ratio=backtest_params.get('risk_reward_ratio', 2.0),
+            max_drawdown_pct=backtest_params.get('max_drawdown_pct', 0.05),
+            monte_carlo_simulations=backtest_params.get('monte_carlo_simulations', 1000),
+            confidence_level=backtest_params.get('confidence_level', 0.95)
+        )
+        
+        # Update usage count
+        session_service.update_backtest_count(session_id)
+        
+        # Get updated usage information
+        remaining_usage = session_service.get_remaining_usage(session_id)
+        
+        return jsonify({
+            "success": True,
+            "data": result,
+            "session_id": session_id,
+            "remaining_usage": remaining_usage,
+            "login_required": remaining_usage['backtests'] <= 0 if remaining_usage else False
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in anonymous backtest endpoint: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": "An unexpected error occurred during backtesting",
+            "details": str(e)
+        }), 500
+
+# Anonymous AI Analysis endpoint with session tracking
+@app.route('/api/ai-analysis/anonymous', methods=['POST'])
+@validate_json_request
+def anonymous_ai_analysis():
+    """Run AI analysis using session-based usage tracking"""
+    try:
+        data = request.get_json()
+        
+        # Get or create session ID
+        session_id = data.get('session_id')
+        if not session_id:
+            session_id = session_service.create_anonymous_session()
+            return jsonify({
+                "session_id": session_id,
+                "message": "Please include this session_id in future requests",
+                "login_required": False
+            }), 200
+        
+        # Check if user can run more AI analyses
+        can_analyze = session_service.check_can_ai_analyze(session_id)
+        if not can_analyze:
+            remaining_usage = session_service.get_remaining_usage(session_id)
+            return jsonify({
+                "error": "AI analysis limit reached",
+                "login_required": True,
+                "remaining_usage": remaining_usage
+            }), 403
+        
+        # Get parameters
+        ticker = data.get('ticker')
+        period = data.get('period', '1y')
+        
+        if not ticker:
+            return jsonify({"error": "Ticker is required"}), 400
+        
+        # Run AI analysis components
+        prediction_result = None
+        analysis_result = None
+        recommendations_result = None
+        training_result = None
+        
+        try:
+            # Get prediction
+            prediction_result = market_regime_service.predict_regime(ticker)
+            
+            # Get comprehensive analysis
+            analysis_result = market_regime_service.get_analysis(ticker)
+            
+            # Get recommendations
+            recommendations_result = market_regime_service.get_recommendations(ticker)
+            
+        except Exception as ai_error:
+            logger.warning(f"Some AI analysis components failed: {str(ai_error)}")
+        
+        # Update usage count
+        session_service.update_ai_analysis_count(session_id)
+        
+        # Get updated usage information
+        remaining_usage = session_service.get_remaining_usage(session_id)
+        
+        return jsonify({
+            "success": True,
+            "prediction": prediction_result,
+            "analysis": analysis_result,
+            "recommendations": recommendations_result,
+            "training_result": training_result,
+            "session_id": session_id,
+            "remaining_usage": remaining_usage,
+            "login_required": remaining_usage['ai_analyses'] <= 0 if remaining_usage else False
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in anonymous AI analysis endpoint: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": "An unexpected error occurred during AI analysis",
             "details": str(e)
         }), 500
 
@@ -1279,6 +1451,66 @@ def top_gainers_losers():
         logger.error(f"Error in top gainers/losers endpoint: {str(e)}")
         return jsonify({"error": str(e), "message": "Failed to fetch top gainers and losers data"}), 500
 
+@app.route('/api/stock/fundamentals', methods=['GET'])
+def stock_fundamentals():
+    """
+    Get comprehensive fundamental analysis data for Indian stocks
+    Including balance sheet, financial ratios, and key metrics
+    
+    Parameters:
+    - ticker: Stock ticker symbol (e.g., RELIANCE, TCS)
+    
+    Returns:
+    - Valuation ratios (P/E, P/B, P/S, EV/EBITDA)
+    - Profitability ratios (ROE, ROA, ROIC, margins)
+    - Financial health ratios (current ratio, quick ratio, debt/equity)
+    - Balance sheet summary (assets, liabilities, equity in crores)
+    - Market performance metrics (52-week high/low, dividend yield, beta)
+    - Key financial metrics (revenue, net income, EPS, etc.)
+    """
+    ticker = request.args.get('ticker', type=str)
+    
+    if not ticker:
+        return jsonify({"error": "Ticker symbol is required"}), 400
+    
+    ticker = ticker.upper()
+    
+    # Validate the ticker
+    if not validate_ticker(ticker):
+        return jsonify({
+            "error": f"Invalid ticker symbol: {ticker}",
+            "message": "Please provide a valid Indian stock ticker symbol"
+        }), 400
+    
+    try:
+        logger.info(f"Fetching fundamentals data for {ticker}")
+        fundamentals_data = get_stock_fundamentals(ticker)
+        
+        # Check if there was an error in fetching data
+        if 'error' in fundamentals_data:
+            logger.warning(f"Error in fundamentals data for {ticker}: {fundamentals_data['error']}")
+            return jsonify({
+                "ticker": ticker,
+                "message": f"Limited data available for {ticker}",
+                "data": fundamentals_data
+            }), 200
+        
+        logger.info(f"Successfully fetched fundamentals for {ticker}")
+        return jsonify({
+            "ticker": ticker,
+            "data": fundamentals_data,
+            "status": "success",
+            "message": f"Fundamental analysis data for {ticker}"
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in stock fundamentals endpoint for {ticker}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "ticker": ticker,
+            "message": "Failed to fetch fundamental analysis data"
+        }), 500
+
 # AI Chat endpoint
 @app.route('/api/market/chat', methods=['POST'])
 @jwt_required()
@@ -1904,98 +2136,6 @@ def calculate_performance_metrics(signals, df):
         "trades": trades
     }
 
-@app.route('/api/backtesting/run', methods=['POST'])
-@jwt_required()
-@validate_json_request
-@require_subscription_feature('backtest')
-def run_backtest():
-    """Run a backtest with the specified parameters"""
-    try:
-        data = request.get_json()
-        
-        # Validate required fields
-        required_fields = ['ticker', 'start_date', 'end_date', 'indicators', 'position_size', 'initial_capital']
-        for field in required_fields:
-            if field not in data:
-                return jsonify({"error": f"Missing required field: {field}"}), 400
-        
-        # Validate indicators format
-        if not isinstance(data['indicators'], list):
-            return jsonify({"error": "Indicators must be a list"}), 400
-            
-        for indicator in data['indicators']:
-            if not isinstance(indicator, dict):
-                return jsonify({"error": "Each indicator must be an object"}), 400
-            if 'type' not in indicator:
-                return jsonify({"error": "Each indicator must have a type"}), 400
-            if 'parameters' not in indicator and 'params' not in indicator:
-                return jsonify({"error": f"Parameters must be specified for indicator {indicator['type']}"}), 400
-        
-        # Initialize backtesting service if not already initialized
-        if not hasattr(app, 'backtesting_service'):
-            from services.backtesting_service import BacktestingService
-            app.backtesting_service = BacktestingService()
-        
-        # Extract and validate all parameters
-        params = {
-            'ticker': data['ticker'],
-            'start_date': data['start_date'],
-            'end_date': data['end_date'],
-            'indicators': data['indicators'],
-            'initial_capital': float(data['initial_capital']),
-            'position_size': float(data['position_size']),
-            'timeframe': data.get('timeframe', '1d'),
-            'stop_loss': int(data['stop_loss']) if 'stop_loss' in data else None,
-            'take_profit': int(data['take_profit']) if 'take_profit' in data else None,
-            'position_sizing_method': data.get('position_sizing_method', 'fixed'),
-            'kelly_fraction': float(data['kelly_fraction']) if 'kelly_fraction' in data else None,
-            
-            # Disable regime detection for improved calculation
-            'enable_regime_filter': False,
-            
-            # Risk Management Parameters
-            'max_drawdown': float(data['max_drawdown']) if 'max_drawdown' in data else None,
-            'max_positions': int(data['max_positions']) if 'max_positions' in data else None,
-            'sector_exposure_limit': float(data['sector_exposure_limit']) if 'sector_exposure_limit' in data else None,
-            'consecutive_loss_limit': int(data['consecutive_loss_limit']) if 'consecutive_loss_limit' in data else None,
-            'daily_loss_limit': float(data['daily_loss_limit']) if 'daily_loss_limit' in data else None,
-            'weekly_loss_limit': float(data['weekly_loss_limit']) if 'weekly_loss_limit' in data else None,
-            
-            # Portfolio Constraints
-            'max_allocation': float(data['max_allocation']) if 'max_allocation' in data else None,
-            'margin_requirement': float(data['margin_requirement']) if 'margin_requirement' in data else None,
-            'margin_interest': float(data['margin_interest']) if 'margin_interest' in data else None,
-            'min_cash_reserve': float(data['min_cash_reserve']) if 'min_cash_reserve' in data else None,
-            
-            # Correlation Settings
-            'correlation_threshold': float(data['correlation_threshold']) if 'correlation_threshold' in data else None,
-            'benchmark_symbol': data.get('benchmark_symbol')
-        }
-        
-        # Run backtest with all parameters
-        results = app.backtesting_service.run_backtest(**params)
-        
-        # Save backtest result for the user
-        try:
-            user_id = get_jwt_identity()
-            backtest_data = {
-                'params': params,
-                'results': results,
-                'timestamp': pd.Timestamp.now().isoformat()
-            }
-            user_service.save_backtest_result(user_id, backtest_data)
-            logger.info(f"Backtest result saved for user {user_id}")
-        except Exception as e:
-            logger.warning(f"Failed to save backtest result: {str(e)}")
-        
-        return jsonify(results), 200
-        
-    except ValueError as e:
-        logger.warning(f"Validation error in backtest: {str(e)}")
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        logger.error(f"Error running backtest: {str(e)}", exc_info=True)
-        return jsonify({"error": "An error occurred while running the backtest"}), 500 
 
 @app.route('/api/backtesting/newrun', methods=['POST'])
 @jwt_required()

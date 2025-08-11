@@ -6,6 +6,8 @@ DB_NAME=welthwest
 JWT_SECRET_KEY=your-secret-key
 JWT_ACCESS_TOKEN_EXPIRES=3600
 JWT_REFRESH_TOKEN_EXPIRES=2592000
+# JWT clock skew tolerance in seconds (helps with timing issues like Google Auth)
+JWT_DECODE_LEEWAY=30
 
 # Redis Configuration
 REDIS_HOST=localhost

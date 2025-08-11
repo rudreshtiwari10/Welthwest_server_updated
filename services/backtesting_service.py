@@ -3040,4 +3040,116 @@ class BacktestingService:
                 max_allocation, margin_requirement, margin_interest,
                 min_cash_reserve, position_sizing_method, kelly_fraction,
                 correlation_threshold, benchmark_data
-            ) 
+            )
+
+    def comprehensive_backtest(
+        self,
+        ticker: str,
+        selected_indicators: Dict[str, Any],
+        voting_threshold: float = 0.6,
+        period: str = '1y',
+        timeframe: str = '1d',
+        initial_capital: float = 100000,
+        position_size_pct: float = 0.1,
+        risk_reward_ratio: float = 2.0,
+        max_drawdown_pct: float = 0.05,
+        monte_carlo_simulations: int = 1000,
+        confidence_level: float = 0.95
+    ) -> Dict[str, Any]:
+        """
+        Comprehensive backtest method that bridges to IndianStockStrategyBuilder
+        This method provides the interface expected by the API endpoints
+        """
+        try:
+            # Import the engine here to avoid circular imports
+            from services.backtesting_engine import IndianStockStrategyBuilder
+            
+            # Initialize the builder
+            builder = IndianStockStrategyBuilder()
+            
+            # Fetch stock data
+            df = builder.fetch_stock_data(ticker, period, timeframe)
+            if df is None or df.empty:
+                raise ValueError(f"No data found for symbol: {ticker}")
+            
+            # Calculate indicators
+            df = builder.calculate_indicators(df, selected_indicators)
+            
+            # Generate voting signals
+            df = builder.generate_voting_signals(df, selected_indicators, voting_threshold)
+            
+            # Run backtest
+            trades_df, equity_df, metrics = builder.backtest_strategy(
+                df, initial_capital, position_size_pct, risk_reward_ratio, max_drawdown_pct
+            )
+            
+            # Generate charts
+            charts = builder.create_comprehensive_charts(df, trades_df, equity_df)
+            
+            # Create trades list in the expected format
+            trades = []
+            if not trades_df.empty:
+                for _, trade in trades_df.iterrows():
+                    trades.append({
+                        'Entry_Date': trade.get('Entry_Date', ''),
+                        'Exit_Date': trade.get('Exit_Date', ''),
+                        'Entry_Price': float(trade.get('Entry_Price', 0)),
+                        'Exit_Price': float(trade.get('Exit_Price', 0)),
+                        'Position_Size': float(trade.get('Position_Size', 0)),
+                        'Direction': trade.get('Direction', 'Long'),
+                        'PnL': float(trade.get('PnL', 0)),
+                        'Return_Pct': float(trade.get('Return_Pct', 0)),
+                        'Exit_Reason': trade.get('Exit_Reason', 'Signal')
+                    })
+            
+            # Create equity curve data
+            equity_curve = []
+            if not equity_df.empty:
+                for _, point in equity_df.iterrows():
+                    equity_curve.append({
+                        'Date': point.get('Date', ''),
+                        'Equity': float(point.get('Equity', 0)),
+                        'Capital': float(point.get('Capital', 0)),
+                        'Position': float(point.get('Position', 0)),
+                        'Price': float(point.get('Price', 0)),
+                        'Drawdown': float(point.get('Drawdown', 0))
+                    })
+            
+            # Run Monte Carlo simulation if requested
+            monte_carlo = None
+            if monte_carlo_simulations > 0 and not trades_df.empty:
+                mc_stats, mc_results = builder.monte_carlo_analysis(
+                    trades_df, initial_capital, monte_carlo_simulations, confidence_level
+                )
+                monte_carlo = {
+                    'statistics': mc_stats,
+                    'results': mc_results
+                }
+            
+            # Prepare the result in the expected format
+            result = {
+                'metrics': metrics,
+                'trades': trades,
+                'equity_curve': equity_curve,
+                'stock_data': df.to_dict('records'),
+                'charts': charts,
+                'monte_carlo': monte_carlo,
+                'summary': {
+                    'symbol': ticker,
+                    'period': period,
+                    'timeframe': timeframe,
+                    'total_data_points': len(df),
+                    'indicators_used': list(selected_indicators.keys()),
+                    'voting_threshold': voting_threshold,
+                    'backtest_period': {
+                        'start_date': df.iloc[0]['Date'].strftime('%Y-%m-%d') if not df.empty else '',
+                        'end_date': df.iloc[-1]['Date'].strftime('%Y-%m-%d') if not df.empty else ''
+                    }
+                }
+            }
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in comprehensive_backtest: {str(e)}")
+            raise e 

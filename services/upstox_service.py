@@ -251,6 +251,7 @@ class UpstoxAPI:
         indices_keys = [
             'NSE_INDEX|Nifty 50',
             'NSE_INDEX|Nifty Bank',
+            'NSE_INDEX|Nifty IT',
             'BSE_INDEX|SENSEX'
         ]
         
@@ -269,6 +270,8 @@ def format_upstox_ticker(ticker_symbol):
         return "NSE_INDEX|Nifty 50"
     if ticker_symbol.upper() == "BANKNIFTY":
         return "NSE_INDEX|Nifty Bank"
+    if ticker_symbol.upper() == "NIFTYIT":
+        return "NSE_INDEX|Nifty IT"
     if ticker_symbol.upper() == "SENSEX":
         return "BSE_INDEX|SENSEX"
     
@@ -372,9 +375,10 @@ def get_upstox_live_data(ticker_symbols):
             original_symbol = symbol_to_instrument.get(instrument_key)
             if original_symbol and data:
                 formatted_data[original_symbol] = {
+                    'name': original_symbol,  # Add name field for consistency
                     'price': data.get('last_price', 0),
                     'change': data.get('net_change', 0),
-                    'change_percent': data.get('percent_change', 0),
+                    'percentChange': data.get('percent_change', 0),  # Map to percentChange for consistency
                     'volume': data.get('volume', 0),
                     'dayHigh': data.get('ohlc', {}).get('high', 0),
                     'dayLow': data.get('ohlc', {}).get('low', 0),
@@ -402,14 +406,25 @@ def get_upstox_market_indices():
     try:
         indices_data = upstox_api.get_market_indices()
         
-        # Format data similar to yfinance
+        # Define proper mapping for instrument keys to display names
+        index_names = {
+            'NSE_INDEX|Nifty 50': 'NIFTY 50',
+            'NSE_INDEX|Nifty Bank': 'NIFTY BANK',
+            'NSE_INDEX|Nifty IT': 'NIFTY IT',
+            'BSE_INDEX|SENSEX': 'BSE SENSEX'
+        }
+        
+        # Format data similar to yfinance - use consistent field names
         formatted_indices = {}
         for key, data in indices_data.items():
             if data:
+                # Map to the expected frontend field names
                 formatted_indices[key] = {
+                    'name': index_names.get(key, key),  # Use proper display name
                     'price': data.get('last_price', 0),
                     'change': data.get('net_change', 0),
-                    'change_percent': data.get('percent_change', 0)
+                    'percentChange': data.get('percent_change', 0),  # Map to percentChange for frontend
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 }
         
         return formatted_indices

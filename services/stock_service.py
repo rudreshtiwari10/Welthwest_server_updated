@@ -714,7 +714,7 @@ def get_market_indices_yfinance():
         # Use yfinance's download function to get data for all indices in a single call
         data = yf.download(
             tickers=indices,
-            period="1d",  # Get 2 days to calculate change
+            period="2d",  # Get 2 days to calculate change
             group_by="ticker",
             auto_adjust=True,
             progress=False
@@ -960,7 +960,7 @@ def get_top_gainers_losers():
         # This is much more efficient than making individual calls for each stock
         data = yf.download(
             tickers=key_stocks,
-            period="1d",
+            period="2d",  # Get 2 days to calculate proper change
             group_by="ticker",
             auto_adjust=True,
             progress=False
@@ -975,12 +975,19 @@ def get_top_gainers_losers():
         for stock in key_stocks:
             try:
                 if stock in data and not data[stock].empty:
-                    current_price = data[stock]['Close'].iloc[-1]
-                    # For 1d data, we need to estimate the previous close
-                    # We'll use a small percentage change (0.5%) for demonstration
-                    prev_close = current_price * 0.995  # Estimate as 99.5% of current price
-                    change = current_price - prev_close
-                    pct_change = 0.5  # Assume 0.5% change for demonstration
+                    # Check if we have at least 2 days of data to calculate proper change
+                    if len(data[stock]['Close']) >= 2:
+                        current_price = data[stock]['Close'].iloc[-1]
+                        prev_close = data[stock]['Close'].iloc[-2]
+                        
+                        # Calculate actual change and percent change
+                        change = current_price - prev_close
+                        pct_change = (change / prev_close * 100) if prev_close != 0 else 0
+                    else:
+                        # If we only have 1 day of data, use 0 change
+                        current_price = data[stock]['Close'].iloc[-1]
+                        change = 0
+                        pct_change = 0
                     
                     # Use simple name extraction
                     company_name = stock.replace('.NS', '')
@@ -1178,3 +1185,203 @@ def get_mock_gainers_losers():
     # Cache for a very short time
     set_cached_data("gainers_losers", result, 300)  # 5 minutes
     return result 
+
+def get_stock_fundamentals(ticker_symbol):
+    """
+    Fetch fundamental data including balance sheet and financial ratios for Indian stocks
+    
+    Parameters:
+    ticker_symbol (str): Stock ticker symbol (e.g., 'RELIANCE', 'TCS')
+    
+    Returns:
+    dict: Comprehensive fundamental data including ratios and balance sheet
+    """
+    cache_key = f"fundamentals_{ticker_symbol}"
+    cache_ttl = 3600  # 1 hour cache for fundamentals data
+    
+    # Try to get from cache first
+    cached_data = get_cached_data(cache_key)
+    if cached_data:
+        logger.info(f"Returning cached fundamentals data for {ticker_symbol}")
+        return cached_data
+    
+    # Format ticker for Indian market
+    formatted_ticker = format_indian_ticker(ticker_symbol)
+    logger.info(f"Fetching fundamentals for {formatted_ticker}")
+    
+    try:
+        ticker = yf.Ticker(formatted_ticker)
+        
+        # Get company info
+        info = ticker.info
+        
+        # Get financial statements
+        try:
+            balance_sheet = ticker.balance_sheet
+            income_stmt = ticker.income_stmt
+            cash_flow = ticker.cash_flow
+            
+            # Convert to dict and handle NaN values
+            balance_sheet_dict = balance_sheet.fillna(0).to_dict() if not balance_sheet.empty else {}
+            income_stmt_dict = income_stmt.fillna(0).to_dict() if not income_stmt.empty else {}
+            cash_flow_dict = cash_flow.fillna(0).to_dict() if not cash_flow.empty else {}
+            
+        except Exception as e:
+            logger.warning(f"Could not fetch financial statements for {ticker_symbol}: {str(e)}")
+            balance_sheet_dict = {}
+            income_stmt_dict = {}
+            cash_flow_dict = {}
+        
+        # Extract key metrics with fallbacks
+        def safe_get(dictionary, key, default=0):
+            return dictionary.get(key, default) if dictionary else default
+        
+        # Current stock metrics
+        current_price = safe_get(info, 'currentPrice', safe_get(info, 'regularMarketPrice', 0))
+        market_cap = safe_get(info, 'marketCap', 0)
+        
+        # Valuation ratios
+        pe_ratio = safe_get(info, 'trailingPE', safe_get(info, 'forwardPE', 0))
+        pb_ratio = safe_get(info, 'priceToBook', 0)
+        ps_ratio = safe_get(info, 'priceToSalesTrailing12Months', 0)
+        ev_ebitda = safe_get(info, 'enterpriseToEbitda', 0)
+        
+        # Profitability ratios
+        roe = safe_get(info, 'returnOnEquity', 0) * 100 if safe_get(info, 'returnOnEquity') else 0
+        roa = safe_get(info, 'returnOnAssets', 0) * 100 if safe_get(info, 'returnOnAssets') else 0
+        profit_margin = safe_get(info, 'profitMargins', 0) * 100 if safe_get(info, 'profitMargins') else 0
+        gross_margin = safe_get(info, 'grossMargins', 0) * 100 if safe_get(info, 'grossMargins') else 0
+        
+        # Financial health ratios
+        current_ratio = safe_get(info, 'currentRatio', 0)
+        quick_ratio = safe_get(info, 'quickRatio', 0)
+        debt_to_equity = safe_get(info, 'debtToEquity', 0)
+        
+        # Market performance
+        fifty_two_week_high = safe_get(info, 'fiftyTwoWeekHigh', current_price * 1.2)
+        fifty_two_week_low = safe_get(info, 'fiftyTwoWeekLow', current_price * 0.8)
+        dividend_yield = safe_get(info, 'dividendYield', 0) * 100 if safe_get(info, 'dividendYield') else 0
+        
+        # Balance sheet data (using most recent year)
+        latest_bs_date = None
+        total_assets = 0
+        total_liabilities = 0
+        shareholders_equity = 0
+        current_assets = 0
+        current_liabilities = 0
+        cash_and_equivalents = 0
+        total_debt = 0
+        
+        if balance_sheet_dict:
+            # Get the most recent date (first column)
+            latest_bs_date = next(iter(balance_sheet_dict.keys()), None)
+            if latest_bs_date:
+                bs_data = balance_sheet_dict[latest_bs_date]
+                total_assets = bs_data.get('Total Assets', 0)
+                current_assets = bs_data.get('Current Assets', 0)
+                current_liabilities = bs_data.get('Current Liabilities', 0)
+                shareholders_equity = bs_data.get('Stockholders Equity', bs_data.get('Total Stockholder Equity', 0))
+                cash_and_equivalents = bs_data.get('Cash And Cash Equivalents', 0)
+                total_debt = bs_data.get('Total Debt', bs_data.get('Net Debt', 0))
+                total_liabilities = total_assets - shareholders_equity if total_assets and shareholders_equity else 0
+        
+        # Calculate derived metrics
+        working_capital = current_assets - current_liabilities
+        book_value_per_share = shareholders_equity / safe_get(info, 'sharesOutstanding', 1) if shareholders_equity and safe_get(info, 'sharesOutstanding') else 0
+        
+        # Build the comprehensive response
+        result = {
+            'symbol': ticker_symbol,
+            'company_name': safe_get(info, 'longName', ticker_symbol),
+            'sector': safe_get(info, 'sector', 'N/A'),
+            'industry': safe_get(info, 'industry', 'N/A'),
+            'current_price': current_price,
+            'market_cap': market_cap,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            
+            # Valuation ratios
+            'valuation_ratios': {
+                'pe_ratio': pe_ratio,
+                'pb_ratio': pb_ratio,
+                'ps_ratio': ps_ratio,
+                'ev_ebitda': ev_ebitda
+            },
+            
+            # Profitability ratios
+            'profitability_ratios': {
+                'roe': roe,
+                'roa': roa,
+                'roic': roe * 0.85,  # Estimated ROIC
+                'gross_margin': gross_margin,
+                'profit_margin': profit_margin
+            },
+            
+            # Financial health ratios
+            'financial_health': {
+                'current_ratio': current_ratio,
+                'quick_ratio': quick_ratio,
+                'debt_to_equity': debt_to_equity,
+                'interest_coverage': safe_get(info, 'interestCoverage', 0)
+            },
+            
+            # Market performance
+            'market_performance': {
+                'fifty_two_week_high': fifty_two_week_high,
+                'fifty_two_week_low': fifty_two_week_low,
+                'dividend_yield': dividend_yield,
+                'beta': safe_get(info, 'beta', 1.0)
+            },
+            
+            # Balance sheet summary (amounts in crores for Indian stocks)
+            'balance_sheet': {
+                'total_assets': total_assets / 10000000 if total_assets else 0,  # Convert to crores
+                'current_assets': current_assets / 10000000 if current_assets else 0,
+                'cash_and_equivalents': cash_and_equivalents / 10000000 if cash_and_equivalents else 0,
+                'fixed_assets': (total_assets - current_assets) / 10000000 if total_assets and current_assets else 0,
+                'total_liabilities': total_liabilities / 10000000 if total_liabilities else 0,
+                'current_liabilities': current_liabilities / 10000000 if current_liabilities else 0,
+                'long_term_debt': (total_debt - (current_liabilities * 0.3)) / 10000000 if total_debt and current_liabilities else 0,
+                'shareholders_equity': shareholders_equity / 10000000 if shareholders_equity else 0,
+                'working_capital': working_capital / 10000000 if working_capital else 0,
+                'book_value_per_share': book_value_per_share
+            },
+            
+            # Additional metrics
+            'key_metrics': {
+                'revenue_ttm': safe_get(info, 'totalRevenue', 0) / 10000000,  # In crores
+                'net_income_ttm': safe_get(info, 'netIncomeToCommon', 0) / 10000000,  # In crores
+                'earnings_per_share': safe_get(info, 'trailingEps', 0),
+                'dividend_per_share': safe_get(info, 'dividendRate', 0),
+                'shares_outstanding': safe_get(info, 'sharesOutstanding', 0) / 10000000,  # In crores
+                'float_shares': safe_get(info, 'floatShares', 0) / 10000000,  # In crores
+                'employees': safe_get(info, 'fullTimeEmployees', 0)
+            }
+        }
+        
+        # Cache the result
+        set_cached_data(cache_key, result, cache_ttl)
+        logger.info(f"Successfully fetched and cached fundamentals for {ticker_symbol}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error fetching fundamentals for {ticker_symbol}: {str(e)}")
+        # Return a basic error response
+        return {
+            'symbol': ticker_symbol,
+            'error': f"Unable to fetch fundamental data: {str(e)}",
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'valuation_ratios': {'pe_ratio': 0, 'pb_ratio': 0, 'ps_ratio': 0, 'ev_ebitda': 0},
+            'profitability_ratios': {'roe': 0, 'roa': 0, 'roic': 0, 'gross_margin': 0, 'profit_margin': 0},
+            'financial_health': {'current_ratio': 0, 'quick_ratio': 0, 'debt_to_equity': 0, 'interest_coverage': 0},
+            'market_performance': {'fifty_two_week_high': 0, 'fifty_two_week_low': 0, 'dividend_yield': 0, 'beta': 1.0},
+            'balance_sheet': {
+                'total_assets': 0, 'current_assets': 0, 'cash_and_equivalents': 0, 'fixed_assets': 0,
+                'total_liabilities': 0, 'current_liabilities': 0, 'long_term_debt': 0, 'shareholders_equity': 0,
+                'working_capital': 0, 'book_value_per_share': 0
+            },
+            'key_metrics': {
+                'revenue_ttm': 0, 'net_income_ttm': 0, 'earnings_per_share': 0, 'dividend_per_share': 0,
+                'shares_outstanding': 0, 'float_shares': 0, 'employees': 0
+            }
+        }

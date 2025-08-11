@@ -316,17 +316,20 @@ class UserService:
             backtest = {
                 "user_id": user_id,
                 "created_at": datetime.utcnow(),
-                "data": backtest_data,
+                "type": "backtest",
+                "backtest_data": backtest_data,  # Use consistent field name
                 "name": backtest_data.get("name", f"Backtest {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"),
-                "symbol": backtest_data.get("symbol", "Unknown"),
-                "strategy": backtest_data.get("strategy", "Custom"),
-                "performance": backtest_data.get("performance", {})
+                "symbol": backtest_data.get("stock_symbol", backtest_data.get("symbol", "Unknown")),
+                "strategy": backtest_data.get("strategy_type", backtest_data.get("strategy", "Custom")),
+                "performance": backtest_data.get("metrics", backtest_data.get("performance", {}))
             }
             
             # Insert backtest into database
             result = self.db.backtests.insert_one(backtest)
+            logger.info(f"Saved backtest for user {user_id}: {backtest['name']} ({backtest['symbol']})")
             return bool(result.inserted_id)
         except Exception as e:
+            logger.error(f"Error saving backtest result: {str(e)}")
             print(f"Error saving backtest result: {str(e)}")
             return False
     
@@ -354,12 +357,29 @@ class UserService:
     def save_chat_history(self, user_id: str, chat_data: Dict[str, Any]) -> bool:
         """Save chat history to user's history"""
         try:
+            # Generate dynamic title from user query (ChatGPT-like naming)
+            def generate_chat_title(query: str) -> str:
+                if not query:
+                    return f"Chat {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+                
+                # Clean and truncate the query for title
+                words = query.strip().split()[:5]  # First 5 words
+                title = ' '.join(words)
+                
+                # Truncate if too long
+                if len(title) > 50:
+                    title = title[:47] + '...'
+                
+                return title or f"Chat {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+            
             # Create chat document
+            chat_title = chat_data.get("title") or generate_chat_title(chat_data.get("query", ""))
             chat = {
                 "user_id": user_id,
                 "created_at": datetime.utcnow(),
                 "data": chat_data,
-                "name": chat_data.get("name", f"Chat {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"),
+                "title": chat_title,
+                "name": chat_title,  # Keep both for backward compatibility
                 "model": chat_data.get("model", "Unknown"),
                 "summary": chat_data.get("summary", "")
             }
@@ -372,33 +392,48 @@ class UserService:
             return False
     
     def get_user_backtests(self, user_id: str, limit: int = 10, skip: int = 0) -> List[Dict[str, Any]]:
-        """Get user's saved backtest results"""
+        """Get user's saved backtest results with full data"""
         try:
             backtests = list(self.db.backtests.find(
-                {"user_id": user_id},
-                {"data": 0}  # Exclude full data for listing
+                {"user_id": user_id}
+                # Include all data including results, metrics, charts, etc.
             ).sort("created_at", -1).skip(skip).limit(limit))
             
-            # Convert ObjectIds to strings
+            # Convert ObjectIds to strings and ensure consistent structure
             for backtest in backtests:
                 backtest["_id"] = str(backtest["_id"])
+                # Handle both old and new data structures
+                if "data" in backtest and "backtest_data" not in backtest:
+                    backtest["backtest_data"] = backtest["data"]
+                # Ensure backtest_data is available for dashboard display
+                if "backtest_data" not in backtest and "data" not in backtest:
+                    logger.warning(f"No backtest data found for backtest {backtest['_id']}")
             
+            logger.info(f"Retrieved {len(backtests)} backtests for user {user_id}")
             return backtests
         except Exception as e:
+            logger.error(f"Error getting user backtests: {str(e)}")
             print(f"Error getting user backtests: {str(e)}")
             return []
     
     def get_user_ai_analyses(self, user_id: str, limit: int = 10, skip: int = 0) -> List[Dict[str, Any]]:
         """Get user's saved AI analysis results"""
         try:
-            analyses = list(self.db.ai_analyses.find(
-                {"user_id": user_id},
-                {"data": 0}  # Exclude full data for listing
-            ).sort("created_at", -1).skip(skip).limit(limit))
+            # Return full documents including the nested analysis data
+            analyses = list(
+                self.db.ai_analyses
+                .find({"user_id": user_id})
+                .sort("created_at", -1)
+                .skip(skip)
+                .limit(limit)
+            )
             
             # Convert ObjectIds to strings
             for analysis in analyses:
                 analysis["_id"] = str(analysis["_id"])
+                # Backward compatibility: expose nested data under a stable key
+                if "analysis_data" not in analysis and "data" in analysis:
+                    analysis["analysis_data"] = analysis.get("data")
             
             return analyses
         except Exception as e:
@@ -412,9 +447,15 @@ class UserService:
                 {"user_id": user_id}
             ).sort("created_at", -1).skip(skip).limit(limit))
             
-            # Convert ObjectIds to strings
+            # Convert ObjectIds to strings and ensure title field
             for chat in chats:
                 chat["_id"] = str(chat["_id"])
+                # Ensure title field exists (use name as fallback for old records)
+                if "title" not in chat and "name" in chat:
+                    chat["title"] = chat["name"]
+                # Use timestamp as final fallback
+                if "title" not in chat or not chat["title"]:
+                    chat["title"] = f"Chat {chat.get('created_at', datetime.utcnow()).strftime('%Y-%m-%d %H:%M')}"
             
             return chats
         except Exception as e:
