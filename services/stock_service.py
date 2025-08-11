@@ -1234,7 +1234,11 @@ def get_stock_fundamentals(ticker_symbol):
         
         # Extract key metrics with fallbacks
         def safe_get(dictionary, key, default=0):
-            return dictionary.get(key, default) if dictionary else default
+            value = dictionary.get(key, default) if dictionary else default
+            # Handle NaN values
+            if value is None or (isinstance(value, float) and (value != value or value == float('inf') or value == float('-inf'))):
+                return default
+            return value
         
         # Current stock metrics
         current_price = safe_get(info, 'currentPrice', safe_get(info, 'regularMarketPrice', 0))
@@ -1246,23 +1250,7 @@ def get_stock_fundamentals(ticker_symbol):
         ps_ratio = safe_get(info, 'priceToSalesTrailing12Months', 0)
         ev_ebitda = safe_get(info, 'enterpriseToEbitda', 0)
         
-        # Profitability ratios
-        roe = safe_get(info, 'returnOnEquity', 0) * 100 if safe_get(info, 'returnOnEquity') else 0
-        roa = safe_get(info, 'returnOnAssets', 0) * 100 if safe_get(info, 'returnOnAssets') else 0
-        profit_margin = safe_get(info, 'profitMargins', 0) * 100 if safe_get(info, 'profitMargins') else 0
-        gross_margin = safe_get(info, 'grossMargins', 0) * 100 if safe_get(info, 'grossMargins') else 0
-        
-        # Financial health ratios
-        current_ratio = safe_get(info, 'currentRatio', 0)
-        quick_ratio = safe_get(info, 'quickRatio', 0)
-        debt_to_equity = safe_get(info, 'debtToEquity', 0)
-        
-        # Market performance
-        fifty_two_week_high = safe_get(info, 'fiftyTwoWeekHigh', current_price * 1.2)
-        fifty_two_week_low = safe_get(info, 'fiftyTwoWeekLow', current_price * 0.8)
-        dividend_yield = safe_get(info, 'dividendYield', 0) * 100 if safe_get(info, 'dividendYield') else 0
-        
-        # Balance sheet data (using most recent year)
+        # Balance sheet data (using most recent year) - Extract first before calculations
         latest_bs_date = None
         total_assets = 0
         total_liabilities = 0
@@ -1284,6 +1272,59 @@ def get_stock_fundamentals(ticker_symbol):
                 cash_and_equivalents = bs_data.get('Cash And Cash Equivalents', 0)
                 total_debt = bs_data.get('Total Debt', bs_data.get('Net Debt', 0))
                 total_liabilities = total_assets - shareholders_equity if total_assets and shareholders_equity else 0
+
+        # Profitability ratios
+        roe = safe_get(info, 'returnOnEquity', 0) * 100 if safe_get(info, 'returnOnEquity') else 0
+        roa = safe_get(info, 'returnOnAssets', 0) * 100 if safe_get(info, 'returnOnAssets') else 0
+        
+        # Calculate ROE and ROA manually if not available from info
+        if not roe and income_stmt_dict:
+            # ROE = Net Income / Shareholders Equity
+            latest_income_date = next(iter(income_stmt_dict.keys()), None)
+            if latest_income_date and shareholders_equity and shareholders_equity != 0:
+                net_income = income_stmt_dict[latest_income_date].get('Net Income', 0)
+                if net_income:
+                    roe = (net_income / shareholders_equity) * 100
+        
+        if not roa and income_stmt_dict:
+            # ROA = Net Income / Total Assets
+            latest_income_date = next(iter(income_stmt_dict.keys()), None)
+            if latest_income_date and total_assets and total_assets != 0:
+                net_income = income_stmt_dict[latest_income_date].get('Net Income', 0)
+                if net_income:
+                    roa = (net_income / total_assets) * 100
+        profit_margin = safe_get(info, 'profitMargins', 0) * 100 if safe_get(info, 'profitMargins') else 0
+        gross_margin = safe_get(info, 'grossMargins', 0) * 100 if safe_get(info, 'grossMargins') else 0
+        
+        # Financial health ratios - calculate manually if not available from info
+        current_ratio = safe_get(info, 'currentRatio', 0)
+        if not current_ratio and current_assets and current_liabilities and current_liabilities != 0:
+            current_ratio = current_assets / current_liabilities
+        
+        quick_ratio = safe_get(info, 'quickRatio', 0)
+        if not quick_ratio and current_assets and current_liabilities and current_liabilities != 0:
+            # Quick ratio = (Current Assets - Inventory) / Current Liabilities
+            # Approximating by using 80% of current assets (assuming 20% is inventory)
+            quick_ratio = (current_assets * 0.8) / current_liabilities
+        
+        debt_to_equity = safe_get(info, 'debtToEquity', 0)
+        if not debt_to_equity and total_debt and shareholders_equity and shareholders_equity != 0:
+            debt_to_equity = (total_debt / shareholders_equity) * 100
+        
+        # Calculate interest coverage ratio manually if not available
+        interest_coverage = safe_get(info, 'interestCoverage', 0)
+        if not interest_coverage and income_stmt_dict:
+            latest_income_date = next(iter(income_stmt_dict.keys()), None)
+            if latest_income_date:
+                ebit = income_stmt_dict[latest_income_date].get('EBIT', 0)
+                interest_expense = income_stmt_dict[latest_income_date].get('Interest Expense', 0)
+                if ebit and interest_expense and interest_expense != 0:
+                    interest_coverage = ebit / abs(interest_expense)  # Interest expense is usually negative
+        
+        # Market performance
+        fifty_two_week_high = safe_get(info, 'fiftyTwoWeekHigh', current_price * 1.2)
+        fifty_two_week_low = safe_get(info, 'fiftyTwoWeekLow', current_price * 0.8)
+        dividend_yield = safe_get(info, 'dividendYield', 0) * 100 if safe_get(info, 'dividendYield') else 0
         
         # Calculate derived metrics
         working_capital = current_assets - current_liabilities
@@ -1321,7 +1362,7 @@ def get_stock_fundamentals(ticker_symbol):
                 'current_ratio': current_ratio,
                 'quick_ratio': quick_ratio,
                 'debt_to_equity': debt_to_equity,
-                'interest_coverage': safe_get(info, 'interestCoverage', 0)
+                'interest_coverage': interest_coverage
             },
             
             # Market performance
