@@ -16,13 +16,14 @@ from services.subscription_service import SubscriptionService
 from services.razorpay_service import RazorpayPaymentService
 from services.email_service import email_service
 from services.google_auth_service import GoogleAuthService
+from services.feedback_service import feedback_service
 from middleware.subscription_middleware import require_subscription_feature, check_market_data_access
 import os
 import requests
 import logging
 import uuid
 import pandas as pd
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from config import get_config
 from datetime import timedelta
 from services.technical_analysis import TechnicalAnalysis
@@ -528,6 +529,293 @@ def reset_password():
         "message": message,
         "password_reset": True
     }), 200
+
+# Feedback API Endpoints
+@app.route('/api/feedback/submit', methods=['POST'])
+@validate_json_request
+def submit_feedback():
+    """Submit dynamic feedback form"""
+    try:
+        data = request.get_json()
+        
+        # Extract user IP and user agent for tracking
+        user_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR'))
+        user_agent = request.headers.get('User-Agent')
+        
+        # Add metadata to submission
+        data['ip_address'] = user_ip
+        data['user_agent'] = user_agent
+        
+        # Validate required fields
+        user_info = data.get('user_info', {})
+        if not user_info.get('email'):
+            return jsonify({"error": "User email is required"}), 400
+        
+        if not user_info.get('name'):
+            return jsonify({"error": "User name is required"}), 400
+        
+        responses = data.get('responses', [])
+        if not responses or not isinstance(responses, list):
+            return jsonify({"error": "Feedback responses are required"}), 400
+        
+        # Submit feedback
+        result = feedback_service.submit_feedback(data)
+        
+        if result['success']:
+            # Send notification emails
+            try:
+                # Send confirmation email to user
+                user_email = user_info.get('email')
+                user_name = user_info.get('name')
+                form_type = data.get('form_type', 'General Feedback')
+                
+                # Send user confirmation email
+                _send_feedback_confirmation_email(user_email, user_name, form_type, result['submission_id'])
+                
+                # Send notification to company
+                _send_feedback_notification_email(user_info, responses, form_type, result['submission_id'])
+                
+                logger.info(f"Feedback notification emails sent for submission {result['submission_id']}")
+            except Exception as e:
+                logger.error(f"Failed to send feedback emails: {str(e)}")
+                # Don't fail the request if email sending fails
+            
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error submitting feedback: {str(e)}")
+        return jsonify({
+            "error": "Failed to submit feedback. Please try again later."
+        }), 500
+
+@app.route('/api/feedback/list', methods=['GET'])
+@jwt_required()
+def get_feedback_list():
+    """Get feedback submissions (Admin only)"""
+    try:
+        # Get current user
+        current_user = get_jwt_identity()
+        user_data = user_service.get_user_by_email(current_user)
+        
+        # Check if user is admin (you might want to add admin role check here)
+        if not user_data or user_data.get('role') != 'admin':
+            return jsonify({"error": "Admin access required"}), 403
+        
+        # Get query parameters
+        form_type = request.args.get('form_type')
+        user_email = request.args.get('user_email')
+        limit = min(int(request.args.get('limit', 50)), 100)  # Max 100 results
+        skip = int(request.args.get('skip', 0))
+        
+        # Get feedback submissions
+        submissions = feedback_service.get_feedback_submissions(
+            form_type=form_type,
+            user_email=user_email,
+            limit=limit,
+            skip=skip
+        )
+        
+        return jsonify({
+            "submissions": submissions,
+            "count": len(submissions)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving feedback list: {str(e)}")
+        return jsonify({
+            "error": "Failed to retrieve feedback submissions"
+        }), 500
+
+@app.route('/api/feedback/<submission_id>', methods=['GET'])
+@jwt_required()
+def get_feedback_by_id(submission_id):
+    """Get specific feedback submission (Admin only)"""
+    try:
+        # Get current user
+        current_user = get_jwt_identity()
+        user_data = user_service.get_user_by_email(current_user)
+        
+        # Check if user is admin
+        if not user_data or user_data.get('role') != 'admin':
+            return jsonify({"error": "Admin access required"}), 403
+        
+        # Get feedback submission
+        submission = feedback_service.get_feedback_by_id(submission_id)
+        
+        if not submission:
+            return jsonify({"error": "Feedback submission not found"}), 404
+        
+        return jsonify(submission), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving feedback: {str(e)}")
+        return jsonify({
+            "error": "Failed to retrieve feedback submission"
+        }), 500
+
+@app.route('/api/feedback/statistics', methods=['GET'])
+@jwt_required()
+def get_feedback_statistics():
+    """Get feedback statistics (Admin only)"""
+    try:
+        # Get current user
+        current_user = get_jwt_identity()
+        user_data = user_service.get_user_by_email(current_user)
+        
+        # Check if user is admin
+        if not user_data or user_data.get('role') != 'admin':
+            return jsonify({"error": "Admin access required"}), 403
+        
+        # Get statistics
+        form_type = request.args.get('form_type')
+        stats = feedback_service.get_feedback_statistics(form_type=form_type)
+        
+        return jsonify(stats), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving feedback statistics: {str(e)}")
+        return jsonify({
+            "error": "Failed to retrieve feedback statistics"
+        }), 500
+
+def _send_feedback_confirmation_email(user_email: str, user_name: str, form_type: str, submission_id: str):
+    """Send confirmation email to user who submitted feedback"""
+    template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>Feedback Received</title>
+        <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: #10B981; color: white; padding: 20px; text-align: center; }
+            .content { padding: 20px; background: #f9f9f9; }
+            .footer { background: #333; color: white; padding: 20px; text-align: center; }
+            .success { color: #10B981; font-weight: bold; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>Thank You for Your Feedback!</h1>
+            </div>
+            
+            <div class="content">
+                <h2>Hi {{ user_name }},</h2>
+                <p class="success">We've successfully received your feedback!</p>
+                
+                <p>Thank you for taking the time to share your thoughts with us. Your feedback is invaluable in helping us improve our services.</p>
+                
+                <div style="background: white; padding: 15px; margin: 15px 0; border: 1px solid #ddd; border-radius: 5px;">
+                    <p><strong>Feedback Type:</strong> {{ form_type }}</p>
+                    <p><strong>Submission ID:</strong> {{ submission_id }}</p>
+                    <p><strong>Submitted On:</strong> {{ current_date }}</p>
+                </div>
+                
+                <p>We review all feedback carefully and will get back to you if needed. If your feedback requires immediate attention, please contact our support team.</p>
+                
+                <p>Thank you for helping us serve you better!</p>
+            </div>
+            
+            <div class="footer">
+                <p>Best regards,</p>
+                <p>The WealthWest Team</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    context = {
+        'user_name': user_name,
+        'form_type': form_type,
+        'submission_id': submission_id,
+        'current_date': datetime.now().strftime('%B %d, %Y at %I:%M %p')
+    }
+    
+    subject = f"Your voice is in the model. Expect smarter updates, faster."
+    email_service.send_email(user_email, subject, template, context)
+
+def _send_feedback_notification_email(user_info: Dict[str, Any], responses: List[Dict[str, Any]], form_type: str, submission_id: str):
+    """Send notification email to company about new feedback"""
+    # Get company email from environment or use default
+    company_email = os.environ.get('COMPANY_EMAIL', os.environ.get('MAIL_USERNAME'))
+    
+    if not company_email:
+        logger.warning("No company email configured for feedback notifications")
+        return
+    
+    template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>New Feedback Submission</title>
+        <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: #4F46E5; color: white; padding: 20px; text-align: center; }
+            .content { padding: 20px; background: #f9f9f9; }
+            .user-info { background: white; padding: 15px; margin: 15px 0; border: 1px solid #ddd; border-radius: 5px; }
+            .response { background: white; padding: 15px; margin: 10px 0; border-left: 4px solid #4F46E5; }
+            .footer { background: #333; color: white; padding: 20px; text-align: center; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>📝 New Feedback Received</h1>
+            </div>
+            
+            <div class="content">
+                <h2>New {{ form_type }} Submission</h2>
+                
+                <div class="user-info">
+                    <h3>User Information:</h3>
+                    <p><strong>Name:</strong> {{ user_info.name }}</p>
+                    <p><strong>Email:</strong> {{ user_info.email }}</p>
+                    {% if user_info.phone %}
+                    <p><strong>Phone:</strong> {{ user_info.phone }}</p>
+                    {% endif %}
+                    <p><strong>Submission ID:</strong> {{ submission_id }}</p>
+                    <p><strong>Submitted On:</strong> {{ current_date }}</p>
+                </div>
+                
+                <h3>Feedback Responses:</h3>
+                {% for response in responses %}
+                <div class="response">
+                    <p><strong>Q:</strong> {{ response.question }}</p>
+                    <p><strong>A:</strong> {{ response.answer }}</p>
+                    {% if response.question_type %}
+                    <p><em>Type: {{ response.question_type }}</em></p>
+                    {% endif %}
+                </div>
+                {% endfor %}
+                
+                <p><em>Please review and follow up as appropriate.</em></p>
+            </div>
+            
+            <div class="footer">
+                <p>WealthWest Feedback System</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    context = {
+        'user_info': user_info,
+        'responses': responses,
+        'form_type': form_type,
+        'submission_id': submission_id,
+        'current_date': datetime.now().strftime('%B %d, %Y at %I:%M %p')
+    }
+    
+    subject = f"New Feedback: {form_type} - {user_info.get('name', 'Unknown User')}"
+    email_service.send_email(company_email, subject, template, context)
 
 # Anonymous Chat endpoint with session tracking
 @app.route('/api/chat', methods=['POST'])
