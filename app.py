@@ -427,6 +427,108 @@ def update_profile():
         "user": user_data
     }), 200
 
+# Password Reset Endpoints
+@app.route('/api/auth/forgot-password', methods=['POST'])
+@validate_json_request
+def forgot_password():
+    """Initiate password reset process by sending OTP to email"""
+    data = request.get_json()
+    username_or_email = data.get('username_or_email', '').strip()
+    
+    if not username_or_email:
+        return jsonify({"error": "Username or email is required"}), 400
+    
+    # Create OTP for password reset
+    success, message, otp = user_service.create_password_reset_otp(username_or_email)
+    
+    if not success:
+        return jsonify({"error": message}), 400
+    
+    # Get user details for email
+    user = user_service.users.find_one({
+        "$or": [
+            {"username": username_or_email},
+            {"email": username_or_email}
+        ]
+    })
+    
+    if user and otp:
+        # Send OTP email
+        email_sent = email_service.send_password_reset_otp(
+            user['email'], 
+            user.get('username', 'User'), 
+            otp
+        )
+        
+        if email_sent:
+            logger.info(f"Password reset OTP sent to {user['email']}")
+            return jsonify({
+                "message": "Password reset OTP sent to your email",
+                "email_sent": True
+            }), 200
+        else:
+            logger.error(f"Failed to send password reset email to {user['email']}")
+            return jsonify({
+                "message": "OTP generated but email failed to send. Please try again.",
+                "email_sent": False
+            }), 500
+    
+    return jsonify({"error": "Failed to process password reset request"}), 500
+
+@app.route('/api/auth/verify-reset-otp', methods=['POST'])
+@validate_json_request
+def verify_reset_otp():
+    """Verify password reset OTP"""
+    data = request.get_json()
+    username_or_email = data.get('username_or_email', '').strip()
+    otp = data.get('otp', '').strip()
+    
+    if not username_or_email or not otp:
+        return jsonify({"error": "Username/email and OTP are required"}), 400
+    
+    # Verify OTP
+    success, message, user_id = user_service.verify_password_reset_otp(username_or_email, otp)
+    
+    if not success:
+        return jsonify({"error": message}), 400
+    
+    return jsonify({
+        "message": message,
+        "user_id": user_id,
+        "otp_verified": True
+    }), 200
+
+@app.route('/api/auth/reset-password', methods=['POST'])
+@validate_json_request
+def reset_password():
+    """Reset password with OTP verification"""
+    data = request.get_json()
+    user_id = data.get('user_id', '').strip()
+    new_password = data.get('new_password', '').strip()
+    otp = data.get('otp', '').strip()
+    
+    if not user_id or not new_password or not otp:
+        return jsonify({"error": "User ID, new password, and OTP are required"}), 400
+    
+    # Validate password strength
+    if len(new_password) < 6:
+        return jsonify({"error": "Password must be at least 6 characters long"}), 400
+    
+    # Reset password with verification
+    success, message = user_service.reset_password_with_verification(user_id, new_password, otp)
+    
+    if not success:
+        return jsonify({"error": message}), 400
+    
+    # Clean up expired OTPs
+    user_service.cleanup_expired_otps()
+    
+    logger.info(f"Password reset completed for user ID: {user_id}")
+    return jsonify({
+        "message": message,
+        "password_reset": True
+    }), 200
+
 # Anonymous Chat endpoint with session tracking
 @app.route('/api/chat', methods=['POST'])
 @validate_json_request

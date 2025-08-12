@@ -146,6 +146,21 @@ class EmailService:
         
         return self.send_email(user_email, subject, template, context)
     
+    def send_password_reset_otp(self, user_email: str, user_name: str, otp: str) -> bool:
+        """Send password reset OTP email"""
+        
+        template = self._get_password_reset_template()
+        
+        context = {
+            'user_name': user_name,
+            'otp': otp,
+            'expiry_minutes': 15
+        }
+        
+        subject = "Password Reset OTP - WealthWest"
+        
+        return self.send_email(user_email, subject, template, context)
+    
     def _generate_invoice_data(self, user_name: str, plan_details: Dict[str, Any], payment_details: Dict[str, Any]) -> Dict[str, Any]:
         """Generate invoice data for email"""
         
@@ -307,6 +322,64 @@ class EmailService:
                 
                 <div class="footer">
                     <p>Happy Trading!</p>
+                    <p>The WealthWest Team</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+    
+    def _get_password_reset_template(self) -> str:
+        """Get password reset OTP email template"""
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>Password Reset OTP</title>
+            <style>
+                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                .header { background: #EF4444; color: white; padding: 20px; text-align: center; }
+                .content { padding: 20px; background: #f9f9f9; }
+                .otp-box { background: white; padding: 20px; margin: 20px 0; border: 2px solid #EF4444; text-align: center; border-radius: 8px; }
+                .otp-code { font-size: 32px; font-weight: bold; color: #EF4444; letter-spacing: 8px; margin: 20px 0; }
+                .warning { background: #FEF2F2; border: 1px solid #FECACA; padding: 15px; border-radius: 6px; margin: 15px 0; }
+                .footer { background: #333; color: white; padding: 20px; text-align: center; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>🔒 Password Reset Request</h1>
+                </div>
+                
+                <div class="content">
+                    <h2>Hi {{ user_name }},</h2>
+                    <p>We received a request to reset your password for your WealthWest account.</p>
+                    
+                    <div class="otp-box">
+                        <h3>Your OTP Code:</h3>
+                        <div class="otp-code">{{ otp }}</div>
+                        <p><strong>This code expires in {{ expiry_minutes }} minutes.</strong></p>
+                    </div>
+                    
+                    <p>Enter this code in the password reset form to continue with resetting your password.</p>
+                    
+                    <div class="warning">
+                        <p><strong>⚠️ Security Notice:</strong></p>
+                        <ul>
+                            <li>If you didn't request this password reset, please ignore this email</li>
+                            <li>Never share this OTP with anyone</li>
+                            <li>This code will expire automatically after {{ expiry_minutes }} minutes</li>
+                        </ul>
+                    </div>
+                    
+                    <p>If you're having trouble, contact our support team.</p>
+                </div>
+                
+                <div class="footer">
+                    <p>Stay secure!</p>
                     <p>The WealthWest Team</p>
                 </div>
             </div>

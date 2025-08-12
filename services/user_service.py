@@ -1,5 +1,7 @@
 import os
 import bcrypt
+import random
+import string
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 from datetime import datetime, timedelta
@@ -37,6 +39,7 @@ class UserService:
         self.db = get_db_connection()
         self.users = self.db.users
         self.tokens = self.db.refresh_tokens
+        self.password_reset_otps = self.db.password_reset_otps
     
     def hash_password(self, password: str) -> bytes:
         """Hash a password for storing"""
@@ -461,3 +464,169 @@ class UserService:
         except Exception as e:
             print(f"Error getting user chat history: {str(e)}")
             return []
+    
+    def generate_otp(self, length: int = 6) -> str:
+        """Generate a random OTP"""
+        return ''.join(random.choices(string.digits, k=length))
+    
+    def create_password_reset_otp(self, username_or_email: str) -> Tuple[bool, str, Optional[str]]:
+        """
+        Create password reset OTP for user
+        
+        Returns:
+        - Success status (bool)
+        - Message (str)  
+        - OTP code (str or None)
+        """
+        try:
+            # Find user by username or email
+            user = self.users.find_one({
+                "$or": [
+                    {"username": username_or_email},
+                    {"email": username_or_email}
+                ]
+            })
+            
+            if not user:
+                return False, "User not found", None
+            
+            # Generate OTP
+            otp = self.generate_otp()
+            expires_at = datetime.utcnow() + timedelta(minutes=15)  # 15 minutes expiry
+            
+            # Store OTP in database
+            otp_record = {
+                "user_id": user["_id"],
+                "email": user["email"],
+                "username": user["username"],
+                "otp": otp,
+                "expires_at": expires_at,
+                "used": False,
+                "created_at": datetime.utcnow()
+            }
+            
+            # Remove any existing OTPs for this user
+            self.password_reset_otps.delete_many({"user_id": user["_id"]})
+            
+            # Insert new OTP
+            self.password_reset_otps.insert_one(otp_record)
+            
+            logger.info(f"Password reset OTP created for user: {user['username']}")
+            return True, "OTP generated successfully", otp
+            
+        except Exception as e:
+            logger.error(f"Error creating password reset OTP: {str(e)}")
+            return False, "Failed to generate OTP", None
+    
+    def verify_password_reset_otp(self, username_or_email: str, otp: str) -> Tuple[bool, str, Optional[str]]:
+        """
+        Verify password reset OTP
+        
+        Returns:
+        - Success status (bool)
+        - Message (str)
+        - User ID (str or None) if verified
+        """
+        try:
+            # Find user and OTP record
+            user = self.users.find_one({
+                "$or": [
+                    {"username": username_or_email},
+                    {"email": username_or_email}
+                ]
+            })
+            
+            if not user:
+                return False, "User not found", None
+            
+            # Find matching OTP record
+            otp_record = self.password_reset_otps.find_one({
+                "user_id": user["_id"],
+                "otp": otp,
+                "used": False
+            })
+            
+            if not otp_record:
+                return False, "Invalid OTP", None
+            
+            # Check if OTP has expired
+            if datetime.utcnow() > otp_record["expires_at"]:
+                # Clean up expired OTP
+                self.password_reset_otps.delete_one({"_id": otp_record["_id"]})
+                return False, "OTP has expired", None
+            
+            # Mark OTP as used
+            self.password_reset_otps.update_one(
+                {"_id": otp_record["_id"]},
+                {"$set": {"used": True, "used_at": datetime.utcnow()}}
+            )
+            
+            logger.info(f"Password reset OTP verified for user: {user['username']}")
+            return True, "OTP verified successfully", str(user["_id"])
+            
+        except Exception as e:
+            logger.error(f"Error verifying password reset OTP: {str(e)}")
+            return False, "Failed to verify OTP", None
+    
+    def reset_password_with_verification(self, user_id: str, new_password: str, otp: str) -> Tuple[bool, str]:
+        """
+        Reset password with OTP verification
+        
+        Returns:
+        - Success status (bool)
+        - Message (str)
+        """
+        try:
+            # Find user
+            user = self.users.find_one({"_id": ObjectId(user_id)})
+            if not user:
+                return False, "User not found"
+            
+            # Find valid used OTP record (recently used within last 5 minutes for security)
+            recent_time = datetime.utcnow() - timedelta(minutes=5)
+            otp_record = self.password_reset_otps.find_one({
+                "user_id": ObjectId(user_id),
+                "otp": otp,
+                "used": True,
+                "used_at": {"$gte": recent_time}
+            })
+            
+            if not otp_record:
+                return False, "OTP verification required or expired"
+            
+            # Update password
+            hashed_password = self.hash_password(new_password)
+            result = self.users.update_one(
+                {"_id": ObjectId(user_id)},
+                {
+                    "$set": {
+                        "password": hashed_password,
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+            
+            if result.modified_count > 0:
+                # Clean up all OTP records for this user
+                self.password_reset_otps.delete_many({"user_id": ObjectId(user_id)})
+                
+                logger.info(f"Password reset completed for user: {user['username']}")
+                return True, "Password reset successfully"
+            else:
+                return False, "Failed to update password"
+                
+        except Exception as e:
+            logger.error(f"Error resetting password: {str(e)}")
+            return False, "Failed to reset password"
+    
+    def cleanup_expired_otps(self):
+        """Clean up expired OTP records"""
+        try:
+            current_time = datetime.utcnow()
+            result = self.password_reset_otps.delete_many({
+                "expires_at": {"$lt": current_time}
+            })
+            if result.deleted_count > 0:
+                logger.info(f"Cleaned up {result.deleted_count} expired OTP records")
+        except Exception as e:
+            logger.error(f"Error cleaning up expired OTPs: {str(e)}")

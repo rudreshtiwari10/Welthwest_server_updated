@@ -208,6 +208,11 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
                 logger.info(f"Columns: {hist_data.columns.tolist()}")
                 logger.info(f"Date range: {hist_data.index.min()} to {hist_data.index.max()}")
                 
+                # Remove rows with NaN values for all essential columns for 1d interval
+                if interval == "1d":
+                    hist_data = hist_data.dropna(subset=['Open', 'High', 'Low', 'Close'])
+                    logger.info(f"After removing NaN rows for 1d data: {hist_data.shape}")
+                
                 # Store original index as a column for caching
                 hist_data_for_cache = hist_data.copy()
                 hist_data_for_cache['date'] = hist_data_for_cache.index.strftime('%Y-%m-%d %H:%M:%S')
@@ -232,6 +237,11 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
                 
                 if len(hist_data) > 0:
                     logger.info(f"Successfully fetched BSE data. Shape: {hist_data.shape}")
+                    
+                    # Remove rows with NaN values for all essential columns for 1d interval
+                    if interval == "1d":
+                        hist_data = hist_data.dropna(subset=['Open', 'High', 'Low', 'Close'])
+                        logger.info(f"After removing NaN rows for 1d BSE data: {hist_data.shape}")
                     
                     # Store original index as a column for caching
                     hist_data_for_cache = hist_data.copy()
@@ -375,6 +385,11 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
                 logger.info(f"Columns: {hist_data.columns.tolist()}")
                 logger.info(f"Date range: {hist_data.index.min()} to {hist_data.index.max()}")
                 
+                # Remove rows with NaN values for all essential columns for 1d interval
+                if interval == "1d":
+                    hist_data = hist_data.dropna(subset=['Open', 'High', 'Low', 'Close'])
+                    logger.info(f"After removing NaN rows for 1d OHLC data: {hist_data.shape}")
+                
                 # Store data for caching with proper date formatting
                 hist_data_for_cache = hist_data.copy()
                 hist_data_for_cache['date'] = hist_data_for_cache.index.strftime('%Y-%m-%d %H:%M:%S')
@@ -398,6 +413,11 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
                 
                 if len(hist_data) > 0:
                     logger.info(f"Successfully fetched BSE OHLC data. Shape: {hist_data.shape}")
+                    
+                    # Remove rows with NaN values for all essential columns for 1d interval
+                    if interval == "1d":
+                        hist_data = hist_data.dropna(subset=['Open', 'High', 'Low', 'Close'])
+                        logger.info(f"After removing NaN rows for 1d BSE OHLC data: {hist_data.shape}")
                     
                     # Store data for caching with proper date formatting
                     hist_data_for_cache = hist_data.copy()
@@ -714,7 +734,7 @@ def get_market_indices_yfinance():
         # Use yfinance's download function to get data for all indices in a single call
         data = yf.download(
             tickers=indices,
-            period="2d",  # Get 2 days to calculate change
+            period="5d",  # Get 5 days to ensure we have valid data for 1d interval
             group_by="ticker",
             auto_adjust=True,
             progress=False
@@ -727,14 +747,17 @@ def get_market_indices_yfinance():
         for index_symbol in indices:
             try:
                 if index_symbol in data and not data[index_symbol].empty:
-                    # If we have 2 days of data, calculate change properly
-                    if len(data[index_symbol]['Close']) >= 2:
-                        latest_price = data[index_symbol]['Close'].iloc[-1]
-                        prev_close = data[index_symbol]['Close'].iloc[-2]
+                    # Get the Close prices and drop NaN values
+                    close_prices = data[index_symbol]['Close'].dropna()
+                    
+                    if len(close_prices) >= 2:
+                        # Use the last valid price and second-to-last valid price
+                        latest_price = close_prices.iloc[-1]
+                        prev_close = close_prices.iloc[-2]
                         
                         # Calculate change and percent change
                         change = latest_price - prev_close
-                        pct_change = (change / prev_close * 100) if prev_close else 0
+                        pct_change = (change / prev_close * 100) if prev_close and prev_close != 0 else 0
                         
                         result[index_symbol] = {
                             'name': index_names.get(index_symbol, index_symbol),
@@ -744,9 +767,9 @@ def get_market_indices_yfinance():
                             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         }
                         logger.info(f"Processed index {index_symbol}: {round(pct_change, 2)}%")
-                    else:
-                        # If we only have 1 day, use it as is without change data
-                        latest_price = data[index_symbol]['Close'].iloc[-1]
+                    elif len(close_prices) == 1:
+                        # If we only have 1 valid day, use it as is without change data
+                        latest_price = close_prices.iloc[-1]
                         result[index_symbol] = {
                             'name': index_names.get(index_symbol, index_symbol),
                             'price': round(latest_price, 2),
@@ -755,7 +778,15 @@ def get_market_indices_yfinance():
                             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                             'note': 'Insufficient data for change calculation'
                         }
-                        logger.warning(f"Insufficient historical data for index {index_symbol}")
+                        logger.warning(f"Only one valid price found for index {index_symbol}")
+                    else:
+                        # No valid prices found
+                        result[index_symbol] = {
+                            'name': index_names.get(index_symbol, index_symbol),
+                            'error': 'No valid price data available',
+                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        }
+                        logger.warning(f"No valid price data found for index {index_symbol}")
                 else:
                     result[index_symbol] = {
                         'name': index_names.get(index_symbol, index_symbol),
@@ -960,7 +991,7 @@ def get_top_gainers_losers():
         # This is much more efficient than making individual calls for each stock
         data = yf.download(
             tickers=key_stocks,
-            period="2d",  # Get 2 days to calculate proper change
+            period="5d",  # Get 5 days to ensure we have valid data for 1d interval
             group_by="ticker",
             auto_adjust=True,
             progress=False
@@ -975,19 +1006,26 @@ def get_top_gainers_losers():
         for stock in key_stocks:
             try:
                 if stock in data and not data[stock].empty:
-                    # Check if we have at least 2 days of data to calculate proper change
-                    if len(data[stock]['Close']) >= 2:
-                        current_price = data[stock]['Close'].iloc[-1]
-                        prev_close = data[stock]['Close'].iloc[-2]
+                    # Get the Close prices and drop NaN values
+                    close_prices = data[stock]['Close'].dropna()
+                    
+                    if len(close_prices) >= 2:
+                        # Use the last valid price and second-to-last valid price
+                        current_price = close_prices.iloc[-1]
+                        prev_close = close_prices.iloc[-2]
                         
                         # Calculate actual change and percent change
                         change = current_price - prev_close
                         pct_change = (change / prev_close * 100) if prev_close != 0 else 0
-                    else:
-                        # If we only have 1 day of data, use 0 change
-                        current_price = data[stock]['Close'].iloc[-1]
+                    elif len(close_prices) == 1:
+                        # If we only have 1 valid price, use 0 change
+                        current_price = close_prices.iloc[-1]
                         change = 0
                         pct_change = 0
+                    else:
+                        # No valid prices found, skip this stock
+                        logger.warning(f"No valid price data for {stock}")
+                        continue
                     
                     # Use simple name extraction
                     company_name = stock.replace('.NS', '')
@@ -1064,7 +1102,7 @@ def get_top_gainers_losers_backup():
         # Use yfinance's download function for bulk fetching
         data = yf.download(
             tickers=backup_stocks,
-            period="1d",  # Use 1d timeframe as requested
+            period="5d",  # Get 5 days to ensure we have valid data for 1d interval
             group_by="ticker",
             auto_adjust=True,
             progress=False
@@ -1079,12 +1117,24 @@ def get_top_gainers_losers_backup():
         for stock in backup_stocks:
             try:
                 if stock in data and not data[stock].empty:
-                    # For 1d data, we need to estimate the previous close
-                    current_price = data[stock]['Close'].iloc[-1]
-                    # Estimate previous close as 99.5% of current price
-                    prev_close = current_price * 0.995
-                    change = current_price - prev_close
-                    pct_change = 0.5  # Assume 0.5% change for demonstration
+                    # Get the Close prices and drop NaN values
+                    close_prices = data[stock]['Close'].dropna()
+                    
+                    if len(close_prices) >= 2:
+                        # Use actual price data and calculate proper change
+                        current_price = close_prices.iloc[-1]
+                        prev_close = close_prices.iloc[-2]
+                        change = current_price - prev_close
+                        pct_change = (change / prev_close * 100) if prev_close != 0 else 0
+                    elif len(close_prices) == 1:
+                        # If we only have 1 valid price, use 0 change
+                        current_price = close_prices.iloc[-1]
+                        change = 0
+                        pct_change = 0
+                    else:
+                        # No valid prices found, skip this stock
+                        logger.warning(f"No valid price data for backup stock {stock}")
+                        continue
                     
                     stock_changes.append({
                         'symbol': stock.replace('.NS', ''),
