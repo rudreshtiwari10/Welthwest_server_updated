@@ -722,7 +722,7 @@ def _send_feedback_confirmation_email(user_email: str, user_name: str, form_type
             
             <div class="footer">
                 <p>Best regards,</p>
-                <p>The WealthWest Team</p>
+                <p>The WelthWest Team</p>
             </div>
         </div>
     </body>
@@ -799,7 +799,7 @@ def _send_feedback_notification_email(user_info: Dict[str, Any], responses: List
             </div>
             
             <div class="footer">
-                <p>WealthWest Feedback System</p>
+                <p>WelthWest Feedback</p>
             </div>
         </div>
     </body>
