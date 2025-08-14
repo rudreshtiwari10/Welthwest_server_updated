@@ -4,7 +4,8 @@ from datetime import datetime, timedelta
 import time
 import logging
 import numpy as np
-import requests
+import os
+import random
 from services.cache_service import get_cached_data, set_cached_data
 from services.upstox_service import (
     get_upstox_historical_data, 
@@ -16,11 +17,14 @@ from services.upstox_service import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Shared HTTP session for yfinance to reduce connection overhead and avoid some 429s
-_YF_SESSION = requests.Session()
-_YF_SESSION.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-})
+# Detect cloud environment (Render) for stricter anti-rate-limit behavior
+IS_RENDER = str(os.getenv('RENDER', '')).lower() in ('true', '1', 'yes')
+
+def _sleep_before_yf_call():
+    if IS_RENDER:
+        time.sleep(random.uniform(3.0, 8.0))
+    else:
+        time.sleep(random.uniform(0.5, 2.0))
 
 def filter_trading_days(df):
     """
@@ -206,7 +210,8 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
     
     for attempt in range(max_retries):
         try:
-            ticker = yf.Ticker(formatted_ticker, session=_YF_SESSION)
+            _sleep_before_yf_call()
+            ticker = yf.Ticker(formatted_ticker)
             hist_data = ticker.history(period=period, interval=interval)
             
             if len(hist_data) > 0:
@@ -238,7 +243,8 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
             # If we got empty data, try BSE if NSE didn't work
             if formatted_ticker.endswith('.NS'):
                 bse_ticker = ticker_symbol + '.BO'
-                ticker = yf.Ticker(bse_ticker, session=_YF_SESSION)
+                _sleep_before_yf_call()
+                ticker = yf.Ticker(bse_ticker)
                 hist_data = ticker.history(period=period, interval=interval)
                 
                 if len(hist_data) > 0:
@@ -387,7 +393,8 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
     for attempt in range(max_retries):
         try:
             logger.info(f"Attempt {attempt + 1} to fetch data from yfinance")
-            ticker = yf.Ticker(formatted_ticker, session=_YF_SESSION)
+            _sleep_before_yf_call()
+            ticker = yf.Ticker(formatted_ticker)
             hist_data = ticker.history(start=start_date, end=end_date, interval=interval)
             
             if len(hist_data) > 0:
@@ -418,7 +425,8 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
             if formatted_ticker.endswith('.NS'):
                 logger.info("No data from NSE, trying BSE")
                 bse_ticker = ticker_symbol + '.BO'
-                ticker = yf.Ticker(bse_ticker, session=_YF_SESSION)
+                _sleep_before_yf_call()
+                ticker = yf.Ticker(bse_ticker)
                 hist_data = ticker.history(start=start_date, end=end_date, interval=interval)
                 
                 if len(hist_data) > 0:
@@ -563,7 +571,8 @@ def get_live_data_yfinance(ticker_symbols):
         for attempt in range(max_retries):
             try:
                 logger.info(f"Attempt {attempt + 1} for {symbol}")
-                ticker = yf.Ticker(symbol, session=_YF_SESSION)
+                _sleep_before_yf_call()
+                ticker = yf.Ticker(symbol)
                 
                 # First try to get info
                 try:
@@ -605,7 +614,8 @@ def get_live_data_yfinance(ticker_symbols):
                     try:
                         logger.info(f"Trying BSE fallback for {symbol}")
                         bse_symbol = symbol.replace('.NS', '.BO')
-                        ticker = yf.Ticker(bse_symbol, session=_YF_SESSION)
+                        _sleep_before_yf_call()
+                        ticker = yf.Ticker(bse_symbol)
                         
                         # Get info
                         try:
@@ -746,6 +756,7 @@ def get_market_indices_yfinance():
         logger.info(f"Fetching data for {len(indices)} market indices in a single bulk call")
         
         # Use yfinance's download function to get data for all indices in a single call
+        _sleep_before_yf_call()
         data = yf.download(
             tickers=indices,
             period="5d",  # Get 5 days to ensure we have valid data for 1d interval
@@ -757,6 +768,15 @@ def get_market_indices_yfinance():
         end_time = time.time()
         logger.info(f"Bulk indices data fetch completed in {end_time - start_time:.2f} seconds")
         
+        # If bulk response is empty, fall back to individual calls
+        try:
+            is_empty_bulk = not isinstance(data, dict) or all((k not in data or data[k].empty) for k in indices)
+        except Exception:
+            is_empty_bulk = True
+        if is_empty_bulk:
+            logger.warning("Bulk indices download returned empty; using individual fallback")
+            return get_market_indices_individual_fallback()
+
         # Process the bulk data for each index
         for index_symbol in indices:
             try:
@@ -852,7 +872,8 @@ def get_market_indices_individual_fallback():
     
     for index_symbol in indices:
         try:
-            index = yf.Ticker(index_symbol, session=_YF_SESSION)
+            _sleep_before_yf_call()
+            index = yf.Ticker(index_symbol)
             hist = index.history(period="1d")
             if len(hist) > 0:
                 latest_price = hist['Close'].iloc[-1]
@@ -936,7 +957,8 @@ def validate_ticker(ticker_symbol):
     
     for attempt in range(max_retries):
         try:
-            ticker = yf.Ticker(nse_ticker, session=_YF_SESSION)
+            _sleep_before_yf_call()
+            ticker = yf.Ticker(nse_ticker)
             
             # First check: Try to get history data
             hist = ticker.history(period="1d")
@@ -951,7 +973,8 @@ def validate_ticker(ticker_symbol):
                 
             # If we got here but didn't return True, try BSE
             bse_ticker = f"{base_ticker}.BO"
-            ticker = yf.Ticker(bse_ticker, session=_YF_SESSION)
+            _sleep_before_yf_call()
+            ticker = yf.Ticker(bse_ticker)
             
             hist = ticker.history(period="1d")
             if len(hist) > 0:
@@ -1003,6 +1026,7 @@ def get_top_gainers_losers():
         
         # Use yfinance's download function to get data for all stocks in a single call
         # This is much more efficient than making individual calls for each stock
+        _sleep_before_yf_call()
         data = yf.download(
             tickers=key_stocks,
             period="5d",  # Get 5 days to ensure we have valid data for 1d interval
@@ -1114,6 +1138,7 @@ def get_top_gainers_losers_backup():
         start_time = time.time()
         
         # Use yfinance's download function for bulk fetching
+        _sleep_before_yf_call()
         data = yf.download(
             tickers=backup_stocks,
             period="5d",  # Get 5 days to ensure we have valid data for 1d interval
@@ -1274,7 +1299,8 @@ def get_stock_fundamentals(ticker_symbol):
     logger.info(f"Fetching fundamentals for {formatted_ticker}")
     
     try:
-        ticker = yf.Ticker(formatted_ticker, session=_YF_SESSION)
+        _sleep_before_yf_call()
+        ticker = yf.Ticker(formatted_ticker)
         
         # Get company info
         info = ticker.info
