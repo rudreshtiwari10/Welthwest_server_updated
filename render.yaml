@@ -2,11 +2,11 @@ services:
   - type: web
     name: stock-market-api
     env: python
-    pythonVersion: "3.11.9"
+    pythonVersion: "3.13.0"
     buildCommand: |
-      pip install --upgrade pip
+      pip install --upgrade pip setuptools wheel
       pip install --no-cache-dir -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn app:app --workers 1 --threads 2
     envVars:
       - key: PYTHONUNBUFFERED
         value: "true"
