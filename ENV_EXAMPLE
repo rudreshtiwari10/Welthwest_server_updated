@@ -28,6 +28,10 @@ CACHE_DEFAULT_TIMEOUT=300
 # API Configuration
 API_VERSION=v1
 BASE_URL=http://localhost:8000
+RENDER_EXTERNAL_URL=https://your-app-name.onrender.com
+KEEP_ALIVE_URL=
+ENABLE_KEEP_ALIVE_SCHEDULER=True
+KEEP_ALIVE_INTERVAL_MIN=10
 
 # Logging Configuration
 LOG_LEVEL=INFO

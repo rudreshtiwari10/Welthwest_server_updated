@@ -143,7 +143,7 @@ class UserService:
         
         # Return user data without password
         return {
-            "_id": str(user["_id"]),
+            "id": str(user["_id"]),  # Changed from "_id" to "id" for consistency
             "username": user.get("username", ""),
             "email": user["email"],
             "first_name": user.get("first_name", ""),

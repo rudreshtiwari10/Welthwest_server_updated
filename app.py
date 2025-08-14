@@ -37,6 +37,8 @@ from services.market_regime_service import market_regime_service
 from services.session_service import InMemorySessionService
 from bson import ObjectId
 from datetime import datetime
+import atexit
+from services.scheduler_service import keep_alive_scheduler
 
 # Setup logging with more detailed format
 logging.basicConfig(
@@ -186,6 +188,25 @@ def root():
     """Root endpoint for health checks"""
     return jsonify({"status": "healthy", "message": "Indian Stock Market API is running"}), 200
 
+
+# Start keep-alive scheduler at import time if enabled (compatible with Flask >=2.3)
+def _maybe_start_keep_alive_scheduler():
+    if os.environ.get("ENABLE_KEEP_ALIVE_SCHEDULER", "true").lower() in ("1", "true", "yes"):
+        try:
+            interval_str = os.environ.get("KEEP_ALIVE_INTERVAL_MIN", "10")
+            interval_min = max(1, int(interval_str))
+        except ValueError:
+            interval_min = 10
+        keep_alive_scheduler.start(minutes=interval_min)
+
+_maybe_start_keep_alive_scheduler()
+
+
+# Ensure scheduler stops cleanly on shutdown
+@atexit.register
+def _shutdown_scheduler():
+    keep_alive_scheduler.stop()
+
 # Authentication routes
 @app.route('/api/auth/register', methods=['POST'])
 @validate_json_request
@@ -279,19 +300,19 @@ def google_auth():
         current_time = int(time.time())
         logger.info(f"Creating JWT tokens at timestamp: {current_time}")
         
-        access_token = create_access_token(identity=str(user['_id']))
-        refresh_token = create_refresh_token(identity=str(user['_id']))
+        access_token = create_access_token(identity=str(user['id']))  # Changed from '_id' to 'id'
+        refresh_token = create_refresh_token(identity=str(user['id']))  # Changed from '_id' to 'id'
         
         logger.info("JWT tokens created successfully for Google user")
         
         # Store refresh token
-        user_service.store_refresh_token(user['_id'], refresh_token)
+        user_service.store_refresh_token(user['id'], refresh_token)  # Changed from '_id' to 'id'
         
         return jsonify({
             "access_token": access_token,
             "refresh_token": refresh_token,
             "user": {
-                "id": str(user['_id']),
+                "id": str(user['id']),  # Changed from '_id' to 'id'
                 "email": user['email'],
                 "name": user.get('name', ''),
                 "profile_picture": user.get('profile_picture', ''),

@@ -48,7 +48,7 @@ class GoogleAuthService:
                 # Update existing user with Google info if needed
                 if not existing_user.get('google_id'):
                     self.user_service.update_user(
-                        existing_user['_id'],
+                        existing_user['id'],  # Changed from '_id' to 'id' for consistency
                         {
                             'google_id': user_data['google_id'],
                             'profile_picture': user_data['picture'],
@@ -93,7 +93,7 @@ class GoogleAuthService:
                     if existing_user:
                         if not existing_user.get('google_id'):
                             self.user_service.update_user(
-                                existing_user['_id'],
+                                existing_user['id'],  # Changed from '_id' to 'id' for consistency
                                 {
                                     'google_id': user_data['google_id'],
                                     'profile_picture': user_data['picture'],
