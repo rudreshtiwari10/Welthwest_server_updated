@@ -16,6 +16,12 @@ from services.upstox_service import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Shared HTTP session for yfinance to reduce connection overhead and avoid some 429s
+_YF_SESSION = requests.Session()
+_YF_SESSION.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+})
+
 def filter_trading_days(df):
     """
     Filter DataFrame to include only market trading days (Monday-Friday, excluding Indian holidays)
@@ -195,12 +201,12 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
     # Format ticker for Indian market
     formatted_ticker = format_indian_ticker(ticker_symbol)
     
-    max_retries = 3
-    retry_delay = 1  # seconds
+    max_retries = 5
+    retry_delay = 2  # seconds
     
     for attempt in range(max_retries):
         try:
-            ticker = yf.Ticker(formatted_ticker)
+            ticker = yf.Ticker(formatted_ticker, session=_YF_SESSION)
             hist_data = ticker.history(period=period, interval=interval)
             
             if len(hist_data) > 0:
@@ -232,7 +238,7 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
             # If we got empty data, try BSE if NSE didn't work
             if formatted_ticker.endswith('.NS'):
                 bse_ticker = ticker_symbol + '.BO'
-                ticker = yf.Ticker(bse_ticker)
+                ticker = yf.Ticker(bse_ticker, session=_YF_SESSION)
                 hist_data = ticker.history(period=period, interval=interval)
                 
                 if len(hist_data) > 0:
@@ -259,8 +265,12 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
             # If we got empty data, wait and retry
             time.sleep(retry_delay)
         except Exception as e:
-            # If there was an exception, wait and retry
-            time.sleep(retry_delay)
+            # If rate limited, back off longer
+            msg = str(e).lower()
+            if 'too many requests' in msg or 'rate limit' in msg or '429' in msg:
+                time.sleep(retry_delay * 5)
+            else:
+                time.sleep(retry_delay)
             continue
     
     # If all retries failed, return empty DataFrame with expected columns
@@ -371,13 +381,13 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
             df.index.name = 'date'
         return df
     
-    max_retries = 3
-    retry_delay = 1  # seconds
+    max_retries = 5
+    retry_delay = 2  # seconds
     
     for attempt in range(max_retries):
         try:
             logger.info(f"Attempt {attempt + 1} to fetch data from yfinance")
-            ticker = yf.Ticker(formatted_ticker)
+            ticker = yf.Ticker(formatted_ticker, session=_YF_SESSION)
             hist_data = ticker.history(start=start_date, end=end_date, interval=interval)
             
             if len(hist_data) > 0:
@@ -393,7 +403,7 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
                 # Store data for caching with proper date formatting
                 hist_data_for_cache = hist_data.copy()
                 hist_data_for_cache['date'] = hist_data_for_cache.index.strftime('%Y-%m-%d %H:%M:%S')
-                set_cached_data(cache_key, hist_data_for_cache.to_dict('records'), 600)  # 10 minutes cache
+                set_cached_data(cache_key, hist_data_for_cache.to_dict('records'), 3600)  # 1 hour cache
                 
                 # Keep the original datetime index but normalize timezone
                 hist_data.index = hist_data.index.tz_localize(None) if hist_data.index.tz is not None else hist_data.index
@@ -408,7 +418,7 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
             if formatted_ticker.endswith('.NS'):
                 logger.info("No data from NSE, trying BSE")
                 bse_ticker = ticker_symbol + '.BO'
-                ticker = yf.Ticker(bse_ticker)
+                ticker = yf.Ticker(bse_ticker, session=_YF_SESSION)
                 hist_data = ticker.history(start=start_date, end=end_date, interval=interval)
                 
                 if len(hist_data) > 0:
@@ -422,7 +432,7 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
                     # Store data for caching with proper date formatting
                     hist_data_for_cache = hist_data.copy()
                     hist_data_for_cache['date'] = hist_data_for_cache.index.strftime('%Y-%m-%d %H:%M:%S')
-                    set_cached_data(cache_key, hist_data_for_cache.to_dict('records'), 600)
+                    set_cached_data(cache_key, hist_data_for_cache.to_dict('records'), 3600)
                     
                     # Keep the original datetime index but normalize timezone
                     hist_data.index = hist_data.index.tz_localize(None) if hist_data.index.tz is not None else hist_data.index
@@ -434,7 +444,11 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
             time.sleep(retry_delay)
         except Exception as e:
             logger.error(f"Error fetching data on attempt {attempt + 1}: {str(e)}")
-            time.sleep(retry_delay)
+            msg = str(e).lower()
+            if 'too many requests' in msg or 'rate limit' in msg or '429' in msg:
+                time.sleep(retry_delay * 5)
+            else:
+                time.sleep(retry_delay)
             continue
         
     logger.error("All attempts to fetch data failed")
@@ -549,7 +563,7 @@ def get_live_data_yfinance(ticker_symbols):
         for attempt in range(max_retries):
             try:
                 logger.info(f"Attempt {attempt + 1} for {symbol}")
-                ticker = yf.Ticker(symbol)
+                ticker = yf.Ticker(symbol, session=_YF_SESSION)
                 
                 # First try to get info
                 try:
@@ -591,7 +605,7 @@ def get_live_data_yfinance(ticker_symbols):
                     try:
                         logger.info(f"Trying BSE fallback for {symbol}")
                         bse_symbol = symbol.replace('.NS', '.BO')
-                        ticker = yf.Ticker(bse_symbol)
+                        ticker = yf.Ticker(bse_symbol, session=_YF_SESSION)
                         
                         # Get info
                         try:
@@ -838,7 +852,7 @@ def get_market_indices_individual_fallback():
     
     for index_symbol in indices:
         try:
-            index = yf.Ticker(index_symbol)
+            index = yf.Ticker(index_symbol, session=_YF_SESSION)
             hist = index.history(period="1d")
             if len(hist) > 0:
                 latest_price = hist['Close'].iloc[-1]
@@ -922,7 +936,7 @@ def validate_ticker(ticker_symbol):
     
     for attempt in range(max_retries):
         try:
-            ticker = yf.Ticker(nse_ticker)
+            ticker = yf.Ticker(nse_ticker, session=_YF_SESSION)
             
             # First check: Try to get history data
             hist = ticker.history(period="1d")
@@ -937,7 +951,7 @@ def validate_ticker(ticker_symbol):
                 
             # If we got here but didn't return True, try BSE
             bse_ticker = f"{base_ticker}.BO"
-            ticker = yf.Ticker(bse_ticker)
+            ticker = yf.Ticker(bse_ticker, session=_YF_SESSION)
             
             hist = ticker.history(period="1d")
             if len(hist) > 0:
@@ -1260,7 +1274,7 @@ def get_stock_fundamentals(ticker_symbol):
     logger.info(f"Fetching fundamentals for {formatted_ticker}")
     
     try:
-        ticker = yf.Ticker(formatted_ticker)
+        ticker = yf.Ticker(formatted_ticker, session=_YF_SESSION)
         
         # Get company info
         info = ticker.info
