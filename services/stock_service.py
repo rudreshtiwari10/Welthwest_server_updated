@@ -45,7 +45,8 @@ if _YF_SESSION is None:
 
 def _sleep_before_yf_call():
     if IS_RENDER:
-        time.sleep(random.uniform(3.0, 8.0))
+        # Fixed 3s delay for initial testing on cloud to avoid bursts
+        time.sleep(3.0)
     else:
         time.sleep(random.uniform(0.5, 2.0))
 
