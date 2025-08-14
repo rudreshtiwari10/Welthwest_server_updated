@@ -3,10 +3,14 @@ services:
     name: stock-market-api
     env: python
     pythonVersion: "3.11.9"
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      pip install --upgrade pip
+      pip install --no-cache-dir -r requirements.txt
     startCommand: gunicorn app:app
     envVars:
       - key: PYTHONUNBUFFERED
         value: "true"
       - key: FRONTEND_URL
-        value: "*" 
+        value: "*"
+      - key: RENDER
+        value: "true"
