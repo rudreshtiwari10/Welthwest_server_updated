@@ -13,6 +13,7 @@ from services.technical_analysis import TechnicalAnalysis
 from services.stock_service import get_historical_data
 from services.cache_service import get_cached_data, set_cached_data
 import warnings
+import sklearn
 warnings.filterwarnings('ignore')
 
 logging.basicConfig(level=logging.INFO)
@@ -46,6 +47,14 @@ class MarketRegimeClassifier:
     """
     
     def __init__(self):
+        # Check scikit-learn version compatibility
+        sklearn_version = sklearn.__version__
+        logger.info(f"Using scikit-learn version: {sklearn_version}")
+        
+        # Ensure we're using a compatible version
+        if sklearn_version < "1.3.0":
+            logger.warning(f"scikit-learn version {sklearn_version} may have compatibility issues. Recommended: >=1.3.0")
+        
         self.model = RandomForestClassifier(
             n_estimators=100,
             criterion='gini',
@@ -688,21 +697,92 @@ class MarketRegimeClassifier:
             with open(filename, 'rb') as f:
                 model_data = pickle.load(f)
             
-            self.model = model_data['model']
-            self.scaler = model_data['scaler']
-            self.feature_names = model_data['feature_names']
-            self.regime_definitions = model_data['regime_definitions']
-            self.is_trained = model_data['is_trained']
+            # Check if the loaded model is compatible with current scikit-learn version
+            try:
+                # Test if the model can be used without errors
+                if hasattr(model_data['model'], 'predict'):
+                    # Try a simple prediction to test compatibility
+                    test_features = np.zeros((1, len(model_data['feature_names'])))
+                    _ = model_data['model'].predict(test_features)
+                else:
+                    raise ValueError("Loaded model does not have predict method")
+                
+                self.model = model_data['model']
+                self.scaler = model_data['scaler']
+                self.feature_names = model_data['feature_names']
+                self.regime_definitions = model_data['regime_definitions']
+                self.is_trained = model_data['is_trained']
+                
+                logger.info(f"Model loaded from {filename}")
+                
+            except Exception as compatibility_error:
+                logger.warning(f"Model compatibility issue detected: {str(compatibility_error)}")
+                logger.info("This usually happens when the model was saved with a different scikit-learn version")
+                logger.info("The model will be retrained automatically")
+                
+                # Reset to untrained state so the model will be retrained
+                self.is_trained = False
+                return
             
-            logger.info(f"Model loaded from {filename}")
-            
+        except FileNotFoundError:
+            logger.info(f"Model file {filename} not found. Model will be trained on first use.")
+            self.is_trained = False
         except Exception as e:
             logger.error(f"Error loading model: {str(e)}")
+            logger.info("Model will be retrained automatically")
             self.is_trained = False
     
     def get_regime_definitions(self) -> Dict:
         """Get market regime definitions"""
         return self.regime_definitions
+    
+    def check_model_compatibility(self) -> Dict:
+        """Check if the current model is compatible with the installed scikit-learn version"""
+        try:
+            if not self.is_trained:
+                return {
+                    "status": "not_trained",
+                    "message": "Model not trained yet",
+                    "compatible": False
+                }
+            
+            # Test model compatibility
+            try:
+                # Create dummy features for testing
+                if hasattr(self, 'feature_names') and self.feature_names:
+                    test_features = np.zeros((1, len(self.feature_names)))
+                    test_features_scaled = self.scaler.transform(test_features)
+                    _ = self.model.predict(test_features_scaled)
+                    
+                    return {
+                        "status": "success",
+                        "message": "Model is compatible",
+                        "compatible": True,
+                        "sklearn_version": sklearn.__version__,
+                        "model_type": type(self.model).__name__
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "message": "Model features not properly initialized",
+                        "compatible": False
+                    }
+                    
+            except Exception as test_error:
+                return {
+                    "status": "error",
+                    "message": f"Model compatibility test failed: {str(test_error)}",
+                    "compatible": False,
+                    "sklearn_version": sklearn.__version__,
+                    "error_details": str(test_error)
+                }
+                
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Error checking compatibility: {str(e)}",
+                "compatible": False
+            }
     
     # Helper methods for feature calculation
     def _calculate_rsi(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
