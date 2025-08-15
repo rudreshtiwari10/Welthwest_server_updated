@@ -692,7 +692,7 @@ class MarketRegimeClassifier:
             logger.error(f"Error saving model: {str(e)}")
     
     def load_model(self, filename: str = "market_regime_model.pkl"):
-        """Load a trained model"""
+        """Load a trained model with enhanced version compatibility handling"""
         try:
             with open(filename, 'rb') as f:
                 model_data = pickle.load(f)
@@ -715,10 +715,30 @@ class MarketRegimeClassifier:
                 
                 logger.info(f"Model loaded from {filename}")
                 
-            except Exception as compatibility_error:
-                logger.warning(f"Model compatibility issue detected: {str(compatibility_error)}")
-                logger.info("This usually happens when the model was saved with a different scikit-learn version")
-                logger.info("The model will be retrained automatically")
+            except (AttributeError, ValueError, TypeError) as compatibility_error:
+                error_str = str(compatibility_error)
+                logger.warning(f"Model compatibility issue detected: {error_str}")
+                
+                # Check for specific scikit-learn version incompatibility issues
+                if ('monotonic_cst' in error_str or 
+                    'has no attribute' in error_str or
+                    'pickle' in error_str.lower()):
+                    logger.info("Detected scikit-learn version mismatch between training and deployment")
+                    logger.info("This is common when models are trained with one version and deployed with another")
+                    logger.info("Deleting incompatible model file and will retrain automatically")
+                    
+                    # Delete the incompatible model file
+                    try:
+                        import os
+                        if os.path.exists(filename):
+                            os.remove(filename)
+                            logger.info(f"Removed incompatible model file: {filename}")
+                    except Exception as delete_error:
+                        logger.warning(f"Could not delete incompatible model file: {delete_error}")
+                
+                else:
+                    logger.info("This usually happens when the model was saved with a different scikit-learn version")
+                    logger.info("The model will be retrained automatically")
                 
                 # Reset to untrained state so the model will be retrained
                 self.is_trained = False
