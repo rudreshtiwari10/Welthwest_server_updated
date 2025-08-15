@@ -41,18 +41,8 @@ class MarketRegimeService:
         try:
             # Try to load existing model first
             self.classifier.load_model()
-            
-            # Check if the loaded model is compatible
-            compatibility_check = self.classifier.check_model_compatibility()
-            
-            if compatibility_check.get("compatible", False):
-                self.model_loaded = True
-                logger.info("Market regime model loaded successfully and is compatible")
-            else:
-                logger.warning(f"Model compatibility issue: {compatibility_check.get('message', 'Unknown issue')}")
-                logger.info("Model will be retrained automatically")
-                self.model_loaded = False
-                
+            self.model_loaded = True
+            logger.info("Market regime model loaded successfully")
         except Exception as e:
             logger.warning(f"Could not load existing model: {str(e)}")
             logger.info("Model will be trained on first use")
@@ -344,16 +334,12 @@ class MarketRegimeService:
             cache_key = "model_training_results"
             training_info = get_cached_data(cache_key)
             
-            # Check model compatibility
-            compatibility_info = self.classifier.check_model_compatibility()
-            
             model_info = {
                 "status": "trained",
                 "is_loaded": self.model_loaded,
                 "last_training_time": self.last_training_time.isoformat() if self.last_training_time else None,
                 "regime_definitions": self.classifier.get_regime_definitions(),
-                "supported_tickers": self.supported_tickers,
-                "compatibility": compatibility_info
+                "supported_tickers": self.supported_tickers
             }
             
             if training_info:
