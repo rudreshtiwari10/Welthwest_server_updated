@@ -804,7 +804,80 @@ class MarketRegimeClassifier:
                 "compatible": False
             }
     
-    # Helper methods for feature calculation
+    
+    def force_retrain_for_production(self):
+        """Force retrain the model for production compatibility"""
+        try:
+            logger.info("Forcing model retrain for production compatibility")
+            
+            # Reset model state
+            self.is_trained = False
+            self.feature_names = []
+            
+            # Create new model instance
+            self.model = RandomForestClassifier(
+                n_estimators=100,
+                criterion='gini',
+                max_depth=10,
+                min_samples_split=5,
+                min_samples_leaf=3,
+                random_state=42,
+                n_jobs=-1
+            )
+            
+            # Reset scaler
+            self.scaler = StandardScaler()
+            
+            logger.info("Model reset completed. Ready for retraining.")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error resetting model: {str(e)}")
+            return False
+    
+    def handle_production_compatibility(self):
+        """Handle production compatibility issues automatically"""
+        try:
+            # Check if we're in production
+            is_production = os.environ.get('FLASK_ENV') == 'production' or os.environ.get('RENDER')
+            
+            if is_production:
+                logger.info("Running in production environment - checking compatibility")
+                
+                # Try to load existing model
+                try:
+                    self.load_model()
+                    
+                    # Test compatibility
+                    compatibility = self.check_model_compatibility()
+                    
+                    if not compatibility.get("compatible", False):
+                        logger.warning("Model compatibility issue detected in production")
+                        logger.info("Forcing model retrain for production compatibility")
+                        
+                        # Force retrain
+                        if self.force_retrain_for_production():
+                            logger.info("Model reset successful. Will be retrained on first use.")
+                            return True
+                        else:
+                            logger.error("Failed to reset model for production")
+                            return False
+                    else:
+                        logger.info("Model is compatible in production environment")
+                        return True
+                        
+                except Exception as e:
+                    logger.warning(f"Could not load model in production: {str(e)}")
+                    logger.info("Model will be retrained automatically")
+                    return True
+            else:
+                logger.info("Running in development environment")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error handling production compatibility: {str(e)}")
+            return False
+# Helper methods for feature calculation
     def _calculate_rsi(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
         """Calculate RSI"""
         delta = df['Close'].diff()
