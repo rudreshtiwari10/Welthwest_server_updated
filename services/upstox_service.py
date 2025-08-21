@@ -406,6 +406,10 @@ def get_upstox_market_indices():
     try:
         indices_data = upstox_api.get_market_indices()
         
+        if not indices_data:
+            logger.warning("No data returned from Upstox API for market indices")
+            return {}
+        
         # Define proper mapping for instrument keys to display names
         index_names = {
             'NSE_INDEX|Nifty 50': 'NIFTY 50',
@@ -417,15 +421,32 @@ def get_upstox_market_indices():
         # Format data similar to yfinance - use consistent field names
         formatted_indices = {}
         for key, data in indices_data.items():
-            if data:
-                # Map to the expected frontend field names
-                formatted_indices[key] = {
-                    'name': index_names.get(key, key),  # Use proper display name
-                    'price': data.get('last_price', 0),
-                    'change': data.get('net_change', 0),
-                    'percentChange': data.get('percent_change', 0),  # Map to percentChange for frontend
-                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                }
+            if data and isinstance(data, dict):
+                # Validate required fields
+                last_price = data.get('last_price')
+                net_change = data.get('net_change')
+                percent_change = data.get('percent_change')
+                
+                if last_price is not None and net_change is not None and percent_change is not None:
+                    # Map to the expected frontend field names with proper validation
+                    formatted_indices[key] = {
+                        'name': index_names.get(key, key),  # Use proper display name
+                        'price': round(float(last_price), 2),
+                        'change': round(float(net_change), 2),
+                        'percentChange': round(float(percent_change), 2),  # Map to percentChange for frontend
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'source': 'Upstox'
+                    }
+                    logger.info(f"Formatted Upstox data for {key}: {formatted_indices[key]}")
+                else:
+                    logger.warning(f"Missing required fields for index {key}: last_price={last_price}, net_change={net_change}, percent_change={percent_change}")
+            else:
+                logger.warning(f"Invalid data format for index {key}: {type(data)}")
+        
+        if formatted_indices:
+            logger.info(f"Successfully formatted {len(formatted_indices)} indices from Upstox")
+        else:
+            logger.warning("No valid indices data could be formatted from Upstox")
         
         return formatted_indices
         

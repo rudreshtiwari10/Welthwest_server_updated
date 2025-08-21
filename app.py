@@ -39,6 +39,9 @@ from bson import ObjectId
 from datetime import datetime
 import atexit
 from services.scheduler_service import keep_alive_scheduler
+import time
+from services.cache_service import get_cached_data
+from services.stock_service import warm_market_indices_cache
 
 # Setup logging with more detailed format
 logging.basicConfig(
@@ -182,12 +185,78 @@ ai_service = AIModelService()  # Initialize AI service
 # Initialize backtesting service
 backtesting_service = BacktestingService()
 
+# Warm market indices cache on startup
+def warm_cache_on_startup():
+    """Warm the market indices cache when the first request comes in"""
+    try:
+        logger.info("Warming market indices cache on startup...")
+        warm_market_indices_cache()
+        logger.info("Market indices cache warming completed")
+    except Exception as e:
+        logger.warning(f"Failed to warm market indices cache on startup: {str(e)}")
+
+# Add startup event handler for modern Flask versions
+@app.route('/startup', methods=['POST'])
+def trigger_startup_tasks():
+    """Trigger startup tasks like cache warming"""
+    try:
+        warm_cache_on_startup()
+        return jsonify({
+            "status": "success",
+            "message": "Startup tasks completed",
+            "timestamp": datetime.now().isoformat()
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Startup tasks failed: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
 # Root route for health checks
 @app.route('/', methods=['GET', 'HEAD'])
 def root():
     """Root endpoint for health checks"""
     return jsonify({"status": "healthy", "message": "Indian Stock Market API is running"}), 200
 
+# Health check endpoint with cache status
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check with cache status and performance metrics"""
+    try:
+        # Check cache status for market indices
+        cache_key = "market_indices"
+        cached_data = get_cached_data(cache_key)
+        
+        # Warm cache if it's cold
+        if not cached_data:
+            warm_cache_on_startup()
+            cached_data = get_cached_data(cache_key)
+        
+        health_data = {
+            "status": "healthy",
+            "message": "Indian Stock Market API is running",
+            "timestamp": datetime.now().isoformat(),
+            "cache": {
+                "market_indices": "warm" if cached_data else "cold",
+                "status": "operational"
+            },
+            "services": {
+                "upstox": "available" if upstox_api.access_token else "unavailable",
+                "yfinance": "available",
+                "cache": "operational"
+            }
+        }
+        
+        return jsonify(health_data), 200
+        
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
 
 # Start keep-alive scheduler at import time if enabled (compatible with Flask >=2.3)
 def _maybe_start_keep_alive_scheduler():
@@ -1701,13 +1770,52 @@ def get_statistics():
 
 @app.route('/api/market-indices', methods=['GET'])
 def market_indices():
+    """Get market indices data with performance monitoring"""
+    start_time = time.time()
+    
     try:
+        logger.info("Market indices request started")
         indices_data = get_market_indices()
-        return jsonify({
-            "indices": indices_data
-        })
+        
+        # Calculate response time
+        response_time = round(time.time() - start_time, 3)
+        
+        # Log performance metrics
+        logger.info(f"Market indices request completed in {response_time} seconds")
+        
+        # Add performance metadata to response
+        response_data = {
+            "indices": indices_data,
+            "performance": {
+                "response_time_seconds": response_time,
+                "timestamp": datetime.now().isoformat(),
+                "cache_status": "hit" if response_time < 0.1 else "miss"
+            }
+        }
+        
+        # Add response time header for monitoring
+        response = jsonify(response_data)
+        response.headers['X-Response-Time'] = f"{response_time}s"
+        
+        return response
+        
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        response_time = round(time.time() - start_time, 3)
+        logger.error(f"Error in market indices endpoint after {response_time} seconds: {str(e)}")
+        
+        error_response = {
+            "error": str(e),
+            "performance": {
+                "response_time_seconds": response_time,
+                "timestamp": datetime.now().isoformat(),
+                "status": "error"
+            }
+        }
+        
+        response = jsonify(error_response), 500
+        response[0].headers['X-Response-Time'] = f"{response_time}s"
+        
+        return response
 
 @app.route('/api/yahoo-suggest', methods=['GET'])
 def yahoo_suggest():
@@ -2003,10 +2111,7 @@ def chat_with_ai():
             "analysis": "Sorry, I encountered an error processing your request."
         }), 500
 
-# Health check endpoint
-@app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({"status": "healthy", "message": "Indian Stock Market API is running"}), 200
+# Health check endpoint (enhanced version is defined above)
 
 # Technical Analysis Endpoints
 @app.route('/api/indicators', methods=['GET'])
@@ -3714,6 +3819,129 @@ def get_user_chat_history():
             "error": "Internal server error",
             "message": str(e)
         }), 500 
+
+@app.route('/api/market-indices/test', methods=['GET'])
+def test_market_indices_performance():
+    """Test endpoint for market indices performance without caching"""
+    start_time = time.time()
+    
+    try:
+        logger.info("Market indices performance test started")
+        
+        # Clear cache to test fresh performance
+        from services.cache_service import delete_cached_data
+        delete_cached_data("market_indices")
+        
+        # Fetch fresh data
+        indices_data = get_market_indices()
+        
+        # Calculate response time
+        response_time = round(time.time() - start_time, 3)
+        
+        # Log performance metrics
+        logger.info(f"Market indices performance test completed in {response_time} seconds")
+        
+        # Return performance data
+        test_data = {
+            "test_type": "performance_test",
+            "indices": indices_data,
+            "performance": {
+                "response_time_seconds": response_time,
+                "timestamp": datetime.now().isoformat(),
+                "cache_used": False,
+                "data_source": "fresh_fetch"
+            }
+        }
+        
+        response = jsonify(test_data)
+        response.headers['X-Response-Time'] = f"{response_time}s"
+        response.headers['X-Test-Mode'] = "true"
+        
+        return response
+        
+    except Exception as e:
+        response_time = round(time.time() - start_time, 3)
+        logger.error(f"Error in market indices performance test after {response_time} seconds: {str(e)}")
+        
+        error_response = {
+            "test_type": "performance_test",
+            "error": str(e),
+            "performance": {
+                "response_time_seconds": response_time,
+                "timestamp": datetime.now().isoformat(),
+                "status": "error"
+            }
+        }
+        
+        response = jsonify(error_response), 500
+        response[0].headers['X-Response-Time'] = f"{response_time}s"
+        response[0].headers['X-Test-Mode'] = "true"
+        
+        return response
+
+@app.route('/api/market-indices/debug', methods=['GET'])
+def debug_market_indices():
+    """Debug endpoint to test market indices data fetching without caching"""
+    start_time = time.time()
+    
+    try:
+        logger.info("Market indices debug request started")
+        
+        # Clear cache to test fresh data
+        from services.cache_service import delete_cached_data
+        delete_cached_data("market_indices")
+        
+        # Test direct Yahoo Finance call
+        from services.stock_service import get_market_indices_yfinance_optimized
+        indices_data = get_market_indices_yfinance_optimized()
+        
+        # Calculate response time
+        response_time = round(time.time() - start_time, 3)
+        
+        # Log performance metrics
+        logger.info(f"Market indices debug request completed in {response_time} seconds")
+        
+        # Return debug data
+        debug_data = {
+            "debug_type": "market_indices_test",
+            "indices": indices_data,
+            "performance": {
+                "response_time_seconds": response_time,
+                "timestamp": datetime.now().isoformat(),
+                "cache_used": False,
+                "data_source": "direct_yahoo_finance"
+            },
+            "session_info": {
+                "custom_session_used": False,
+                "yfinance_handles_session": True
+            }
+        }
+        
+        response = jsonify(debug_data)
+        response.headers['X-Response-Time'] = f"{response_time}s"
+        response.headers['X-Debug-Mode'] = "true"
+        
+        return response
+        
+    except Exception as e:
+        response_time = round(time.time() - start_time, 3)
+        logger.error(f"Error in market indices debug endpoint after {response_time} seconds: {str(e)}")
+        
+        error_response = {
+            "debug_type": "market_indices_test",
+            "error": str(e),
+            "performance": {
+                "response_time_seconds": response_time,
+                "timestamp": datetime.now().isoformat(),
+                "status": "error"
+            }
+        }
+        
+        response = jsonify(error_response), 500
+        response[0].headers['X-Response-Time'] = f"{response_time}s"
+        response[0].headers['X-Debug-Mode'] = "true"
+        
+        return response
 
 if __name__ == '__main__':
     # Get configuration

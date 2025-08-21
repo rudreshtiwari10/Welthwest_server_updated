@@ -1,12 +1,13 @@
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import time
 import logging
 import numpy as np
 import requests
 import os
 import random
+import pytz
 from services.cache_service import get_cached_data, set_cached_data
 from services.upstox_service import (
     get_upstox_historical_data, 
@@ -37,11 +38,8 @@ try:
 except Exception:
     _YF_SESSION = None
 
-if _YF_SESSION is None:
-    _YF_SESSION = requests.Session()
-    _YF_SESSION.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    })
+# Don't set a custom session - let yfinance handle its own session management
+# This fixes the "Yahoo API requires curl_cffi session" error
 
 def _sleep_before_yf_call():
     if IS_RENDER:
@@ -234,7 +232,7 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
     for attempt in range(max_retries):
         try:
             _sleep_before_yf_call()
-            ticker = yf.Ticker(formatted_ticker, session=_YF_SESSION)
+            ticker = yf.Ticker(formatted_ticker)
             hist_data = ticker.history(period=period, interval=interval)
             
             if len(hist_data) > 0:
@@ -267,7 +265,7 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
             if formatted_ticker.endswith('.NS'):
                 bse_ticker = ticker_symbol + '.BO'
                 _sleep_before_yf_call()
-                ticker = yf.Ticker(bse_ticker, session=_YF_SESSION)
+                ticker = yf.Ticker(bse_ticker)
                 hist_data = ticker.history(period=period, interval=interval)
                 
                 if len(hist_data) > 0:
@@ -417,7 +415,7 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
         try:
             logger.info(f"Attempt {attempt + 1} to fetch data from yfinance")
             _sleep_before_yf_call()
-            ticker = yf.Ticker(formatted_ticker, session=_YF_SESSION)
+            ticker = yf.Ticker(formatted_ticker)
             hist_data = ticker.history(start=start_date, end=end_date, interval=interval)
             
             if len(hist_data) > 0:
@@ -449,7 +447,7 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
                 logger.info("No data from NSE, trying BSE")
                 bse_ticker = ticker_symbol + '.BO'
                 _sleep_before_yf_call()
-                ticker = yf.Ticker(bse_ticker, session=_YF_SESSION)
+                ticker = yf.Ticker(bse_ticker)
                 hist_data = ticker.history(start=start_date, end=end_date, interval=interval)
                 
                 if len(hist_data) > 0:
@@ -595,7 +593,7 @@ def get_live_data_yfinance(ticker_symbols):
             try:
                 logger.info(f"Attempt {attempt + 1} for {symbol}")
                 _sleep_before_yf_call()
-                ticker = yf.Ticker(symbol, session=_YF_SESSION)
+                ticker = yf.Ticker(symbol)
                 
                 # First try to get info
                 try:
@@ -638,7 +636,7 @@ def get_live_data_yfinance(ticker_symbols):
                         logger.info(f"Trying BSE fallback for {symbol}")
                         bse_symbol = symbol.replace('.NS', '.BO')
                         _sleep_before_yf_call()
-                        ticker = yf.Ticker(bse_symbol, session=_YF_SESSION)
+                        ticker = yf.Ticker(bse_symbol)
                         
                         # Get info
                         try:
@@ -718,48 +716,121 @@ def get_live_data_yfinance(ticker_symbols):
     result_df = pd.DataFrame.from_dict(original_live_data, orient='index')
     return result_df
 
+def is_market_hours():
+    """
+    Check if it's currently Indian market hours (9:15 AM - 3:30 PM IST, Monday-Friday)
+    """
+    try:
+        # Get current time in IST
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
+        
+        # Check if it's a weekday (Monday=0, Sunday=6)
+        if now.weekday() >= 5:  # Saturday or Sunday
+            return False
+        
+        # Check if it's within market hours (9:15 AM - 3:30 PM IST)
+        market_start = time(9, 15)
+        market_end = time(15, 30)
+        
+        return market_start <= now.time() <= market_end
+        
+    except Exception as e:
+        logger.warning(f"Error checking market hours: {str(e)}")
+        # Default to True if we can't determine
+        return True
+
+def warm_market_indices_cache():
+    """
+    Pre-fetch market indices data to warm the cache during low-traffic periods
+    This function can be called by a scheduler or during app startup
+    """
+    try:
+        logger.info("Starting market indices cache warming")
+        
+        # Check if cache is already warm
+        cache_key = "market_indices"
+        cached_data = get_cached_data(cache_key)
+        
+        if cached_data:
+            logger.info("Market indices cache is already warm")
+            return True
+        
+        # Pre-fetch data
+        logger.info("Pre-fetching market indices data for cache warming")
+        indices_data = get_market_indices_yfinance_optimized()
+        
+        if indices_data and len(indices_data) > 0:
+            # Cache with longer TTL for pre-fetched data
+            cache_ttl = 3600  # 1 hour for pre-fetched data
+            set_cached_data(cache_key, indices_data, cache_ttl)
+            logger.info(f"Successfully warmed market indices cache with {len(indices_data)} indices")
+            return True
+        else:
+            logger.warning("Failed to warm market indices cache - no data received")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error warming market indices cache: {str(e)}")
+        return False
+
 def get_market_indices():
     """
-    Get major Indian market indices data with caching
+    Get major Indian market indices data with smart caching and circuit breaker
     Primary: Upstox API, Fallback: Yahoo Finance
     
     Returns:
     dict: Market indices data
     """
     cache_key = "market_indices"
-    cache_ttl = 300  # 5 minutes
+    
+    # Smart cache TTL based on market hours
+    if is_market_hours():
+        cache_ttl = 300  # 5 minutes during market hours (more frequent updates)
+    else:
+        cache_ttl = 1800  # 30 minutes outside market hours (less frequent updates)
     
     # Try to get from cache first
     cached_data = get_cached_data(cache_key)
     if cached_data:
+        logger.info("Returning cached market indices data")
         return cached_data
     
-    # Try Upstox API first (Primary)
-    try:
-        if upstox_api.access_token:
-            logger.info("Attempting to fetch market indices from Upstox")
-            upstox_indices = get_upstox_market_indices()
-            
-            if upstox_indices:
-                logger.info("Successfully fetched market indices from Upstox")
-                # Cache the result
-                set_cached_data(cache_key, upstox_indices, cache_ttl)
-                return upstox_indices
-            else:
-                logger.warning("No market indices data from Upstox, falling back to Yahoo Finance")
-        else:
-            logger.warning("Upstox access token not available, using Yahoo Finance for market indices")
-    except Exception as e:
-        logger.error(f"Error fetching market indices from Upstox: {str(e)}, falling back to Yahoo Finance")
+    # Circuit breaker: Check if Upstox has failed recently
+    upstox_failure_key = "upstox_market_indices_failure"
+    upstox_failure_data = get_cached_data(upstox_failure_key)
     
-    # Fallback to Yahoo Finance
-    logger.info("Using Yahoo Finance as fallback for market indices")
-    return get_market_indices_yfinance()
+    # Try Upstox API first (Primary) - unless it failed recently
+    if not upstox_failure_data:
+        try:
+            if upstox_api.access_token:
+                logger.info("Attempting to fetch market indices from Upstox")
+                upstox_indices = get_upstox_market_indices()
+                
+                if upstox_indices and len(upstox_indices) > 0:
+                    logger.info("Successfully fetched market indices from Upstox")
+                    # Cache the result
+                    set_cached_data(cache_key, upstox_indices, cache_ttl)
+                    return upstox_indices
+                else:
+                    logger.warning("No market indices data from Upstox, falling back to Yahoo Finance")
+            else:
+                logger.warning("Upstox access token not available, using Yahoo Finance for market indices")
+        except Exception as e:
+            logger.error(f"Error fetching market indices from Upstox: {str(e)}, falling back to Yahoo Finance")
+            # Mark Upstox as failed for 15 minutes
+            set_cached_data(upstox_failure_key, {"failed_at": datetime.now().isoformat()}, 900)
+    else:
+        logger.info("Skipping Upstox due to recent failures, using Yahoo Finance")
+    
+    # Fallback to Yahoo Finance - optimized version
+    logger.info("Using Yahoo Finance for market indices")
+    return get_market_indices_yfinance_optimized()
 
-def get_market_indices_yfinance():
+def get_market_indices_yfinance_optimized():
     """
-    Get market indices data using Yahoo Finance with bulk data fetching
-    Fetches all indices in a single API call for better performance
+    Get market indices data using Yahoo Finance with optimized bulk data fetching
+    No unnecessary delays, optimized period, and better error handling
     """
     # Define the indices to fetch
     indices = ["^NSEI", "^BSESN", "^CNXIT", "^NSEBANK"]  # NIFTY 50, SENSEX, NIFTY IT, NIFTY BANK
@@ -776,13 +847,13 @@ def get_market_indices_yfinance():
     start_time = time.time()
     
     try:
-        logger.info(f"Fetching data for {len(indices)} market indices in a single bulk call")
+        logger.info(f"Fetching data for {len(indices)} market indices in optimized bulk call")
         
         # Use yfinance's download function to get data for all indices in a single call
-        _sleep_before_yf_call()
+        # No sleep delay for market indices - they're less rate-limited
         data = yf.download(
             tickers=indices,
-            period="5d",  # Get 5 days to ensure we have valid data for 1d interval
+            period="2d",  # Reduced from 5d to 2d - only need current + previous close
             group_by="ticker",
             auto_adjust=True,
             progress=False
@@ -797,8 +868,8 @@ def get_market_indices_yfinance():
         except Exception:
             is_empty_bulk = True
         if is_empty_bulk:
-            logger.warning("Bulk indices download returned empty; using individual fallback")
-            return get_market_indices_individual_fallback()
+            logger.warning("Bulk indices download returned empty; using optimized individual fallback")
+            return get_market_indices_individual_optimized()
 
         # Process the bulk data for each index
         for index_symbol in indices:
@@ -821,7 +892,8 @@ def get_market_indices_yfinance():
                             'price': round(latest_price, 2),
                             'change': round(change, 2),
                             'percentChange': round(pct_change, 2),
-                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'source': 'Yahoo Finance (Bulk)'
                         }
                         logger.info(f"Processed index {index_symbol}: {round(pct_change, 2)}%")
                     elif len(close_prices) == 1:
@@ -833,7 +905,8 @@ def get_market_indices_yfinance():
                             'change': 0,
                             'percentChange': 0,
                             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'note': 'Insufficient data for change calculation'
+                            'note': 'Insufficient data for change calculation',
+                            'source': 'Yahoo Finance (Bulk)'
                         }
                         logger.warning(f"Only one valid price found for index {index_symbol}")
                     else:
@@ -841,37 +914,40 @@ def get_market_indices_yfinance():
                         result[index_symbol] = {
                             'name': index_names.get(index_symbol, index_symbol),
                             'error': 'No valid price data available',
-                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'source': 'Yahoo Finance (Bulk)'
                         }
                         logger.warning(f"No valid price data found for index {index_symbol}")
                 else:
                     result[index_symbol] = {
                         'name': index_names.get(index_symbol, index_symbol),
                         'error': 'No data available',
-                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'source': 'Yahoo Finance (Bulk)'
                     }
                     logger.warning(f"No data available for index {index_symbol}")
             except Exception as e:
                 result[index_symbol] = {
                     'name': index_names.get(index_symbol, index_symbol),
                     'error': str(e),
-                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'source': 'Yahoo Finance (Bulk)'
                 }
                 logger.error(f"Error processing index {index_symbol}: {str(e)}")
     
     except Exception as e:
         logger.error(f"Error in bulk indices fetch: {str(e)}")
-        # If bulk fetch fails, try individual fetches as fallback
-        return get_market_indices_individual_fallback()
+        # If bulk fetch fails, try optimized individual fetches as fallback
+        return get_market_indices_individual_optimized()
     
     # Log metadata but don't include it in the response
     fetch_time_seconds = round(time.time() - start_time, 2)
     logger.info(f"Successfully fetched market indices data in {fetch_time_seconds} seconds")
-    logger.info(f"Source: Yahoo Finance (Bulk Data), Indices count: {len(indices)}")
+    logger.info(f"Source: Yahoo Finance (Optimized Bulk), Indices count: {len(indices)}")
     
     # Cache before returning
     cache_key = "market_indices"
-    set_cached_data(cache_key, result, 300)  # 5 minutes cache
+    set_cached_data(cache_key, result, 1800)  # 30 minutes cache
     return result
 
 def get_market_indices_individual_fallback():
@@ -945,6 +1021,101 @@ def get_market_indices_individual_fallback():
     set_cached_data(cache_key, result, 300)  # 5 minutes cache
     return result
 
+def get_market_indices_individual_optimized():
+    """
+    Optimized fallback method to get market indices data using individual API calls
+    No unnecessary delays and improved data accuracy
+    """
+    logger.warning("Using optimized individual API calls as fallback for market indices")
+    indices = ["^NSEI", "^BSESN", "^CNXIT", "^NSEBANK"]  # NIFTY 50, SENSEX, NIFTY IT, NIFTY BANK
+    
+    # Define index names mapping
+    index_names = {
+        "^NSEI": "NIFTY 50",
+        "^BSESN": "BSE SENSEX",
+        "^CNXIT": "NIFTY IT",
+        "^NSEBANK": "NIFTY BANK"
+    }
+    
+    start_time = time.time()
+    result = {}
+    
+    for index_symbol in indices:
+        try:
+            # No sleep delay for market indices - they're less rate-limited
+            # Don't pass custom session - let yfinance handle its own session
+            index = yf.Ticker(index_symbol)
+            
+            # Get 2 days of data to ensure we have current and previous close
+            hist = index.history(period="2d")
+            
+            if len(hist) > 0:
+                latest_price = hist['Close'].iloc[-1]
+                
+                # Always try to get real previous close data
+                prev_close = None
+                if len(hist) >= 2:
+                    # Use actual previous day's close if available
+                    prev_close = hist['Close'].iloc[-2]
+                else:
+                    # Try to get from ticker info
+                    try:
+                        prev_close = index.info.get('previousClose')
+                    except:
+                        pass
+                
+                # Only calculate change if we have real previous close data
+                if prev_close and prev_close > 0:
+                    change = latest_price - prev_close
+                    pct_change = (change / prev_close * 100)
+                    
+                    result[index_symbol] = {
+                        'name': index_names.get(index_symbol, index_symbol),
+                        'price': round(latest_price, 2),
+                        'change': round(change, 2),
+                        'percentChange': round(pct_change, 2),
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'source': 'Yahoo Finance (Individual)'
+                    }
+                    logger.info(f"Processed index {index_symbol}: {round(pct_change, 2)}%")
+                else:
+                    # No valid previous close data
+                    result[index_symbol] = {
+                        'name': index_names.get(index_symbol, index_symbol),
+                        'price': round(latest_price, 2),
+                        'change': 0,
+                        'percentChange': 0,
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'note': 'Previous close data unavailable',
+                        'source': 'Yahoo Finance (Individual)'
+                    }
+                    logger.warning(f"No valid previous close data for index {index_symbol}")
+            else:
+                result[index_symbol] = {
+                    'name': index_names.get(index_symbol, index_symbol),
+                    'error': 'No data available',
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'source': 'Yahoo Finance (Individual)'
+                }
+        except Exception as e:
+            result[index_symbol] = {
+                'name': index_names.get(index_symbol, index_symbol),
+                'error': str(e),
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'source': 'Yahoo Finance (Individual)'
+            }
+            logger.error(f"Error processing index {index_symbol}: {str(e)}")
+    
+    # Log metadata but don't include it in the response
+    fetch_time_seconds = round(time.time() - start_time, 2)
+    logger.info(f"Successfully fetched market indices data in {fetch_time_seconds} seconds (individual optimized fallback)")
+    logger.info(f"Source: Yahoo Finance (Individual Optimized Fallback), Indices count: {len(indices)}")
+    
+    # Cache before returning
+    cache_key = "market_indices"
+    set_cached_data(cache_key, result, 1800)  # 30 minutes cache
+    return result
+
 def validate_ticker(ticker_symbol):
     """
     Check if a ticker symbol is valid for Indian market
@@ -981,7 +1152,7 @@ def validate_ticker(ticker_symbol):
     for attempt in range(max_retries):
         try:
             _sleep_before_yf_call()
-            ticker = yf.Ticker(nse_ticker, session=_YF_SESSION)
+            ticker = yf.Ticker(nse_ticker)
             
             # First check: Try to get history data
             hist = ticker.history(period="1d")
@@ -997,7 +1168,7 @@ def validate_ticker(ticker_symbol):
             # If we got here but didn't return True, try BSE
             bse_ticker = f"{base_ticker}.BO"
             _sleep_before_yf_call()
-            ticker = yf.Ticker(bse_ticker, session=_YF_SESSION)
+            ticker = yf.Ticker(bse_ticker)
             
             hist = ticker.history(period="1d")
             if len(hist) > 0:
@@ -1323,7 +1494,7 @@ def get_stock_fundamentals(ticker_symbol):
     
     try:
         _sleep_before_yf_call()
-        ticker = yf.Ticker(formatted_ticker, session=_YF_SESSION)
+        ticker = yf.Ticker(formatted_ticker)
         
         # Get company info
         info = ticker.info
