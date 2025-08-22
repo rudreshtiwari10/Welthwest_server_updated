@@ -280,11 +280,61 @@ def _shutdown_scheduler():
 @app.route('/api/auth/register', methods=['POST'])
 @validate_json_request
 def register():
-    """Register a new user"""
+    """Register a new user - DEPRECATED: Use OTP verification flow instead"""
+    return jsonify({
+        "error": "This endpoint is deprecated. Please use the OTP verification flow: /api/auth/send-registration-otp followed by /api/auth/verify-registration-otp"
+    }), 400
+
+@app.route('/api/auth/send-registration-otp', methods=['POST'])
+@validate_json_request
+def send_registration_otp():
+    """Send OTP for email verification during registration"""
     data = request.get_json()
     
     # Validate required fields
-    required_fields = ['email', 'username', 'password', 'confirm_password']
+    if 'email' not in data:
+        return jsonify({"error": "Email is required"}), 400
+    
+    email = data['email'].strip().lower()
+    
+    # Check if email already exists
+    if user_service.users.find_one({"email": email}):
+        return jsonify({"error": "Email already exists"}), 400
+    
+    # Generate and send OTP
+    success, message, otp = user_service.create_registration_otp(email)
+    
+    if not success:
+        return jsonify({"error": message}), 400
+    
+    # Send OTP email
+    try:
+        email_sent = email_service.send_registration_otp(email, otp)
+        if email_sent:
+            logger.info(f"Registration OTP sent to {email}")
+            return jsonify({
+                "message": "OTP sent to your email for verification",
+                "email_sent": True
+            }), 200
+        else:
+            logger.error(f"Failed to send registration OTP email to {email}")
+            return jsonify({
+                "error": "Failed to send OTP email. Please try again."
+            }), 500
+    except Exception as e:
+        logger.error(f"Error sending registration OTP: {str(e)}")
+        return jsonify({
+            "error": "Failed to send OTP email. Please try again."
+        }), 500
+
+@app.route('/api/auth/verify-registration-otp', methods=['POST'])
+@validate_json_request
+def verify_registration_otp():
+    """Verify OTP and complete registration"""
+    data = request.get_json()
+    
+    # Validate required fields
+    required_fields = ['email', 'otp', 'username', 'password', 'confirm_password']
     for field in required_fields:
         if field not in data:
             return jsonify({"error": f"Missing required field: {field}"}), 400
@@ -293,11 +343,21 @@ def register():
     if data['password'] != data['confirm_password']:
         return jsonify({"error": "Passwords do not match"}), 400
     
+    email = data['email'].strip().lower()
+    otp = data['otp'].strip()
+    username = data['username'].strip()
+    password = data['password']
+    
+    # Verify OTP
+    success, message = user_service.verify_registration_otp(email, otp)
+    if not success:
+        return jsonify({"error": message}), 400
+    
     # Register user
     success, message, user_data = user_service.register_user(
-        email=data['email'],
-        username=data['username'],
-        password=data['password']
+        email=email,
+        username=username,
+        password=password
     )
     
     if not success:
@@ -2093,8 +2153,11 @@ def chat_with_ai():
                 'model': model,
                 'timestamp': pd.Timestamp.now().isoformat()
             }
-            user_service.save_chat_history(user_id_from_jwt, chat_data)
-            logger.info(f"Chat history saved for user {user_id_from_jwt}")
+            result = user_service.save_chat_history(user_id_from_jwt, chat_data)
+            if result.get("success"):
+                logger.info(f"Chat history saved for user {user_id_from_jwt}: {result.get('message')}")
+            else:
+                logger.warning(f"Failed to save chat history for user {user_id_from_jwt}: {result.get('message')}")
         except Exception as e:
             logger.warning(f"Failed to save chat history: {str(e)}")
         
@@ -3697,17 +3760,14 @@ def save_chat_history():
             return jsonify({"error": "chat_data is required"}), 400
         
         # Save the chat history
-        success = user_service.save_chat_history(user_id, data['chat_data'])
+        result = user_service.save_chat_history(user_id, data['chat_data'])
         
-        if success:
-            return jsonify({
-                "success": True,
-                "message": "Chat history saved successfully"
-            }), 200
+        if result.get("success"):
+            return jsonify(result), 200
         else:
             return jsonify({
                 "success": False,
-                "error": "Failed to save chat history"
+                "error": result.get("message", "Failed to save chat history")
             }), 500
             
     except Exception as e:
@@ -3820,128 +3880,16 @@ def get_user_chat_history():
             "message": str(e)
         }), 500 
 
-@app.route('/api/market-indices/test', methods=['GET'])
-def test_market_indices_performance():
-    """Test endpoint for market indices performance without caching"""
-    start_time = time.time()
-    
+@app.route('/api/market-indices-new', methods=['GET'])
+def market_indices_new():
+    from services.stock_service import get_market_indices_yfinance
     try:
-        logger.info("Market indices performance test started")
-        
-        # Clear cache to test fresh performance
-        from services.cache_service import delete_cached_data
-        delete_cached_data("market_indices")
-        
-        # Fetch fresh data
-        indices_data = get_market_indices()
-        
-        # Calculate response time
-        response_time = round(time.time() - start_time, 3)
-        
-        # Log performance metrics
-        logger.info(f"Market indices performance test completed in {response_time} seconds")
-        
-        # Return performance data
-        test_data = {
-            "test_type": "performance_test",
-            "indices": indices_data,
-            "performance": {
-                "response_time_seconds": response_time,
-                "timestamp": datetime.now().isoformat(),
-                "cache_used": False,
-                "data_source": "fresh_fetch"
-            }
-        }
-        
-        response = jsonify(test_data)
-        response.headers['X-Response-Time'] = f"{response_time}s"
-        response.headers['X-Test-Mode'] = "true"
-        
-        return response
-        
+        indices_data = get_market_indices_yfinance()
+        return jsonify({
+            "indices": indices_data
+        })
     except Exception as e:
-        response_time = round(time.time() - start_time, 3)
-        logger.error(f"Error in market indices performance test after {response_time} seconds: {str(e)}")
-        
-        error_response = {
-            "test_type": "performance_test",
-            "error": str(e),
-            "performance": {
-                "response_time_seconds": response_time,
-                "timestamp": datetime.now().isoformat(),
-                "status": "error"
-            }
-        }
-        
-        response = jsonify(error_response), 500
-        response[0].headers['X-Response-Time'] = f"{response_time}s"
-        response[0].headers['X-Test-Mode'] = "true"
-        
-        return response
-
-@app.route('/api/market-indices/debug', methods=['GET'])
-def debug_market_indices():
-    """Debug endpoint to test market indices data fetching without caching"""
-    start_time = time.time()
-    
-    try:
-        logger.info("Market indices debug request started")
-        
-        # Clear cache to test fresh data
-        from services.cache_service import delete_cached_data
-        delete_cached_data("market_indices")
-        
-        # Test direct Yahoo Finance call
-        from services.stock_service import get_market_indices_yfinance_optimized
-        indices_data = get_market_indices_yfinance_optimized()
-        
-        # Calculate response time
-        response_time = round(time.time() - start_time, 3)
-        
-        # Log performance metrics
-        logger.info(f"Market indices debug request completed in {response_time} seconds")
-        
-        # Return debug data
-        debug_data = {
-            "debug_type": "market_indices_test",
-            "indices": indices_data,
-            "performance": {
-                "response_time_seconds": response_time,
-                "timestamp": datetime.now().isoformat(),
-                "cache_used": False,
-                "data_source": "direct_yahoo_finance"
-            },
-            "session_info": {
-                "custom_session_used": False,
-                "yfinance_handles_session": True
-            }
-        }
-        
-        response = jsonify(debug_data)
-        response.headers['X-Response-Time'] = f"{response_time}s"
-        response.headers['X-Debug-Mode'] = "true"
-        
-        return response
-        
-    except Exception as e:
-        response_time = round(time.time() - start_time, 3)
-        logger.error(f"Error in market indices debug endpoint after {response_time} seconds: {str(e)}")
-        
-        error_response = {
-            "debug_type": "market_indices_test",
-            "error": str(e),
-            "performance": {
-                "response_time_seconds": response_time,
-                "timestamp": datetime.now().isoformat(),
-                "status": "error"
-            }
-        }
-        
-        response = jsonify(error_response), 500
-        response[0].headers['X-Response-Time'] = f"{response_time}s"
-        response[0].headers['X-Debug-Mode'] = "true"
-        
-        return response
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     # Get configuration

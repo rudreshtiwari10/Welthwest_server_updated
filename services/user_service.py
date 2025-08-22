@@ -357,16 +357,23 @@ class UserService:
             print(f"Error saving AI analysis result: {str(e)}")
             return False
     
-    def save_chat_history(self, user_id: str, chat_data: Dict[str, Any]) -> bool:
-        """Save chat history to user's history"""
+    def save_chat_history(self, user_id: str, chat_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Save chat history to user's history, supporting both new and existing sessions"""
         try:
             # Generate dynamic title from user query (ChatGPT-like naming)
-            def generate_chat_title(query: str) -> str:
-                if not query:
+            def generate_chat_title(conversation: List[Dict[str, Any]]) -> str:
+                # Find first user message for title
+                first_user_message = ""
+                for msg in conversation:
+                    if msg.get("sender") == "user" and msg.get("text"):
+                        first_user_message = msg["text"]
+                        break
+                
+                if not first_user_message:
                     return f"Chat {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
                 
                 # Clean and truncate the query for title
-                words = query.strip().split()[:5]  # First 5 words
+                words = first_user_message.strip().split()[:5]  # First 5 words
                 title = ' '.join(words)
                 
                 # Truncate if too long
@@ -375,8 +382,45 @@ class UserService:
                 
                 return title or f"Chat {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
             
-            # Create chat document
-            chat_title = chat_data.get("title") or generate_chat_title(chat_data.get("query", ""))
+            # Check if chat_id is provided for updating existing chat
+            chat_id = chat_data.get("chat_id")
+            conversation = chat_data.get("conversation", [])
+            
+            if chat_id:
+                # Update existing chat session
+                try:
+                    object_id = ObjectId(chat_id)
+                    chat_title = chat_data.get("title") or generate_chat_title(conversation)
+                    
+                    update_data = {
+                        "data": chat_data,
+                        "title": chat_title,
+                        "name": chat_title,  # Keep both for backward compatibility
+                        "model": chat_data.get("model", "Unknown"),
+                        "summary": chat_data.get("summary", ""),
+                        "updated_at": datetime.utcnow()
+                    }
+                    
+                    result = self.db.chat_history.update_one(
+                        {"_id": object_id, "user_id": user_id},
+                        {"$set": update_data}
+                    )
+                    
+                    if result.modified_count > 0:
+                        return {
+                            "success": True,
+                            "chat_id": chat_id,
+                            "message": "Chat history updated successfully"
+                        }
+                    else:
+                        # Chat not found or no changes, create new one
+                        chat_id = None
+                except:
+                    # Invalid ObjectId, create new chat
+                    chat_id = None
+            
+            # Create new chat session
+            chat_title = chat_data.get("title") or generate_chat_title(conversation)
             chat = {
                 "user_id": user_id,
                 "created_at": datetime.utcnow(),
@@ -387,12 +431,26 @@ class UserService:
                 "summary": chat_data.get("summary", "")
             }
             
-            # Insert chat into database
+            # Insert new chat into database
             result = self.db.chat_history.insert_one(chat)
-            return bool(result.inserted_id)
+            if result.inserted_id:
+                return {
+                    "success": True,
+                    "chat_id": str(result.inserted_id),
+                    "message": "Chat history saved successfully"
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": "Failed to save chat history"
+                }
+                
         except Exception as e:
             print(f"Error saving chat history: {str(e)}")
-            return False
+            return {
+                "success": False,
+                "message": f"Error saving chat history: {str(e)}"
+            }
     
     def get_user_backtests(self, user_id: str, limit: int = 10, skip: int = 0) -> List[Dict[str, Any]]:
         """Get user's saved backtest results with full data"""
@@ -459,6 +517,16 @@ class UserService:
                 # Use timestamp as final fallback
                 if "title" not in chat or not chat["title"]:
                     chat["title"] = f"Chat {chat.get('created_at', datetime.utcnow()).strftime('%Y-%m-%d %H:%M')}"
+                
+                # Extract conversation from nested data for frontend compatibility
+                if "data" in chat and "conversation" in chat["data"]:
+                    chat["conversation"] = chat["data"]["conversation"]
+                elif "data" in chat:
+                    # Handle legacy format where data might contain query/response
+                    if "query" in chat["data"]:
+                        chat["query"] = chat["data"]["query"]
+                    if "response" in chat["data"]:
+                        chat["response"] = chat["data"]["response"]
             
             return chats
         except Exception as e:
