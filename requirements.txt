@@ -28,7 +28,7 @@ chardet>=5.0.0,<6.0.0
 idna>=3.0,<4.0
 
 # Financial data
-yfinance>=0.2.31,<1.0.0
+yfinance>=0.2.65,<1.0.0
 ta>=0.10.0,<1.0.0
 
 # Utilities

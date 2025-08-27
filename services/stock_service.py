@@ -127,6 +127,16 @@ def format_indian_ticker(ticker_symbol):
     Returns:
     str: Formatted ticker symbol with .NS or .BO suffix
     """
+    # Clean the ticker symbol - remove any unwanted characters
+    ticker_symbol = str(ticker_symbol).strip().upper()
+    
+    # Remove any $ prefix that might have been added
+    if ticker_symbol.startswith('$'):
+        ticker_symbol = ticker_symbol[1:]
+    
+    # Remove any other unwanted prefixes or characters
+    ticker_symbol = ''.join(c for c in ticker_symbol if c.isalnum() or c in ['.', '^'])
+    
     # Handle index symbols
     if ticker_symbol.upper() == "NIFTY":
         return "^NSEI"
@@ -231,6 +241,7 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
     
     for attempt in range(max_retries):
         try:
+            logger.info(f"Attempt {attempt + 1}: Calling yfinance for ticker: {formatted_ticker}")
             _sleep_before_yf_call()
             ticker = yf.Ticker(formatted_ticker)
             hist_data = ticker.history(period=period, interval=interval)
@@ -290,12 +301,19 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
                     return hist_data
             
             # If we got empty data, wait and retry
+            logger.warning(f"Empty data for {formatted_ticker} on attempt {attempt + 1}, retrying...")
             time.sleep(retry_delay)
         except Exception as e:
+            logger.error(f"Exception on attempt {attempt + 1} for {formatted_ticker}: {str(e)}")
             # If rate limited, back off longer
             msg = str(e).lower()
             if 'too many requests' in msg or 'rate limit' in msg or '429' in msg:
+                logger.warning(f"Rate limited for {formatted_ticker}, backing off...")
                 time.sleep(retry_delay * 5)
+            elif 'possibly delisted' in msg or 'no price data' in msg:
+                logger.warning(f"Delisted error for {formatted_ticker}, trying different approach...")
+                # This is likely a ticker format issue, break early to try BSE
+                break
             else:
                 time.sleep(retry_delay)
             continue
