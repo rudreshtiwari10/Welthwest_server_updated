@@ -704,9 +704,12 @@ def submit_feedback():
         if not user_info.get('name'):
             return jsonify({"error": "User name is required"}), 400
         
-        responses = data.get('responses', [])
-        if not responses or not isinstance(responses, list):
-            return jsonify({"error": "Feedback responses are required"}), 400
+        # Validate WealthWest specific feedback fields
+        required_fields = ['trading_learning', 'ai_features', 'interface_usability', 'value_recommendation']
+        has_response = any(data.get(field, '').strip() for field in required_fields)
+        
+        if not has_response:
+            return jsonify({"error": "At least one feedback response is required"}), 400
         
         # Submit feedback
         result = feedback_service.submit_feedback(data)
@@ -720,10 +723,10 @@ def submit_feedback():
                 form_type = data.get('form_type', 'General Feedback')
                 
                 # Send user confirmation email
-                _send_feedback_confirmation_email(user_email, user_name, form_type, result['submission_id'])
+                _send_feedback_confirmation_email(user_email, user_name, "WelthWest Feedback", result['submission_id'])
                 
                 # Send notification to company
-                _send_feedback_notification_email(user_info, responses, form_type, result['submission_id'])
+                _send_feedback_notification_email(user_info, data, result['submission_id'])
                 
                 logger.info(f"Feedback notification emails sent for submission {result['submission_id']}")
             except Exception as e:
@@ -889,7 +892,7 @@ def _send_feedback_confirmation_email(user_email: str, user_name: str, form_type
     subject = f"Your voice is in the model. Expect smarter updates, faster."
     email_service.send_email(user_email, subject, template, context)
 
-def _send_feedback_notification_email(user_info: Dict[str, Any], responses: List[Dict[str, Any]], form_type: str, submission_id: str):
+def _send_feedback_notification_email(user_info: Dict[str, Any], feedback_data: Dict[str, Any], submission_id: str):
     """Send notification email to company about new feedback"""
     # Get company email from environment or use default
     company_email = os.environ.get('COMPANY_EMAIL', os.environ.get('MAIL_USERNAME'))
@@ -934,16 +937,34 @@ def _send_feedback_notification_email(user_info: Dict[str, Any], responses: List
                     <p><strong>Submitted On:</strong> {{ current_date }}</p>
                 </div>
                 
-                <h3>Feedback Responses:</h3>
-                {% for response in responses %}
+                <h3>WealthWest Feedback Responses:</h3>
+                {% if trading_learning %}
                 <div class="response">
-                    <p><strong>Q:</strong> {{ response.question }}</p>
-                    <p><strong>A:</strong> {{ response.answer }}</p>
-                    {% if response.question_type %}
-                    <p><em>Type: {{ response.question_type }}</em></p>
-                    {% endif %}
+                    <p><strong>Q:</strong> Does WealthWest help you learn trading? What resources would enhance your experience?</p>
+                    <p><strong>A:</strong> {{ trading_learning }}</p>
                 </div>
-                {% endfor %}
+                {% endif %}
+                
+                {% if ai_features %}
+                <div class="response">
+                    <p><strong>Q:</strong> How effective are WealthWest's AI features (backtesting, signals, sentiment analysis) for learning or trading? Share examples or suggestions.</p>
+                    <p><strong>A:</strong> {{ ai_features }}</p>
+                </div>
+                {% endif %}
+                
+                {% if interface_usability %}
+                <div class="response">
+                    <p><strong>Q:</strong> How user-friendly is WealthWest's interface (dashboards, strategy builder)? Suggest improvements.</p>
+                    <p><strong>A:</strong> {{ interface_usability }}</p>
+                </div>
+                {% endif %}
+                
+                {% if value_recommendation %}
+                <div class="response">
+                    <p><strong>Q:</strong> What would make WealthWest more valuable, and would you recommend it or pay for basic/pro/Enterprise tiers ranging from rs 299 to rs 1999?</p>
+                    <p><strong>A:</strong> {{ value_recommendation }}</p>
+                </div>
+                {% endif %}
                 
                 <p><em>Please review and follow up as appropriate.</em></p>
             </div>
@@ -958,13 +979,15 @@ def _send_feedback_notification_email(user_info: Dict[str, Any], responses: List
     
     context = {
         'user_info': user_info,
-        'responses': responses,
-        'form_type': form_type,
+        'trading_learning': feedback_data.get('trading_learning'),
+        'ai_features': feedback_data.get('ai_features'),
+        'interface_usability': feedback_data.get('interface_usability'),
+        'value_recommendation': feedback_data.get('value_recommendation'),
         'submission_id': submission_id,
         'current_date': datetime.now().strftime('%B %d, %Y at %I:%M %p')
     }
     
-    subject = f"New Feedback: {form_type} - {user_info.get('name', 'Unknown User')}"
+    subject = f"New WealthWest Feedback - {user_info.get('name', 'Unknown User')}"
     email_service.send_email(company_email, subject, template, context)
 
 # Anonymous Chat endpoint with session tracking

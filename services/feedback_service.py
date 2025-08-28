@@ -41,14 +41,15 @@ class FeedbackService:
     
     def submit_feedback(self, feedback_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Submit dynamic feedback form data
+        Submit WealthWest feedback with 4 specific questions
         
         Args:
             feedback_data: Dictionary containing:
                 - user_info: Dict with user details (name, email, etc.)
-                - form_type: String identifying the form type
-                - responses: List of question-answer pairs
-                - form_metadata: Optional metadata about the form
+                - trading_learning: Response about WealthWest helping learn trading
+                - ai_features: Response about AI features effectiveness  
+                - interface_usability: Response about interface user-friendliness
+                - value_recommendation: Response about value and pricing tiers
                 
         Returns:
             Dict containing submission result and ID
@@ -61,12 +62,13 @@ class FeedbackService:
                     'message': 'Invalid feedback data provided'
                 }
             
-            # Prepare submission document
+            # Prepare submission document with structured responses
             submission = {
                 'user_info': feedback_data.get('user_info', {}),
-                'form_type': feedback_data.get('form_type', 'general'),
-                'responses': feedback_data.get('responses', []),
-                'form_metadata': feedback_data.get('form_metadata', {}),
+                'trading_learning': feedback_data.get('trading_learning', ''),
+                'ai_features': feedback_data.get('ai_features', ''), 
+                'interface_usability': feedback_data.get('interface_usability', ''),
+                'value_recommendation': feedback_data.get('value_recommendation', ''),
                 'created_at': datetime.utcnow(),
                 'status': 'submitted',
                 'ip_address': feedback_data.get('ip_address'),
@@ -76,7 +78,7 @@ class FeedbackService:
             # Insert into database
             result = self.feedback_collection.insert_one(submission)
             
-            logger.info(f"Feedback submitted successfully with ID: {result.inserted_id}")
+            logger.info(f"WealthWest feedback submitted successfully with ID: {result.inserted_id}")
             
             return {
                 'success': True,
@@ -92,24 +94,20 @@ class FeedbackService:
             }
     
     def _validate_feedback_data(self, data: Dict[str, Any]) -> bool:
-        """Validate feedback submission data"""
+        """Validate WealthWest feedback submission data"""
         # Check required fields
         user_info = data.get('user_info', {})
         if not user_info.get('email'):
             logger.warning("Missing user email in feedback submission")
             return False
         
-        responses = data.get('responses', [])
-        if not responses or not isinstance(responses, list):
-            logger.warning("Missing or invalid responses in feedback submission")
-            return False
+        # Validate that at least one of the 4 questions has a response
+        required_fields = ['trading_learning', 'ai_features', 'interface_usability', 'value_recommendation']
+        has_response = any(data.get(field, '').strip() for field in required_fields)
         
-        # Validate responses format
-        for response in responses:
-            if not isinstance(response, dict):
-                return False
-            if 'question' not in response or 'answer' not in response:
-                return False
+        if not has_response:
+            logger.warning("No responses provided for any of the 4 WealthWest questions")
+            return False
         
         return True
     

@@ -9,49 +9,17 @@ FEEDBACK_ENDPOINT = f"{BASE_URL}/api/feedback/submit"
 def test_feedback_submission():
     """Test the feedback API endpoint"""
     
-    # Sample feedback data with dynamic questions and answers
+    # Sample WealthWest feedback data with 4 specific questions
     test_feedback = {
         "user_info": {
             "name": "John Doe",
             "email": "john.doe@example.com",
             "phone": "+1234567890"
         },
-        "form_type": "Product Feedback",
-        "responses": [
-            {
-                "question": "How would you rate our service overall?",
-                "answer": "Excellent",
-                "question_type": "rating",
-                "options": ["Poor", "Fair", "Good", "Very Good", "Excellent"]
-            },
-            {
-                "question": "What features do you like most?",
-                "answer": "The AI analysis and backtesting tools are fantastic!",
-                "question_type": "text"
-            },
-            {
-                "question": "Which plan are you currently using?",
-                "answer": "Pro Plan",
-                "question_type": "single_choice",
-                "options": ["Free", "Basic", "Pro", "Enterprise"]
-            },
-            {
-                "question": "What improvements would you suggest?",
-                "answer": "More technical indicators and better mobile experience",
-                "question_type": "textarea"
-            },
-            {
-                "question": "Would you recommend us to others?",
-                "answer": "Yes",
-                "question_type": "boolean",
-                "options": ["Yes", "No"]
-            }
-        ],
-        "form_metadata": {
-            "version": "1.0",
-            "created_by": "feedback_form_builder",
-            "form_title": "Product Experience Survey"
-        }
+        "trading_learning": "Yes, WealthWest has been very helpful for learning trading. The educational resources and tutorials are comprehensive. I would love to see more advanced options strategies and risk management guides.",
+        "ai_features": "The AI features are quite effective. The backtesting tool helped me validate my strategies before going live. The sentiment analysis provides good market insights. I'd suggest improving the signal accuracy and adding more technical indicators.",
+        "interface_usability": "The interface is generally user-friendly. The dashboards are clean and informative. The strategy builder is intuitive. However, the mobile app could be more responsive, and some features take time to load.",
+        "value_recommendation": "WealthWest provides good value for money. I'm currently on the Pro tier (Rs 999) and find it worth the investment. I would definitely recommend it to other traders. The Enterprise tier features look promising but might be expensive for individual traders."
     }
     
     print("Testing feedback API submission...")
@@ -99,28 +67,30 @@ def test_invalid_feedback_submission():
             "name": "Missing user email",
             "data": {
                 "user_info": {"name": "John Doe"},
-                "responses": [{"question": "Test?", "answer": "Yes"}]
+                "trading_learning": "Great platform for learning"
             }
         },
         {
             "name": "Missing user name",
             "data": {
                 "user_info": {"email": "test@example.com"},
-                "responses": [{"question": "Test?", "answer": "Yes"}]
+                "trading_learning": "Great platform for learning"
             }
         },
         {
-            "name": "Empty responses",
+            "name": "No feedback responses",
             "data": {
-                "user_info": {"name": "John Doe", "email": "test@example.com"},
-                "responses": []
+                "user_info": {"name": "John Doe", "email": "test@example.com"}
             }
         },
         {
-            "name": "Invalid responses format",
+            "name": "Empty feedback responses",
             "data": {
                 "user_info": {"name": "John Doe", "email": "test@example.com"},
-                "responses": "invalid_format"
+                "trading_learning": "",
+                "ai_features": "",
+                "interface_usability": "",
+                "value_recommendation": ""
             }
         }
     ]
