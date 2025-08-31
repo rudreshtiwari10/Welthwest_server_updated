@@ -40,6 +40,7 @@ class UserService:
         self.users = self.db.users
         self.tokens = self.db.refresh_tokens
         self.password_reset_otps = self.db.password_reset_otps
+        self.registration_otps = self.db.registration_otps
     
     def hash_password(self, password: str) -> bytes:
         """Hash a password for storing"""
@@ -687,14 +688,98 @@ class UserService:
             logger.error(f"Error resetting password: {str(e)}")
             return False, "Failed to reset password"
     
+    def create_registration_otp(self, email: str) -> Tuple[bool, str, Optional[str]]:
+        """
+        Create registration OTP for email verification
+        
+        Returns:
+        - Success status (bool)
+        - Message (str)
+        - OTP code (str or None)
+        """
+        try:
+            # Generate OTP
+            otp = self.generate_otp()
+            expires_at = datetime.utcnow() + timedelta(minutes=15)  # 15 minutes expiry
+            
+            # Store OTP in database
+            otp_record = {
+                "email": email,
+                "otp": otp,
+                "expires_at": expires_at,
+                "used": False,
+                "created_at": datetime.utcnow()
+            }
+            
+            # Remove any existing OTPs for this email
+            self.registration_otps.delete_many({"email": email})
+            
+            # Insert new OTP
+            self.registration_otps.insert_one(otp_record)
+            
+            logger.info(f"Registration OTP created for email: {email}")
+            return True, "OTP generated successfully", otp
+            
+        except Exception as e:
+            logger.error(f"Error creating registration OTP: {str(e)}")
+            return False, "Failed to generate OTP", None
+    
+    def verify_registration_otp(self, email: str, otp: str) -> Tuple[bool, str]:
+        """
+        Verify registration OTP
+        
+        Returns:
+        - Success status (bool)
+        - Message (str)
+        """
+        try:
+            # Find matching OTP record
+            otp_record = self.registration_otps.find_one({
+                "email": email,
+                "otp": otp,
+                "used": False
+            })
+            
+            if not otp_record:
+                return False, "Invalid OTP"
+            
+            # Check if OTP has expired
+            if datetime.utcnow() > otp_record["expires_at"]:
+                # Clean up expired OTP
+                self.registration_otps.delete_one({"_id": otp_record["_id"]})
+                return False, "OTP has expired"
+            
+            # Mark OTP as used
+            self.registration_otps.update_one(
+                {"_id": otp_record["_id"]},
+                {"$set": {"used": True, "used_at": datetime.utcnow()}}
+            )
+            
+            logger.info(f"Registration OTP verified for email: {email}")
+            return True, "OTP verified successfully"
+            
+        except Exception as e:
+            logger.error(f"Error verifying registration OTP: {str(e)}")
+            return False, "Failed to verify OTP"
+    
     def cleanup_expired_otps(self):
         """Clean up expired OTP records"""
         try:
             current_time = datetime.utcnow()
+            
+            # Clean up password reset OTPs
             result = self.password_reset_otps.delete_many({
                 "expires_at": {"$lt": current_time}
             })
             if result.deleted_count > 0:
-                logger.info(f"Cleaned up {result.deleted_count} expired OTP records")
+                logger.info(f"Cleaned up {result.deleted_count} expired password reset OTP records")
+            
+            # Clean up registration OTPs
+            result = self.registration_otps.delete_many({
+                "expires_at": {"$lt": current_time}
+            })
+            if result.deleted_count > 0:
+                logger.info(f"Cleaned up {result.deleted_count} expired registration OTP records")
+                
         except Exception as e:
             logger.error(f"Error cleaning up expired OTPs: {str(e)}")

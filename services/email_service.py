@@ -139,10 +139,10 @@ class EmailService:
         
         context = {
             'user_name': user_name,
-            'support_email': os.environ.get('SUPPORT_EMAIL', 'support@wealthwest.com')
+            'support_email': os.environ.get('SUPPORT_EMAIL', 'support@WelthWest.com')
         }
         
-        subject = "Welcome to WealthWest - Your Trading Journey Begins!"
+        subject = "Welcome to WelthWest - Your Trading Journey Begins!"
         
         return self.send_email(user_email, subject, template, context)
     
@@ -157,7 +157,22 @@ class EmailService:
             'expiry_minutes': 15
         }
         
-        subject = "Password Reset OTP - WealthWest"
+        subject = "Password Reset OTP - WelthWest"
+        
+        return self.send_email(user_email, subject, template, context)
+    
+    def send_registration_otp(self, user_email: str, otp: str) -> bool:
+        """Send registration OTP email for email verification"""
+        
+        template = self._get_registration_otp_template()
+        
+        context = {
+            'user_email': user_email,
+            'otp': otp,
+            'expiry_minutes': 15
+        }
+        
+        subject = "Email Verification OTP - WelthWest"
         
         return self.send_email(user_email, subject, template, context)
     
@@ -230,7 +245,7 @@ class EmailService:
                 </div>
                 
                 <div class="footer">
-                    <p>Thank you for choosing WealthWest!</p>
+                    <p>Thank you for choosing WelthWest!</p>
                     <p>Happy Trading! 📈</p>
                 </div>
             </div>
@@ -276,7 +291,7 @@ class EmailService:
                 </div>
                 
                 <div class="footer">
-                    <p>Thank you for choosing WealthWest!</p>
+                    <p>Thank you for choosing WelthWest!</p>
                 </div>
             </div>
         </body>
@@ -302,12 +317,12 @@ class EmailService:
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>Welcome to WealthWest! 🚀</h1>
+                    <h1>Welcome to WelthWest! 🚀</h1>
                 </div>
                 
                 <div class="content">
                     <h2>Hi {{ user_name }},</h2>
-                    <p>Welcome to WealthWest! We're excited to have you on board.</p>
+                    <p>Welcome to WelthWest! We're excited to have you on board.</p>
                     
                     <p>You can now access our powerful trading and analysis tools. Start exploring:</p>
                     <ul>
@@ -356,7 +371,7 @@ class EmailService:
                 
                 <div class="content">
                     <h2>Hi {{ user_name }},</h2>
-                    <p>We received a request to reset your password for your WealthWest account.</p>
+                    <p>We received a request to reset your password for your WelthWest account.</p>
                     
                     <div class="otp-box">
                         <h3>Your OTP Code:</h3>
@@ -380,7 +395,67 @@ class EmailService:
                 
                 <div class="footer">
                     <p>Stay secure!</p>
-                    <p>The WealthWest Team</p>
+                    <p>The WelthWest Team</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+    
+    def _get_registration_otp_template(self) -> str:
+        """Get registration OTP email template"""
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>Email Verification OTP</title>
+            <style>
+                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                .header { background: #4F46E5; color: white; padding: 20px; text-align: center; }
+                .content { padding: 20px; background: #f9f9f9; }
+                .otp-box { background: white; padding: 20px; margin: 20px 0; border: 2px solid #4F46E5; text-align: center; border-radius: 8px; }
+                .otp-code { font-size: 32px; font-weight: bold; color: #4F46E5; letter-spacing: 8px; margin: 20px 0; }
+                .info { background: #F0F9FF; border: 1px solid #BAE6FD; padding: 15px; border-radius: 6px; margin: 15px 0; }
+                .footer { background: #333; color: white; padding: 20px; text-align: center; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>🎉 Welcome to WelthWest!</h1>
+                    <p>Verify your email to get started</p>
+                </div>
+                
+                <div class="content">
+                    <h2>Email Verification Required</h2>
+                    <p>Thank you for registering with WelthWest! To complete your account setup, please verify your email address.</p>
+                    
+                    <div class="otp-box">
+                        <h3>Your Verification Code:</h3>
+                        <div class="otp-code">{{ otp }}</div>
+                        <p><strong>This code expires in {{ expiry_minutes }} minutes.</strong></p>
+                    </div>
+                    
+                    <p>Enter this code in the verification form to activate your account and start your trading journey!</p>
+                    
+                    <div class="info">
+                        <p><strong>ℹ️ What's next?</strong></p>
+                        <ul>
+                            <li>Enter the verification code above</li>
+                            <li>Complete your profile setup</li>
+                            <li>Start exploring our powerful trading tools</li>
+                            <li>Join thousands of successful traders</li>
+                        </ul>
+                    </div>
+                    
+                    <p>If you didn't create this account, you can safely ignore this email.</p>
+                </div>
+                
+                <div class="footer">
+                    <p>Welcome aboard! 🚀</p>
+                    <p>The WelthWest Team</p>
                 </div>
             </div>
         </body>
