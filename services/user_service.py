@@ -41,6 +41,7 @@ class UserService:
         self.tokens = self.db.refresh_tokens
         self.password_reset_otps = self.db.password_reset_otps
         self.registration_otps = self.db.registration_otps
+        self.verified_emails = self.db.verified_emails
     
     def hash_password(self, password: str) -> bytes:
         """Hash a password for storing"""
@@ -724,9 +725,73 @@ class UserService:
             logger.error(f"Error creating registration OTP: {str(e)}")
             return False, "Failed to generate OTP", None
     
+    def check_registration_otp(self, email: str, otp: str) -> Tuple[bool, str]:
+        """
+        Check if registration OTP is valid (without marking as used)
+        
+        Returns:
+        - Success status (bool)
+        - Message (str)
+        """
+        try:
+            # Find matching OTP record
+            otp_record = self.registration_otps.find_one({
+                "email": email,
+                "otp": otp,
+                "used": False
+            })
+            
+            if not otp_record:
+                return False, "Invalid OTP"
+            
+            # Check if OTP has expired
+            if datetime.utcnow() > otp_record["expires_at"]:
+                # Clean up expired OTP
+                self.registration_otps.delete_one({"_id": otp_record["_id"]})
+                return False, "OTP has expired"
+            
+            # Mark email as verified (temporary verification, valid for 30 minutes)
+            verified_record = {
+                "email": email,
+                "verified_at": datetime.utcnow(),
+                "expires_at": datetime.utcnow() + timedelta(minutes=30)  # 30 minutes to complete registration
+            }
+            
+            # Remove any existing verification for this email
+            self.verified_emails.delete_many({"email": email})
+            
+            # Insert new verification
+            self.verified_emails.insert_one(verified_record)
+            
+            logger.info(f"Registration OTP validated for email: {email}")
+            return True, "OTP is valid"
+            
+        except Exception as e:
+            logger.error(f"Error checking registration OTP: {str(e)}")
+            return False, "Failed to verify OTP"
+    
+    def is_email_verified(self, email: str) -> bool:
+        """
+        Check if email is verified and verification hasn't expired
+        
+        Returns:
+        - True if email is verified and valid, False otherwise
+        """
+        try:
+            verified_record = self.verified_emails.find_one({
+                "email": email,
+                "expires_at": {"$gt": datetime.utcnow()}
+            })
+            
+            return verified_record is not None
+            
+        except Exception as e:
+            logger.error(f"Error checking email verification: {str(e)}")
+            return False
+
     def verify_registration_otp(self, email: str, otp: str) -> Tuple[bool, str]:
         """
-        Verify registration OTP
+        Verify registration OTP and mark as used
         
         Returns:
         - Success status (bool)
@@ -780,6 +845,13 @@ class UserService:
             })
             if result.deleted_count > 0:
                 logger.info(f"Cleaned up {result.deleted_count} expired registration OTP records")
+            
+            # Clean up expired email verifications
+            result = self.verified_emails.delete_many({
+                "expires_at": {"$lt": current_time}
+            })
+            if result.deleted_count > 0:
+                logger.info(f"Cleaned up {result.deleted_count} expired email verification records")
                 
         except Exception as e:
             logger.error(f"Error cleaning up expired OTPs: {str(e)}")

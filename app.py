@@ -330,11 +330,33 @@ def send_registration_otp():
 @app.route('/api/auth/verify-registration-otp', methods=['POST'])
 @validate_json_request
 def verify_registration_otp():
-    """Verify OTP and complete registration"""
+    """Verify OTP only (without creating account)"""
     data = request.get_json()
     
-    # Validate required fields
-    required_fields = ['email', 'otp', 'username', 'password', 'confirm_password']
+    # Validate required fields for OTP verification
+    required_fields = ['email', 'otp']
+    for field in required_fields:
+        if field not in data:
+            return jsonify({"error": f"Missing required field: {field}"}), 400
+    
+    email = data['email'].strip().lower()
+    otp = data['otp'].strip()
+    
+    # Check OTP (without marking as used)
+    success, message = user_service.check_registration_otp(email, otp)
+    if not success:
+        return jsonify({"error": message}), 400
+    
+    return jsonify({"message": "OTP verified successfully"}), 200
+
+@app.route('/api/auth/complete-registration', methods=['POST'])
+@validate_json_request
+def complete_registration():
+    """Complete registration after OTP verification"""
+    data = request.get_json()
+    
+    # Validate required fields (no OTP required anymore)
+    required_fields = ['email', 'username', 'password', 'confirm_password']
     for field in required_fields:
         if field not in data:
             return jsonify({"error": f"Missing required field: {field}"}), 400
@@ -344,14 +366,12 @@ def verify_registration_otp():
         return jsonify({"error": "Passwords do not match"}), 400
     
     email = data['email'].strip().lower()
-    otp = data['otp'].strip()
     username = data['username'].strip()
     password = data['password']
     
-    # Verify OTP
-    success, message = user_service.verify_registration_otp(email, otp)
-    if not success:
-        return jsonify({"error": message}), 400
+    # Check if email is verified
+    if not user_service.is_email_verified(email):
+        return jsonify({"error": "Email not verified. Please verify your email first."}), 400
     
     # Register user
     success, message, user_data = user_service.register_user(
@@ -382,6 +402,13 @@ def verify_registration_otp():
     
     # Store refresh token
     user_service.store_refresh_token(user_data['id'], refresh_token)
+    
+    # Clean up email verification record (no longer needed)
+    try:
+        user_service.verified_emails.delete_many({"email": email})
+        logger.info(f"Cleaned up email verification for {email}")
+    except Exception as e:
+        logger.error(f"Failed to cleanup email verification for {email}: {str(e)}")
     
     # Send welcome email to new user
     try:
