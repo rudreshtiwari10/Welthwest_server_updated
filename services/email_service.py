@@ -176,6 +176,24 @@ class EmailService:
         
         return self.send_email(user_email, subject, template, context)
     
+    def send_new_user_notification_to_company(self, user_email: str, user_name: str, registration_date: str, registration_method: str = "Email & Password") -> bool:
+        """Send new user registration notification to company"""
+        
+        template = self._get_new_user_notification_template()
+        
+        context = {
+            'user_name': user_name,
+            'user_email': user_email,
+            'registration_date': registration_date,
+            'registration_method': registration_method,
+            'total_users_count': "N/A"  # Can be updated to show actual count if needed
+        }
+        
+        subject = f"New User Registration - {user_name}"
+        
+        company_email = os.environ.get('COMPANY_EMAIL', os.environ.get('SUPPORT_EMAIL', 'admin@welthwest.com'))
+        return self.send_email(company_email, subject, template, context)
+    
     def _generate_invoice_data(self, user_name: str, plan_details: Dict[str, Any], payment_details: Dict[str, Any]) -> Dict[str, Any]:
         """Generate invoice data for email"""
         
@@ -456,6 +474,70 @@ class EmailService:
                 <div class="footer">
                     <p>Welcome aboard! 🚀</p>
                     <p>The WelthWest Team</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+    
+    def _get_new_user_notification_template(self) -> str:
+        """Get new user registration notification email template for company"""
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>New User Registration Notification</title>
+            <style>
+                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                .header { background: #10B981; color: white; padding: 20px; text-align: center; }
+                .content { padding: 20px; background: #f9f9f9; }
+                .user-info { background: white; padding: 20px; margin: 20px 0; border: 1px solid #ddd; border-radius: 8px; }
+                .stats { background: #F0F9FF; border: 1px solid #BAE6FD; padding: 15px; border-radius: 6px; margin: 15px 0; }
+                .footer { background: #333; color: white; padding: 20px; text-align: center; }
+                .highlight { color: #10B981; font-weight: bold; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>🎉 New User Registration!</h1>
+                    <p>A new user has joined WelthWest</p>
+                </div>
+                
+                <div class="content">
+                    <h2>Registration Details</h2>
+                    <p>We have a new user registration on the platform!</p>
+                    
+                    <div class="user-info">
+                        <h3>User Information</h3>
+                        <p><strong>Name:</strong> {{ user_name }}</p>
+                        <p><strong>Email:</strong> {{ user_email }}</p>
+                        <p><strong>Registration Date:</strong> {{ registration_date }}</p>
+                        <p><strong>Registration Method:</strong> {{ registration_method }}</p>
+                    </div>
+                    
+                    <div class="stats">
+                        <h3>📊 Platform Statistics</h3>
+                        <p><strong>Total Registered Users:</strong> <span class="highlight">{{ total_users_count }}</span></p>
+                        <p><em>Note: This count can be updated to show actual statistics</em></p>
+                    </div>
+                    
+                    <p>The user has completed the email verification process and has been successfully registered with a free subscription plan.</p>
+                    
+                    <h3>Next Steps:</h3>
+                    <ul>
+                        <li>User will receive a welcome email with platform details</li>
+                        <li>Free subscription has been initialized</li>
+                        <li>User can now access the platform features</li>
+                        <li>Monitor user engagement and onboarding progress</li>
+                    </ul>
+                </div>
+                
+                <div class="footer">
+                    <p>WelthWest Admin Notification System</p>
+                    <p>Growing stronger every day! 📈</p>
                 </div>
             </div>
         </body>

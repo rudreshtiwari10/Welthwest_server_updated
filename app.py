@@ -421,6 +421,20 @@ def complete_registration():
         logger.error(f"Failed to send welcome email to {user_data['email']}: {str(e)}")
         # Don't fail registration if email fails
     
+    # Send new user notification to company
+    try:
+        from datetime import datetime
+        registration_date = datetime.now().strftime('%B %d, %Y at %I:%M %p')
+        email_service.send_new_user_notification_to_company(
+            user_email=user_data['email'],
+            user_name=user_data['username'],
+            registration_date=registration_date
+        )
+        logger.info(f"Company notification email sent for new user: {user_data['email']}")
+    except Exception as e:
+        logger.error(f"Failed to send company notification email for user {user_data['email']}: {str(e)}")
+        # Don't fail registration if email fails
+    
     return jsonify({
         "message": "Registration successful",
         "user": user_data,
@@ -450,6 +464,54 @@ def google_auth():
             return jsonify({"error": "Invalid Google token"}), 401
             
         logger.info(f"Google token verified successfully for user: {user.get('email', 'unknown')}")
+        
+        # Check if this is a newly created user (check if user was created in the last 5 seconds)
+        is_new_user = False
+        if user.get('created_at'):
+            from datetime import datetime, timedelta
+            created_at = user['created_at'] if isinstance(user['created_at'], datetime) else datetime.now()
+            if (datetime.utcnow() - created_at).total_seconds() < 5:
+                is_new_user = True
+                logger.info(f"Detected new Google user registration: {user.get('email', 'unknown')}")
+        
+        # Initialize subscription for new Google users
+        if is_new_user:
+            try:
+                if not subscription_service.initialize_subscription(user['id']):
+                    logger.error(f"Failed to initialize subscription for Google user: {user.get('email', 'unknown')}")
+                    # Note: Not deleting user here as they're already authenticated via Google
+                else:
+                    logger.info(f"Subscription initialized for new Google user: {user.get('email', 'unknown')}")
+            except Exception as e:
+                logger.error(f"Error initializing subscription for Google user: {str(e)}")
+        
+        # Send welcome email for new Google users
+        if is_new_user:
+            try:
+                user_name = user.get('name', user.get('first_name', user.get('email', '').split('@')[0]))
+                email_service.send_welcome_email(
+                    user_email=user['email'],
+                    user_name=user_name
+                )
+                logger.info(f"Welcome email sent to new Google user: {user['email']}")
+            except Exception as e:
+                logger.error(f"Failed to send welcome email to Google user {user['email']}: {str(e)}")
+        
+        # Send company notification for new Google users
+        if is_new_user:
+            try:
+                from datetime import datetime
+                user_name = user.get('name', user.get('first_name', user.get('email', '').split('@')[0]))
+                registration_date = datetime.now().strftime('%B %d, %Y at %I:%M %p')
+                email_service.send_new_user_notification_to_company(
+                    user_email=user['email'],
+                    user_name=user_name,
+                    registration_date=registration_date,
+                    registration_method="Google OAuth"
+                )
+                logger.info(f"Company notification email sent for new Google user: {user['email']}")
+            except Exception as e:
+                logger.error(f"Failed to send company notification email for Google user {user['email']}: {str(e)}")
         
         # Create access and refresh tokens with current timestamp
         import time
