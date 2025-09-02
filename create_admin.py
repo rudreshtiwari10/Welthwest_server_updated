@@ -8,7 +8,7 @@ users = db.users
 
 # Update user with email 'test@example.com' to admin
 result = users.update_one(
-    {'email': 'admin@example.com'},
+    {'email': 'admin@essxample.com'},
     {'$set': {'role': 'admin'}}
 )
 print(f'Updated {result.modified_count} user(s) to admin role')

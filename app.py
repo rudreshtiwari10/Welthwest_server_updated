@@ -33,7 +33,8 @@ import json
 from functools import wraps
 import re
 from services.backtesting_service import BacktestingService
-from services.market_regime_service import market_regime_service
+from services.market_regime_service import market_regime_service, MarketRegimeService
+from hmm_model import hmm_service
 from services.session_service import InMemorySessionService
 from bson import ObjectId
 from datetime import datetime
@@ -3639,16 +3640,45 @@ def train_market_regime_model():
         logger.error(f"Error in train_market_regime_model: {str(e)}")
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
-@app.route('/api/market-regime/predict', methods=['GET'])
+@app.route('/api/market-regime/predict', methods=['GET', 'POST'])
 def predict_market_regime():
     """Predict market regime for a ticker"""
     try:
-        ticker = request.args.get('ticker', 'RELIANCE.NS')
+        # Handle both GET and POST requests
+        if request.method == 'GET':
+            ticker = request.args.get('ticker', 'RELIANCE.NS')
+            use_rf = request.args.get('use_rf', 'true').lower() == 'true'
+            use_hmm = request.args.get('use_hmm', 'true').lower() == 'true'
+        else:  # POST
+            data = request.get_json() or {}
+            ticker = data.get('ticker', 'RELIANCE.NS')
+            use_rf = data.get('useRandomForest', True)
+            use_hmm = data.get('useHmm', True)
         
         if not ticker:
             return jsonify({"error": "Ticker parameter is required"}), 400
         
-        result = market_regime_service.predict_regime(ticker)
+        # Validation: at least one method must be enabled
+        if not use_rf and not use_hmm:
+            return jsonify({"error": "At least one analysis method must be enabled (Random Forest or HMM)"}), 400
+        
+        # Create a temporary service instance with the desired configuration
+        temp_service = MarketRegimeService(use_rf=use_rf, use_hmm=use_hmm)
+        
+        # If the global service is trained, copy the trained model
+        if market_regime_service.classifier.is_trained:
+            temp_service.classifier.model = market_regime_service.classifier.model
+            temp_service.classifier.scaler = market_regime_service.classifier.scaler
+            temp_service.classifier.feature_names = market_regime_service.classifier.feature_names
+            temp_service.classifier.is_trained = market_regime_service.classifier.is_trained
+            
+            # Copy HMM model if needed
+            if use_hmm and market_regime_service.classifier.hmm_trained:
+                temp_service.classifier.hmm_model = market_regime_service.classifier.hmm_model
+                temp_service.classifier.hmm_scaler = market_regime_service.classifier.hmm_scaler
+                temp_service.classifier.hmm_trained = market_regime_service.classifier.hmm_trained
+        
+        result = temp_service.predict_regime(ticker)
         
         if result["status"] == "success":
             return jsonify(result), 200
@@ -3788,6 +3818,148 @@ def get_market_regime_definitions():
         
     except Exception as e:
         logger.error(f"Error in get_market_regime_definitions: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+# HMM Model Endpoints
+@app.route('/api/hmm_model/train', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def train_hmm_model():
+    """Train the HMM model"""
+    try:
+        # Check if user is admin
+        user_id = get_jwt_identity()
+        user = user_service.get_user_by_id(user_id)
+        if not user or user.get('role') != 'admin':
+            return jsonify({"error": "Unauthorized access"}), 403
+        
+        data = request.get_json()
+        ticker = data.get('ticker', 'RELIANCE.NS')
+        period = data.get('period', '2y')
+        retrain = data.get('retrain', False)
+        
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+        
+        result = hmm_service.train_model(ticker, period, retrain)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in train_hmm_model: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/hmm_model/predict', methods=['GET', 'POST'])
+def predict_hmm_regime():
+    """Predict market regime using HMM"""
+    try:
+        # Handle both GET and POST requests
+        if request.method == 'GET':
+            ticker = request.args.get('ticker', 'RELIANCE.NS')
+        else:  # POST
+            data = request.get_json() or {}
+            ticker = data.get('ticker', 'RELIANCE.NS')
+        
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+        
+        result = hmm_service.predict_regime(ticker)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in predict_hmm_regime: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/hmm_model/analysis', methods=['GET'])
+def get_hmm_regime_analysis():
+    """Get HMM regime persistence analysis"""
+    try:
+        ticker = request.args.get('ticker', 'RELIANCE.NS')
+        period = request.args.get('period', '6mo')
+        
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+        
+        result = hmm_service.analyze_regime_persistence(ticker, period)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in get_hmm_regime_analysis: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/hmm_model/multiple', methods=['POST'])
+@jwt_required()
+@validate_json_request
+@check_market_data_access
+def get_multiple_hmm_regimes():
+    """Get HMM regime predictions for multiple tickers"""
+    try:
+        data = request.get_json()
+        tickers = data.get('tickers', ['RELIANCE.NS'])
+        
+        if not tickers or not isinstance(tickers, list):
+            return jsonify({"error": "tickers must be a list"}), 400
+        
+        result = hmm_service.get_multiple_regime_predictions(tickers)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in get_multiple_hmm_regimes: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/hmm_model/model-info', methods=['GET'])
+@jwt_required()
+def get_hmm_model_info():
+    """Get information about the HMM model"""
+    try:
+        result = hmm_service.get_model_info()
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logger.error(f"Error in get_hmm_model_info: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/hmm_model/evaluate', methods=['GET'])
+@jwt_required()
+def evaluate_hmm_model():
+    """Evaluate HMM model performance"""
+    try:
+        # Check if user is admin
+        user_id = get_jwt_identity()
+        user = user_service.get_user_by_id(user_id)
+        if not user or user.get('role') != 'admin':
+            return jsonify({"error": "Unauthorized access"}), 403
+        
+        ticker = request.args.get('ticker', 'RELIANCE.NS')
+        test_period = request.args.get('test_period', '6mo')
+        
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+        
+        result = hmm_service.evaluate_model(ticker, test_period)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in evaluate_hmm_model: {str(e)}")
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
 # User Data Persistence Endpoints
