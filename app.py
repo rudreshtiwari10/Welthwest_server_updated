@@ -33,7 +33,8 @@ import json
 from functools import wraps
 import re
 from services.backtesting_service import BacktestingService
-from services.market_regime_service import market_regime_service
+from services.market_regime_service import market_regime_service, MarketRegimeService
+from hmm_model import hmm_service
 from services.session_service import InMemorySessionService
 from bson import ObjectId
 from datetime import datetime
@@ -330,11 +331,33 @@ def send_registration_otp():
 @app.route('/api/auth/verify-registration-otp', methods=['POST'])
 @validate_json_request
 def verify_registration_otp():
-    """Verify OTP and complete registration"""
+    """Verify OTP only (without creating account)"""
     data = request.get_json()
     
-    # Validate required fields
-    required_fields = ['email', 'otp', 'username', 'password', 'confirm_password']
+    # Validate required fields for OTP verification
+    required_fields = ['email', 'otp']
+    for field in required_fields:
+        if field not in data:
+            return jsonify({"error": f"Missing required field: {field}"}), 400
+    
+    email = data['email'].strip().lower()
+    otp = data['otp'].strip()
+    
+    # Check OTP (without marking as used)
+    success, message = user_service.check_registration_otp(email, otp)
+    if not success:
+        return jsonify({"error": message}), 400
+    
+    return jsonify({"message": "OTP verified successfully"}), 200
+
+@app.route('/api/auth/complete-registration', methods=['POST'])
+@validate_json_request
+def complete_registration():
+    """Complete registration after OTP verification"""
+    data = request.get_json()
+    
+    # Validate required fields (no OTP required anymore)
+    required_fields = ['email', 'username', 'password', 'confirm_password']
     for field in required_fields:
         if field not in data:
             return jsonify({"error": f"Missing required field: {field}"}), 400
@@ -344,14 +367,12 @@ def verify_registration_otp():
         return jsonify({"error": "Passwords do not match"}), 400
     
     email = data['email'].strip().lower()
-    otp = data['otp'].strip()
     username = data['username'].strip()
     password = data['password']
     
-    # Verify OTP
-    success, message = user_service.verify_registration_otp(email, otp)
-    if not success:
-        return jsonify({"error": message}), 400
+    # Check if email is verified
+    if not user_service.is_email_verified(email):
+        return jsonify({"error": "Email not verified. Please verify your email first."}), 400
     
     # Register user
     success, message, user_data = user_service.register_user(
@@ -383,6 +404,13 @@ def verify_registration_otp():
     # Store refresh token
     user_service.store_refresh_token(user_data['id'], refresh_token)
     
+    # Clean up email verification record (no longer needed)
+    try:
+        user_service.verified_emails.delete_many({"email": email})
+        logger.info(f"Cleaned up email verification for {email}")
+    except Exception as e:
+        logger.error(f"Failed to cleanup email verification for {email}: {str(e)}")
+    
     # Send welcome email to new user
     try:
         email_service.send_welcome_email(
@@ -392,6 +420,20 @@ def verify_registration_otp():
         logger.info(f"Welcome email sent to {user_data['email']}")
     except Exception as e:
         logger.error(f"Failed to send welcome email to {user_data['email']}: {str(e)}")
+        # Don't fail registration if email fails
+    
+    # Send new user notification to company
+    try:
+        from datetime import datetime
+        registration_date = datetime.now().strftime('%B %d, %Y at %I:%M %p')
+        email_service.send_new_user_notification_to_company(
+            user_email=user_data['email'],
+            user_name=user_data['username'],
+            registration_date=registration_date
+        )
+        logger.info(f"Company notification email sent for new user: {user_data['email']}")
+    except Exception as e:
+        logger.error(f"Failed to send company notification email for user {user_data['email']}: {str(e)}")
         # Don't fail registration if email fails
     
     return jsonify({
@@ -423,6 +465,54 @@ def google_auth():
             return jsonify({"error": "Invalid Google token"}), 401
             
         logger.info(f"Google token verified successfully for user: {user.get('email', 'unknown')}")
+        
+        # Check if this is a newly created user (check if user was created in the last 5 seconds)
+        is_new_user = False
+        if user.get('created_at'):
+            from datetime import datetime, timedelta
+            created_at = user['created_at'] if isinstance(user['created_at'], datetime) else datetime.now()
+            if (datetime.utcnow() - created_at).total_seconds() < 5:
+                is_new_user = True
+                logger.info(f"Detected new Google user registration: {user.get('email', 'unknown')}")
+        
+        # Initialize subscription for new Google users
+        if is_new_user:
+            try:
+                if not subscription_service.initialize_subscription(user['id']):
+                    logger.error(f"Failed to initialize subscription for Google user: {user.get('email', 'unknown')}")
+                    # Note: Not deleting user here as they're already authenticated via Google
+                else:
+                    logger.info(f"Subscription initialized for new Google user: {user.get('email', 'unknown')}")
+            except Exception as e:
+                logger.error(f"Error initializing subscription for Google user: {str(e)}")
+        
+        # Send welcome email for new Google users
+        if is_new_user:
+            try:
+                user_name = user.get('name', user.get('first_name', user.get('email', '').split('@')[0]))
+                email_service.send_welcome_email(
+                    user_email=user['email'],
+                    user_name=user_name
+                )
+                logger.info(f"Welcome email sent to new Google user: {user['email']}")
+            except Exception as e:
+                logger.error(f"Failed to send welcome email to Google user {user['email']}: {str(e)}")
+        
+        # Send company notification for new Google users
+        if is_new_user:
+            try:
+                from datetime import datetime
+                user_name = user.get('name', user.get('first_name', user.get('email', '').split('@')[0]))
+                registration_date = datetime.now().strftime('%B %d, %Y at %I:%M %p')
+                email_service.send_new_user_notification_to_company(
+                    user_email=user['email'],
+                    user_name=user_name,
+                    registration_date=registration_date,
+                    registration_method="Google OAuth"
+                )
+                logger.info(f"Company notification email sent for new Google user: {user['email']}")
+            except Exception as e:
+                logger.error(f"Failed to send company notification email for Google user {user['email']}: {str(e)}")
         
         # Create access and refresh tokens with current timestamp
         import time
@@ -3550,16 +3640,45 @@ def train_market_regime_model():
         logger.error(f"Error in train_market_regime_model: {str(e)}")
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
-@app.route('/api/market-regime/predict', methods=['GET'])
+@app.route('/api/market-regime/predict', methods=['GET', 'POST'])
 def predict_market_regime():
     """Predict market regime for a ticker"""
     try:
-        ticker = request.args.get('ticker', 'RELIANCE.NS')
+        # Handle both GET and POST requests
+        if request.method == 'GET':
+            ticker = request.args.get('ticker', 'RELIANCE.NS')
+            use_rf = request.args.get('use_rf', 'true').lower() == 'true'
+            use_hmm = request.args.get('use_hmm', 'true').lower() == 'true'
+        else:  # POST
+            data = request.get_json() or {}
+            ticker = data.get('ticker', 'RELIANCE.NS')
+            use_rf = data.get('useRandomForest', True)
+            use_hmm = data.get('useHmm', True)
         
         if not ticker:
             return jsonify({"error": "Ticker parameter is required"}), 400
         
-        result = market_regime_service.predict_regime(ticker)
+        # Validation: at least one method must be enabled
+        if not use_rf and not use_hmm:
+            return jsonify({"error": "At least one analysis method must be enabled (Random Forest or HMM)"}), 400
+        
+        # Create a temporary service instance with the desired configuration
+        temp_service = MarketRegimeService(use_rf=use_rf, use_hmm=use_hmm)
+        
+        # If the global service is trained, copy the trained model
+        if market_regime_service.classifier.is_trained:
+            temp_service.classifier.model = market_regime_service.classifier.model
+            temp_service.classifier.scaler = market_regime_service.classifier.scaler
+            temp_service.classifier.feature_names = market_regime_service.classifier.feature_names
+            temp_service.classifier.is_trained = market_regime_service.classifier.is_trained
+            
+            # Copy HMM model if needed
+            if use_hmm and market_regime_service.classifier.hmm_trained:
+                temp_service.classifier.hmm_model = market_regime_service.classifier.hmm_model
+                temp_service.classifier.hmm_scaler = market_regime_service.classifier.hmm_scaler
+                temp_service.classifier.hmm_trained = market_regime_service.classifier.hmm_trained
+        
+        result = temp_service.predict_regime(ticker)
         
         if result["status"] == "success":
             return jsonify(result), 200
@@ -3699,6 +3818,148 @@ def get_market_regime_definitions():
         
     except Exception as e:
         logger.error(f"Error in get_market_regime_definitions: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+# HMM Model Endpoints
+@app.route('/api/hmm_model/train', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def train_hmm_model():
+    """Train the HMM model"""
+    try:
+        # Check if user is admin
+        user_id = get_jwt_identity()
+        user = user_service.get_user_by_id(user_id)
+        if not user or user.get('role') != 'admin':
+            return jsonify({"error": "Unauthorized access"}), 403
+        
+        data = request.get_json()
+        ticker = data.get('ticker', 'RELIANCE.NS')
+        period = data.get('period', '2y')
+        retrain = data.get('retrain', False)
+        
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+        
+        result = hmm_service.train_model(ticker, period, retrain)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in train_hmm_model: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/hmm_model/predict', methods=['GET', 'POST'])
+def predict_hmm_regime():
+    """Predict market regime using HMM"""
+    try:
+        # Handle both GET and POST requests
+        if request.method == 'GET':
+            ticker = request.args.get('ticker', 'RELIANCE.NS')
+        else:  # POST
+            data = request.get_json() or {}
+            ticker = data.get('ticker', 'RELIANCE.NS')
+        
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+        
+        result = hmm_service.predict_regime(ticker)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in predict_hmm_regime: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/hmm_model/analysis', methods=['GET'])
+def get_hmm_regime_analysis():
+    """Get HMM regime persistence analysis"""
+    try:
+        ticker = request.args.get('ticker', 'RELIANCE.NS')
+        period = request.args.get('period', '6mo')
+        
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+        
+        result = hmm_service.analyze_regime_persistence(ticker, period)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in get_hmm_regime_analysis: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/hmm_model/multiple', methods=['POST'])
+@jwt_required()
+@validate_json_request
+@check_market_data_access
+def get_multiple_hmm_regimes():
+    """Get HMM regime predictions for multiple tickers"""
+    try:
+        data = request.get_json()
+        tickers = data.get('tickers', ['RELIANCE.NS'])
+        
+        if not tickers or not isinstance(tickers, list):
+            return jsonify({"error": "tickers must be a list"}), 400
+        
+        result = hmm_service.get_multiple_regime_predictions(tickers)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in get_multiple_hmm_regimes: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/hmm_model/model-info', methods=['GET'])
+@jwt_required()
+def get_hmm_model_info():
+    """Get information about the HMM model"""
+    try:
+        result = hmm_service.get_model_info()
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logger.error(f"Error in get_hmm_model_info: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/hmm_model/evaluate', methods=['GET'])
+@jwt_required()
+def evaluate_hmm_model():
+    """Evaluate HMM model performance"""
+    try:
+        # Check if user is admin
+        user_id = get_jwt_identity()
+        user = user_service.get_user_by_id(user_id)
+        if not user or user.get('role') != 'admin':
+            return jsonify({"error": "Unauthorized access"}), 403
+        
+        ticker = request.args.get('ticker', 'RELIANCE.NS')
+        test_period = request.args.get('test_period', '6mo')
+        
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+        
+        result = hmm_service.evaluate_model(ticker, test_period)
+        
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error in evaluate_hmm_model: {str(e)}")
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
 # User Data Persistence Endpoints

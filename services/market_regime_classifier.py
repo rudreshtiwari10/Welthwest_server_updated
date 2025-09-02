@@ -4,6 +4,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
 from sklearn.preprocessing import StandardScaler
+from hmmlearn import hmm
 import pickle
 import logging
 from datetime import datetime, timedelta
@@ -45,7 +46,7 @@ class MarketRegimeClassifier:
     5. Accumulation/Distribution (Transitional phase)
     """
     
-    def __init__(self):
+    def __init__(self, use_rf: bool = True, use_hmm: bool = True):
         self.model = RandomForestClassifier(
             n_estimators=100,
             criterion='gini',
@@ -55,10 +56,21 @@ class MarketRegimeClassifier:
             random_state=42,
             n_jobs=-1  # Use all available cores
         )
+        self.use_rf = use_rf
         self.scaler = StandardScaler()
         self.technical_analysis = TechnicalAnalysis()
         self.is_trained = False
         self.feature_names = []
+        
+        # HMM Configuration
+        self.use_hmm = use_hmm
+        self.hmm_n_components = 3  # Number of hidden states
+        self.hmm_covariance_type = "full"  # Covariance matrix type
+        self.hmm_n_iter = 100  # Maximum number of iterations
+        self.hmm_random_state = 42  # Random seed for HMM
+        self.hmm_model = None
+        self.hmm_scaler = StandardScaler()  # Separate scaler for HMM
+        self.hmm_trained = False
         
         # Market regime definitions
         self.regime_definitions = {
@@ -115,6 +127,25 @@ class MarketRegimeClassifier:
         }
         
         self.lookback_period = 20  # Days to look back for regime classification
+        
+        # Initialize HMM model if enabled
+        if self.use_hmm:
+            self._initialize_hmm()
+    
+    def _initialize_hmm(self):
+        """Initialize the Hidden Markov Model"""
+        try:
+            self.hmm_model = hmm.GaussianHMM(
+                n_components=self.hmm_n_components,
+                covariance_type=self.hmm_covariance_type,
+                n_iter=self.hmm_n_iter,
+                random_state=self.hmm_random_state,
+                verbose=False
+            )
+            logger.info(f"HMM model initialized with {self.hmm_n_components} components")
+        except Exception as e:
+            logger.error(f"Error initializing HMM: {str(e)}")
+            self.use_hmm = False
         
     def prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -279,6 +310,55 @@ class MarketRegimeClassifier:
                 else:
                     features[col] = features[col].fillna(0.0)
         
+        # Add HMM features if enabled and model is trained
+        if self.use_hmm and self.hmm_trained:
+            try:
+                # Get HMM state sequence
+                log_prob, state_sequence = self.hmm_decode_states(df)
+                
+                # Get posterior probabilities
+                posterior_probs = self.hmm_posterior_probabilities(df)
+                
+                if len(state_sequence) > 0 and len(posterior_probs) > 0:
+                    # Align HMM features with the main features dataframe
+                    # HMM features have one less point due to log returns calculation
+                    hmm_features = pd.DataFrame(index=features.index)
+                    
+                    # Initialize HMM features
+                    hmm_features['hmm_state'] = 0  # Default state
+                    
+                    # Add posterior probabilities for each state
+                    for i in range(self.hmm_n_components):
+                        hmm_features[f'hmm_state_{i}_prob'] = 0.0
+                    
+                    # Fill HMM features (starting from index 1 due to returns calculation)
+                    if len(state_sequence) == len(features) - 1:
+                        # Perfect alignment case
+                        hmm_features.iloc[1:, hmm_features.columns.get_loc('hmm_state')] = state_sequence
+                        for i in range(self.hmm_n_components):
+                            col_name = f'hmm_state_{i}_prob'
+                            hmm_features.iloc[1:, hmm_features.columns.get_loc(col_name)] = posterior_probs[:, i]
+                    else:
+                        # Handle misalignment by using available data
+                        min_len = min(len(state_sequence), len(features) - 1)
+                        if min_len > 0:
+                            hmm_features.iloc[1:min_len+1, hmm_features.columns.get_loc('hmm_state')] = state_sequence[:min_len]
+                            for i in range(self.hmm_n_components):
+                                col_name = f'hmm_state_{i}_prob'
+                                hmm_features.iloc[1:min_len+1, hmm_features.columns.get_loc(col_name)] = posterior_probs[:min_len, i]
+                    
+                    # Forward fill first value to handle NaN
+                    hmm_features = hmm_features.ffill().fillna(0.0)
+                    
+                    # Add HMM features to main features dataframe
+                    for col in hmm_features.columns:
+                        features[col] = hmm_features[col]
+                    
+                    logger.debug(f"Added HMM features: {hmm_features.columns.tolist()}")
+                
+            except Exception as e:
+                logger.warning(f"Error adding HMM features: {str(e)}. Continuing without HMM features.")
+        
         return features
     
     def label_market_regimes(self, df: pd.DataFrame) -> pd.Series:
@@ -345,6 +425,146 @@ class MarketRegimeClassifier:
         
         return regimes
     
+    def train_hmm_model(self, df: pd.DataFrame) -> bool:
+        """
+        Train the Hidden Markov Model on log returns
+        
+        Args:
+            df: DataFrame with price data
+            
+        Returns:
+            bool: True if training successful, False otherwise
+        """
+        if not self.use_hmm or self.hmm_model is None:
+            return False
+            
+        try:
+            # Calculate log returns
+            log_returns = np.log(df['Close'] / df['Close'].shift(1)).dropna()
+            
+            if len(log_returns) < 30:  # Minimum data requirement
+                logger.warning("Insufficient data for HMM training")
+                return False
+            
+            # Reshape for HMM (expects 2D array with features)
+            returns_2d = log_returns.values.reshape(-1, 1)
+            
+            # Scale the returns
+            returns_scaled = self.hmm_scaler.fit_transform(returns_2d)
+            
+            # Train HMM
+            self.hmm_model.fit(returns_scaled)
+            self.hmm_trained = True
+            
+            logger.info("HMM model trained successfully")
+            logger.info(f"Transition matrix:\n{self.hmm_model.transmat_}")
+            logger.info(f"Means: {self.hmm_model.means_.flatten()}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error training HMM: {str(e)}")
+            self.hmm_trained = False
+            return False
+    
+    def hmm_decode_states(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Decode hidden states using Viterbi algorithm
+        
+        Args:
+            df: DataFrame with price data
+            
+        Returns:
+            Tuple of (log_probability, state_sequence)
+        """
+        if not self.use_hmm or not self.hmm_trained:
+            return np.array([]), np.array([])
+            
+        try:
+            # Calculate log returns
+            log_returns = np.log(df['Close'] / df['Close'].shift(1)).dropna()
+            
+            if len(log_returns) == 0:
+                return np.array([]), np.array([])
+            
+            # Reshape and scale
+            returns_2d = log_returns.values.reshape(-1, 1)
+            returns_scaled = self.hmm_scaler.transform(returns_2d)
+            
+            # Decode states
+            log_prob, state_sequence = self.hmm_model.decode(returns_scaled, algorithm="viterbi")
+            
+            return log_prob, state_sequence
+            
+        except Exception as e:
+            logger.error(f"Error in HMM state decoding: {str(e)}")
+            return np.array([]), np.array([])
+    
+    def hmm_posterior_probabilities(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        Compute posterior probabilities for each hidden state
+        
+        Args:
+            df: DataFrame with price data
+            
+        Returns:
+            Array of posterior probabilities (T x N) where T=time steps, N=states
+        """
+        if not self.use_hmm or not self.hmm_trained:
+            return np.array([])
+            
+        try:
+            # Calculate log returns
+            log_returns = np.log(df['Close'] / df['Close'].shift(1)).dropna()
+            
+            if len(log_returns) == 0:
+                return np.array([])
+            
+            # Reshape and scale
+            returns_2d = log_returns.values.reshape(-1, 1)
+            returns_scaled = self.hmm_scaler.transform(returns_2d)
+            
+            # Compute posterior probabilities
+            posterior_probs = self.hmm_model.predict_proba(returns_scaled)
+            
+            return posterior_probs
+            
+        except Exception as e:
+            logger.error(f"Error computing posterior probabilities: {str(e)}")
+            return np.array([])
+    
+    def hmm_forecast_next_day(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        Forecast next-day regime probabilities
+        
+        Args:
+            df: DataFrame with price data
+            
+        Returns:
+            Array of next-day state probabilities
+        """
+        if not self.use_hmm or not self.hmm_trained:
+            return np.array([])
+            
+        try:
+            # Get posterior probabilities
+            posterior_probs = self.hmm_posterior_probabilities(df)
+            
+            if len(posterior_probs) == 0:
+                return np.array([])
+            
+            # Get last state probabilities
+            last_state_probs = posterior_probs[-1]
+            
+            # Multiply by transition matrix to get next-day probabilities
+            next_day_probs = last_state_probs @ self.hmm_model.transmat_
+            
+            return next_day_probs
+            
+        except Exception as e:
+            logger.error(f"Error forecasting next-day probabilities: {str(e)}")
+            return np.array([])
+    
     def train_model(self, ticker: str, period: str = "2y", retrain: bool = False) -> Dict:
         """
         Train the Random Forest model on historical data
@@ -370,6 +590,15 @@ class MarketRegimeClassifier:
             if df.empty:
                 logger.error(f"No data available for {ticker}")
                 return {"status": "error", "message": "No data available"}
+            
+            # Train HMM model if enabled
+            if self.use_hmm:
+                logger.info("Training HMM model...")
+                hmm_success = self.train_hmm_model(df)
+                if hmm_success:
+                    logger.info("HMM model training completed successfully")
+                else:
+                    logger.warning("HMM model training failed, continuing with RF only")
             
             # Prepare features
             logger.info("Preparing features...")
@@ -568,18 +797,27 @@ class MarketRegimeClassifier:
                 logger.warning("Still have NaN values after preprocessing, using zeros")
                 latest_features = latest_features.fillna(0.0)
             
-            # Scale features
-            features_scaled = self.scaler.transform(latest_features)
+            # Initialize results
+            regime_pred = 2  # Default to Sideways/Ranging
+            regime_proba = [0.0, 0.0, 1.0, 0.0, 0.0]  # Default probabilities
+            confidence = 0.6  # Default confidence
             
-            # Predict
-            regime_pred = self.model.predict(features_scaled)[0]
-            regime_proba = self.model.predict_proba(features_scaled)[0]
+            # Random Forest prediction (if enabled)
+            if self.use_rf and self.is_trained:
+                # Scale features
+                features_scaled = self.scaler.transform(latest_features)
+                
+                # Predict
+                regime_pred = self.model.predict(features_scaled)[0]
+                regime_proba = self.model.predict_proba(features_scaled)[0]
+                
+                # Calculate confidence
+                confidence = max(regime_proba)
+            elif not self.use_rf:
+                logger.info("Random Forest disabled, using default regime prediction")
             
             # Get regime information
             regime_info = self.regime_definitions[regime_pred]
-            
-            # Calculate confidence
-            confidence = max(regime_proba)
             
             result = {
                 "status": "success",
@@ -593,6 +831,21 @@ class MarketRegimeClassifier:
                 },
                 "timestamp": datetime.now().isoformat()
             }
+            
+            # Add HMM forecast if available
+            if self.use_hmm and self.hmm_trained:
+                try:
+                    hmm_next_probs = self.hmm_forecast_next_day(df)
+                    if len(hmm_next_probs) > 0:
+                        result["hmm_next_probs"] = [float(p) for p in hmm_next_probs]
+                        logger.debug(f"Added HMM next-day probabilities: {hmm_next_probs}")
+                    else:
+                        result["hmm_next_probs"] = []
+                except Exception as e:
+                    logger.warning(f"Error adding HMM forecast: {str(e)}")
+                    result["hmm_next_probs"] = []
+            else:
+                result["hmm_next_probs"] = []
             
             return convert_numpy_types(result)
             
@@ -671,7 +924,13 @@ class MarketRegimeClassifier:
                 'scaler': self.scaler,
                 'feature_names': self.feature_names,
                 'regime_definitions': self.regime_definitions,
-                'is_trained': self.is_trained
+                'is_trained': self.is_trained,
+                'use_hmm': self.use_hmm,
+                'hmm_model': self.hmm_model if self.use_hmm else None,
+                'hmm_scaler': self.hmm_scaler if self.use_hmm else None,
+                'hmm_trained': self.hmm_trained,
+                'hmm_n_components': self.hmm_n_components,
+                'hmm_covariance_type': self.hmm_covariance_type
             }
             
             with open(filename, 'wb') as f:
@@ -694,7 +953,18 @@ class MarketRegimeClassifier:
             self.regime_definitions = model_data['regime_definitions']
             self.is_trained = model_data['is_trained']
             
+            # Load HMM components if available
+            if 'use_hmm' in model_data:
+                self.use_hmm = model_data['use_hmm']
+                self.hmm_model = model_data.get('hmm_model', None)
+                self.hmm_scaler = model_data.get('hmm_scaler', StandardScaler())
+                self.hmm_trained = model_data.get('hmm_trained', False)
+                self.hmm_n_components = model_data.get('hmm_n_components', 3)
+                self.hmm_covariance_type = model_data.get('hmm_covariance_type', "full")
+            
             logger.info(f"Model loaded from {filename}")
+            if self.use_hmm and self.hmm_trained:
+                logger.info("HMM components loaded successfully")
             
         except Exception as e:
             logger.error(f"Error loading model: {str(e)}")

@@ -18,8 +18,8 @@ class MarketRegimeService:
     Handles real-time prediction, caching, and model management
     """
     
-    def __init__(self):
-        self.classifier = MarketRegimeClassifier()
+    def __init__(self, use_rf: bool = True, use_hmm: bool = True):
+        self.classifier = MarketRegimeClassifier(use_rf=use_rf, use_hmm=use_hmm)
         self.model_loaded = False
         self.last_training_time = None
         self.scheduler_running = False
@@ -497,5 +497,5 @@ class MarketRegimeService:
         
         return recommendation
 
-# Create global service instance
-market_regime_service = MarketRegimeService()
+# Create global service instance with HMM enabled by default
+market_regime_service = MarketRegimeService(use_hmm=True)

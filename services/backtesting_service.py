@@ -15,7 +15,7 @@ class BacktestingService:
         self.ta = TechnicalAnalysis()
         self.regime_classifier = MarketRegimeClassifier()
         self.cache_ttl = 3600  # 1 hour cache TTL
-        
+
         # Try to load existing market regime model
         try:
             self.regime_classifier.load_model()
