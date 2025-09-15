@@ -467,14 +467,10 @@ def google_auth():
             
         logger.info(f"Google token verified successfully for user: {user.get('email', 'unknown')}")
         
-        # Check if this is a newly created user (check if user was created in the last 5 seconds)
-        is_new_user = False
-        if user.get('created_at'):
-            from datetime import datetime, timedelta
-            created_at = user['created_at'] if isinstance(user['created_at'], datetime) else datetime.now()
-            if (datetime.utcnow() - created_at).total_seconds() < 5:
-                is_new_user = True
-                logger.info(f"Detected new Google user registration: {user.get('email', 'unknown')}")
+        # Check if this is a newly created user using the flag from GoogleAuthService
+        is_new_user = user.get('_is_new_user', False)
+        if is_new_user:
+            logger.info(f"Detected new Google user registration: {user.get('email', 'unknown')}")
         
         # Initialize subscription for new Google users
         if is_new_user:
