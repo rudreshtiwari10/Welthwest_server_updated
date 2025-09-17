@@ -43,7 +43,7 @@ class GoogleAuthService:
 
             # Check if user exists
             existing_user = self.user_service.get_user_by_email(user_data['email'])
-            
+
             if existing_user:
                 # Update existing user with Google info if needed
                 if not existing_user.get('google_id'):
@@ -55,8 +55,10 @@ class GoogleAuthService:
                             'is_google_user': True
                         }
                     )
+                # Mark as existing user
+                existing_user['_is_new_user'] = False
                 return existing_user
-            
+
             # Create new user
             new_user = {
                 'email': user_data['email'],
@@ -65,8 +67,11 @@ class GoogleAuthService:
                 'profile_picture': user_data['picture'],
                 'is_google_user': True
             }
-            
+
             created_user = self.user_service.create_user(new_user)
+            if created_user:
+                # Mark as new user
+                created_user['_is_new_user'] = True
             return created_user
 
         except ValueError as e:
@@ -100,6 +105,8 @@ class GoogleAuthService:
                                     'is_google_user': True
                                 }
                             )
+                        # Mark as existing user
+                        existing_user['_is_new_user'] = False
                         return existing_user
                     new_user = {
                         'email': user_data['email'],
@@ -109,6 +116,9 @@ class GoogleAuthService:
                         'is_google_user': True
                     }
                     created_user = self.user_service.create_user(new_user)
+                    if created_user:
+                        # Mark as new user
+                        created_user['_is_new_user'] = True
                     return created_user
                 except Exception as retry_error:
                     current_app.logger.error(f"Retry after timing issue failed: {str(retry_error)}")

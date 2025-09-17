@@ -18,6 +18,7 @@ from services.razorpay_service import RazorpayPaymentService
 from services.email_service import email_service
 from services.google_auth_service import GoogleAuthService
 from services.feedback_service import feedback_service
+from services.news_service import news_service
 from middleware.subscription_middleware import require_subscription_feature, check_market_data_access
 import os
 import requests
@@ -467,14 +468,10 @@ def google_auth():
             
         logger.info(f"Google token verified successfully for user: {user.get('email', 'unknown')}")
         
-        # Check if this is a newly created user (check if user was created in the last 5 seconds)
-        is_new_user = False
-        if user.get('created_at'):
-            from datetime import datetime, timedelta
-            created_at = user['created_at'] if isinstance(user['created_at'], datetime) else datetime.now()
-            if (datetime.utcnow() - created_at).total_seconds() < 5:
-                is_new_user = True
-                logger.info(f"Detected new Google user registration: {user.get('email', 'unknown')}")
+        # Check if this is a newly created user using the flag from GoogleAuthService
+        is_new_user = user.get('_is_new_user', False)
+        if is_new_user:
+            logger.info(f"Detected new Google user registration: {user.get('email', 'unknown')}")
         
         # Initialize subscription for new Google users
         if is_new_user:
@@ -4306,6 +4303,257 @@ def market_indices_new():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# =========================== NEWS & BLOGS API ENDPOINTS ===========================
+
+@app.route('/api/news', methods=['GET'])
+def get_news():
+    """Get all news posts with pagination and filtering"""
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 10))
+        category = request.args.get('category')
+        featured_only = request.args.get('featured') == 'true'
+        
+        result = news_service.get_all_news(
+            page=page, 
+            limit=limit, 
+            category=category, 
+            featured_only=featured_only
+        )
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 500
+            
+    except Exception as e:
+        logger.error(f"Error in get_news endpoint: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Internal server error: {str(e)}"
+        }), 500
+
+@app.route('/api/blogs', methods=['GET'])
+def get_blogs():
+    """Get all blog posts with pagination and filtering"""
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 10))
+        category = request.args.get('category')
+        featured_only = request.args.get('featured') == 'true'
+        
+        result = news_service.get_all_blogs(
+            page=page, 
+            limit=limit, 
+            category=category, 
+            featured_only=featured_only
+        )
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 500
+            
+    except Exception as e:
+        logger.error(f"Error in get_blogs endpoint: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Internal server error: {str(e)}"
+        }), 500
+
+@app.route('/api/news/<post_id>', methods=['GET'])
+def get_news_post(post_id):
+    """Get a specific news post by ID"""
+    try:
+        result = news_service.get_post_by_id(post_id, post_type="news")
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 404
+            
+    except Exception as e:
+        logger.error(f"Error in get_news_post endpoint: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Internal server error: {str(e)}"
+        }), 500
+
+@app.route('/api/blogs/<post_id>', methods=['GET'])
+def get_blog_post(post_id):
+    """Get a specific blog post by ID"""
+    try:
+        result = news_service.get_post_by_id(post_id, post_type="blog")
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 404
+            
+    except Exception as e:
+        logger.error(f"Error in get_blog_post endpoint: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Internal server error: {str(e)}"
+        }), 500
+
+@app.route('/api/featured-posts', methods=['GET'])
+def get_featured_posts():
+    """Get featured posts from both news and blogs"""
+    try:
+        limit = int(request.args.get('limit', 5))
+        result = news_service.get_featured_posts(limit=limit)
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 500
+            
+    except Exception as e:
+        logger.error(f"Error in get_featured_posts endpoint: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Internal server error: {str(e)}"
+        }), 500
+
+@app.route('/api/search-posts', methods=['GET'])
+def search_posts():
+    """Search posts by title, content, or tags"""
+    try:
+        query = request.args.get('q', '')
+        post_type = request.args.get('type', 'all')  # all, news, blog
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 10))
+        
+        if not query:
+            return jsonify({
+                "success": False,
+                "message": "Search query is required"
+            }), 400
+        
+        result = news_service.search_posts(
+            query=query, 
+            post_type=post_type, 
+            page=page, 
+            limit=limit
+        )
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 500
+            
+    except Exception as e:
+        logger.error(f"Error in search_posts endpoint: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Internal server error: {str(e)}"
+        }), 500
+
+@app.route('/api/news', methods=['POST'])
+@jwt_required()
+def create_news_post():
+    """Create a new news post (admin only)"""
+    try:
+        current_user_id = get_jwt_identity()
+        user_info = user_service.get_user_by_id(current_user_id)
+        
+        if not user_info or user_info.get('role') != 'admin':
+            return jsonify({
+                "success": False,
+                "message": "Admin access required"
+            }), 403
+        
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                "success": False,
+                "message": "Request body is required"
+            }), 400
+        
+        required_fields = ['title', 'content', 'author']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({
+                    "success": False,
+                    "message": f"{field} is required"
+                }), 400
+        
+        result = news_service.create_news_post(
+            title=data['title'],
+            content=data['content'],
+            author=data['author'],
+            category=data.get('category', 'General'),
+            tags=data.get('tags', []),
+            image_url=data.get('image_url'),
+            summary=data.get('summary')
+        )
+        
+        if result['success']:
+            return jsonify(result), 201
+        else:
+            return jsonify(result), 500
+            
+    except Exception as e:
+        logger.error(f"Error in create_news_post endpoint: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Internal server error: {str(e)}"
+        }), 500
+
+@app.route('/api/blogs', methods=['POST'])
+@jwt_required()
+def create_blog_post():
+    """Create a new blog post (admin only)"""
+    try:
+        current_user_id = get_jwt_identity()
+        user_info = user_service.get_user_by_id(current_user_id)
+        
+        if not user_info or user_info.get('role') != 'admin':
+            return jsonify({
+                "success": False,
+                "message": "Admin access required"
+            }), 403
+        
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                "success": False,
+                "message": "Request body is required"
+            }), 400
+        
+        required_fields = ['title', 'content', 'author']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({
+                    "success": False,
+                    "message": f"{field} is required"
+                }), 400
+        
+        result = news_service.create_blog_post(
+            title=data['title'],
+            content=data['content'],
+            author=data['author'],
+            category=data.get('category', 'Finance'),
+            tags=data.get('tags', []),
+            image_url=data.get('image_url'),
+            summary=data.get('summary')
+        )
+        
+        if result['success']:
+            return jsonify(result), 201
+        else:
+            return jsonify(result), 500
+            
+    except Exception as e:
+        logger.error(f"Error in create_blog_post endpoint: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Internal server error: {str(e)}"
+        }), 500
 
 if __name__ == '__main__':
     # Get configuration

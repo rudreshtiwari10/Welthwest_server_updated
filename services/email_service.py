@@ -139,7 +139,7 @@ class EmailService:
         
         context = {
             'user_name': user_name,
-            'support_email': os.environ.get('SUPPORT_EMAIL', 'support@WelthWest.com')
+            'COMPANY_EMAIL': os.environ.get('COMPANY_EMAIL', 'contact@WelthWest.com')
         }
         
         subject = "Welcome to WelthWest - Your Trading Journey Begins!"
@@ -191,7 +191,7 @@ class EmailService:
         
         subject = f"New User Registration - {user_name}"
         
-        company_email = os.environ.get('COMPANY_EMAIL', os.environ.get('SUPPORT_EMAIL', 'admin@welthwest.com'))
+        company_email = os.environ.get('COMPANY_EMAIL', os.environ.get('COMPANY_EMAIL', 'contact@welthwest.com'))
         return self.send_email(company_email, subject, template, context)
     
     def _generate_invoice_data(self, user_name: str, plan_details: Dict[str, Any], payment_details: Dict[str, Any]) -> Dict[str, Any]:
@@ -350,7 +350,7 @@ class EmailService:
                         <li>Real-time Market Data</li>
                     </ul>
                     
-                    <p>If you need any help getting started, don't hesitate to reach out to our support team at {{ support_email }}.</p>
+                    <p>If you need any help getting started, don't hesitate to reach out to our support team at {{ COMPANY_EMAIL }}.</p>
                 </div>
                 
                 <div class="footer">
