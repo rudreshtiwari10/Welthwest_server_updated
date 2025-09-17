@@ -12,6 +12,7 @@ from services.upstox_service import upstox_api
 from services.utils import normalize_data, calculate_statistics
 from services.user_service import UserService
 from services.ai_service import AIModelService
+from services.nextgen_ai_service import nextgen_orchestrator
 from services.subscription_service import SubscriptionService
 from services.razorpay_service import RazorpayPaymentService
 from services.email_service import email_service
@@ -1224,6 +1225,137 @@ def anonymous_chat():
         return jsonify({
             "error": "An unexpected error occurred",
             "details": str(e)
+        }), 500
+
+# NextGen AI Chat endpoint with multi-model orchestration
+@app.route('/api/nextgenchat', methods=['POST'])
+@validate_json_request
+def nextgen_chat():
+    """
+    NextGen AI Chat endpoint with multi-model orchestration
+    Supports both authenticated users and anonymous sessions
+    """
+    try:
+        data = request.get_json()
+        message = data.get('message', '').strip()
+        session_id = data.get('session_id')
+        conversation_history = data.get('conversation_history', [])
+        
+        if not message:
+            return jsonify({"error": "Message is required"}), 400
+        
+        # Check if user is authenticated
+        user_id = None
+        is_authenticated = False
+        try:
+            from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
+            verify_jwt_in_request()
+            user_id = get_jwt_identity()
+            is_authenticated = True
+            logger.info(f"NextGen Chat request from authenticated user: {user_id}")
+        except:
+            is_authenticated = False
+            logger.info("NextGen Chat request from anonymous user")
+        
+        # Handle anonymous users
+        if not is_authenticated:
+            # Get or create session
+            if not session_id:
+                session_id = session_service.create_anonymous_session()
+                return jsonify({
+                    "session_id": session_id,
+                    "message": "Please include this session_id in future requests",
+                    "requires_login": False
+                }), 200
+            
+            # Check if user can send more messages
+            can_send = session_service.check_can_send_message(session_id)
+            if not can_send:
+                remaining_usage = session_service.get_remaining_usage(session_id)
+                return jsonify({
+                    "error": "Free message limit reached. Please log in to continue.",
+                    "message": "You've used all your free messages. Create an account to continue chatting!",
+                    "requires_login": True,
+                    "usage_info": remaining_usage
+                }), 403
+        
+        # Process the query through NextGen AI Orchestrator
+        logger.info(f"Processing NextGen query: {message[:100]}...")
+        
+        # Use async processing
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            ai_response = loop.run_until_complete(
+                nextgen_orchestrator.process_query(message, conversation_history)
+            )
+        finally:
+            loop.close()
+        
+        logger.info(f"NextGen AI response type: {ai_response.get('query_type')}, model: {ai_response.get('model_used')}")
+        
+        # Update usage counters for anonymous users
+        remaining_usage = None
+        if not is_authenticated:
+            session_service.update_message_count(session_id)
+            remaining_usage = session_service.get_remaining_usage(session_id)
+        
+        # Save chat history for authenticated users
+        if is_authenticated and user_id:
+            try:
+                # Save to nextgen_chat_sessions collection
+                from services.user_service import get_db_connection
+                db = get_db_connection()
+                nextgen_collection = db.nextgen_chat_sessions
+                
+                chat_entry = {
+                    "user_id": user_id,
+                    "message": message,
+                    "response": ai_response.get('response', ''),
+                    "query_type": ai_response.get('query_type', 'general'),
+                    "model_used": ai_response.get('model_used', 'unknown'),
+                    "confidence": ai_response.get('confidence', 0.0),
+                    "stock_data": ai_response.get('stock_data'),
+                    "sentiment": ai_response.get('sentiment'),
+                    "timestamp": datetime.utcnow(),
+                    "session_info": {
+                        "conversation_length": len(conversation_history) + 1
+                    }
+                }
+                
+                nextgen_collection.insert_one(chat_entry)
+                logger.info(f"Saved NextGen chat entry for user: {user_id}")
+                
+            except Exception as e:
+                logger.error(f"Failed to save NextGen chat history: {e}")
+                # Continue without failing the request
+        
+        # Prepare response
+        response_data = {
+            "response": ai_response.get('response', 'Sorry, I could not process your request.'),
+            "query_type": ai_response.get('query_type', 'general'),
+            "model_used": ai_response.get('model_used', 'unknown'),
+            "confidence": ai_response.get('confidence', 0.0),
+            "stock_data": ai_response.get('stock_data'),
+            "sentiment": ai_response.get('sentiment'),
+            "session_id": session_id,
+            "requires_login": False
+        }
+        
+        # Add usage info for anonymous users
+        if not is_authenticated and remaining_usage:
+            response_data["usage_info"] = remaining_usage
+        
+        return jsonify(response_data), 200
+        
+    except Exception as e:
+        logger.error(f"Error in NextGen chat endpoint: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": "An unexpected error occurred",
+            "details": str(e),
+            "model_used": "error"
         }), 500
 
 # Anonymous Backtesting endpoint with session tracking
