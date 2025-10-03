@@ -69,14 +69,9 @@ def anon_or_auth_feature_limit(feature):
                 g.current_user = None
 
             # 2) If we reach here, user is anonymous - enforce trial limits
-            # Check if Redis is available
+            # Note: Redis check removed - usage_service now has in-memory fallback
             if not is_redis_available():
-                logger.error("Redis is not available - cannot enforce anonymous limits")
-                return jsonify({
-                    "ok": False,
-                    "error": "service_unavailable",
-                    "message": "Service temporarily unavailable. Please try again later."
-                }), 503
+                logger.warning("Redis is not available - using in-memory fallback for anonymous limits")
 
             # 3) Anonymous path - get or create session
             cookie_name = current_app.config['ANON_SESSION_COOKIE']
