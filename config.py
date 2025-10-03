@@ -91,6 +91,15 @@ class Config:
         self.CORS_ORIGINS = os.getenv('CORS_ORIGINS', '*').split(',')
         self.RATE_LIMIT = os.getenv('RATE_LIMIT', '100/hour')
 
+        # Anonymous Trial Configuration
+        self.ANON_TRIAL_LIMIT = int(os.getenv('ANON_TRIAL_LIMIT', 10))  # Default limit for all features
+        self.ANON_AI_ANALYSIS_LIMIT = int(os.getenv('ANON_AI_ANALYSIS_LIMIT', self.ANON_TRIAL_LIMIT))
+        self.ANON_BACKTEST_LIMIT = int(os.getenv('ANON_BACKTEST_LIMIT', self.ANON_TRIAL_LIMIT))
+        self.ANON_CHAT_LIMIT = int(os.getenv('ANON_CHAT_LIMIT', 5))
+        self.ANON_SESSION_COOKIE = os.getenv('ANON_SESSION_COOKIE', 'ww_session_id')
+        self.ANON_SESSION_TTL_SECONDS = int(os.getenv('ANON_SESSION_TTL_SECONDS', 30 * 24 * 3600))  # 30 days default
+        self.ENABLE_ANON_TRIALS = os.getenv('ENABLE_ANON_TRIALS', 'True').lower() == 'true'
+
         # Feature Flags
         self.ENABLE_CACHING = os.getenv('ENABLE_CACHING', 'True').lower() == 'true'
         self.ENABLE_RATE_LIMITING = os.getenv('ENABLE_RATE_LIMITING', 'True').lower() == 'true'

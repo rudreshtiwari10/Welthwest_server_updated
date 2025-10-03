@@ -29,6 +29,7 @@ def create_app():
 app = create_app()
 jwt = JWTManager(app)
 
+
 # Initialize mock services
 user_service = MockUserService()
 subscription_service = MockSubscriptionService()

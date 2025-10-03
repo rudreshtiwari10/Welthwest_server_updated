@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 from flask_jwt_extended import (
     JWTManager, create_access_token, create_refresh_token,
@@ -20,6 +20,7 @@ from services.google_auth_service import GoogleAuthService
 from services.feedback_service import feedback_service
 from services.news_service import news_service
 from middleware.subscription_middleware import require_subscription_feature, check_market_data_access
+from middleware.anon_limit import anon_or_auth_feature_limit
 import os
 import requests
 import logging
@@ -125,17 +126,21 @@ def create_app():
     # and 30 seconds after their exp (expires) time to handle clock drift
     app.config["JWT_DECODE_LEEWAY"] = timedelta(seconds=int(os.environ.get("JWT_DECODE_LEEWAY", 30)))
     
-    # Configure CORS with specific origins
+    # Configure CORS with specific origins and credentials support for anonymous sessions
     frontend_url = os.environ.get("FRONTEND_URL", "*")
     allowed_origins = [frontend_url]
-    
+
     CORS(app, resources={
         r"/api/*": {
             "origins": allowed_origins,
             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization"]
+            "allow_headers": ["Content-Type", "Authorization"],
+            "supports_credentials": True  # IMPORTANT: Allow cookies for anonymous sessions
         },
-        r"/": {"origins": allowed_origins}
+        r"/": {
+            "origins": allowed_origins,
+            "supports_credentials": True
+        }
     })
     
     # Initialize email service
@@ -179,6 +184,24 @@ user_service = UserService()
 subscription_service = SubscriptionService()
 payment_service = RazorpayPaymentService()
 session_service = InMemorySessionService()
+
+# After request handler to set anonymous session cookie
+@app.after_request
+def set_anon_session_cookie(response):
+    """Set anonymous session cookie if decorator created a new session"""
+    new_session_id = getattr(g, '_new_anon_session_id', None)
+    if new_session_id:
+        cookie_name = app.config['ANON_SESSION_COOKIE']
+        ttl_seconds = app.config['ANON_SESSION_TTL_SECONDS']
+        response.set_cookie(
+            cookie_name,
+            new_session_id,
+            max_age=ttl_seconds,
+            httponly=True,
+            secure=False,  # Set to True in production with HTTPS
+            samesite='Lax'
+        )
+    return response
 
 # Initialize services
 technical_analysis = TechnicalAnalysis()
@@ -1081,48 +1104,31 @@ def _send_feedback_notification_email(user_info: Dict[str, Any], feedback_data: 
 # Anonymous Chat endpoint with session tracking
 @app.route('/api/chat', methods=['POST'])
 @validate_json_request
-def anonymous_chat():
-    """Chat with AI using session-based message tracking"""
+@anon_or_auth_feature_limit('welth-ai-assistant')
+def chat_with_ai():
+    """Chat with AI with automatic anonymous trial limiting"""
     try:
         data = request.get_json()
-        
-        # Get or create session ID
-        session_id = data.get('session_id')
-        if not session_id:
-            session_id = session_service.create_anonymous_session()
-            return jsonify({
-                "session_id": session_id,
-                "message": "Please include this session_id in future requests",
-                "login_required": False
-            }), 200
-        
-        # Check if user can send more messages
-        can_send = session_service.check_can_send_message(session_id)
-        if not can_send:
-            return jsonify({
-                "error": "Message limit reached",
-                "login_required": True
-            }), 403
-        
+
         # Process the chat message
         message = data.get('message', '')
         if not message:
             return jsonify({"error": "Message is required"}), 400
-            
+
         model = data.get('model', 'openrouter')  # Default to OpenRouter
-        
+
         # Validate model selection
         valid_models = ['openai', 'claude', 'openrouter', 'llama']
         if model not in valid_models:
             model = 'openrouter'  # Fallback to default
-        
+
         # Check if the model's API key is configured
         api_key_map = {
             'openai': os.environ.get('OPENAI_API_KEY'),
             'claude': os.environ.get('CLAUDE_API_KEY'),
             'openrouter': os.environ.get('OPENROUTER_API_KEY')
         }
-        
+
         # For llama or if the selected model's API key is not configured, use available model
         if model == 'llama' or not api_key_map.get(model):
             # Find first available model
@@ -1133,36 +1139,26 @@ def anonymous_chat():
             else:
                 # If no API keys configured, use llama (simulated)
                 model = 'llama'
-        
+
         # Process the chat query
         ai_response = ai_service.process_chat_query(message, model)
-        
-        # Update message count
-        new_count = session_service.update_message_count(session_id)
-        
-        # Convert to native Python int to avoid JSON serialization issues
-        new_count = int(new_count) if new_count is not False else 0
-        
-        # Check if this was their last free message
-        remaining = int(session_service.free_message_limit) - new_count
-        login_required = remaining <= 0
-        
+
         # Convert any numpy/pandas types to native Python types for JSON serialization
         def convert_to_serializable(obj):
             """Convert numpy/pandas types to JSON serializable types"""
             if obj is None:
                 return None
-            
+
             # Handle basic containers first
             if isinstance(obj, dict):
                 return {k: convert_to_serializable(v) for k, v in obj.items()}
             elif isinstance(obj, (list, tuple)):
                 return [convert_to_serializable(v) for v in obj]
-            
+
             # Check if it's a numpy/pandas type by string name to avoid import issues
             type_name = type(obj).__name__
             module_name = type(obj).__module__
-            
+
             # Handle numpy types
             if 'numpy' in module_name or type_name.startswith('int') or type_name.startswith('float'):
                 if 'int' in type_name or 'Int' in type_name:
@@ -1171,7 +1167,7 @@ def anonymous_chat():
                     return float(obj)
                 elif 'ndarray' in type_name:
                     return obj.tolist()
-            
+
             # Handle pandas types
             if 'pandas' in module_name:
                 try:
@@ -1180,13 +1176,13 @@ def anonymous_chat():
                         return None
                 except ImportError:
                     pass
-                
+
                 # Convert pandas Series/DataFrame to dict/list
                 if hasattr(obj, 'to_dict'):
                     return convert_to_serializable(obj.to_dict())
                 elif hasattr(obj, 'tolist'):
                     return convert_to_serializable(obj.tolist())
-            
+
             # For any other object that might not be serializable, convert to string
             try:
                 import json
@@ -1194,31 +1190,25 @@ def anonymous_chat():
                 return obj
             except (TypeError, OverflowError):
                 return str(obj)
-        
+
         # Clean the entire AI response for JSON serialization
         clean_ai_response = convert_to_serializable(ai_response)
-        
-        # Get updated usage information
-        remaining_usage = session_service.get_remaining_usage(session_id)
-        
+
+        # Get usage info if available (set by decorator)
+        usage_info = getattr(g, '_anon_feature_usage', None)
+
         # Prepare response data with explicit type conversions
         response_data = {
-            "session_id": str(session_id),
             "response": str(clean_ai_response.get('analysis', 'Sorry, I could not process your request.')),
             "model": str(clean_ai_response.get('model', model)),
             "stock_data": clean_ai_response.get('stock_data', {}),
-            "remaining_messages": int(remaining) if remaining > 0 else 0,  # Legacy field for backward compatibility
-            "remaining_usage": remaining_usage,
-            "login_required": bool(login_required)
+            "usage": usage_info
         }
-        
-        # Debug: Log the types of all values to identify any remaining int64 issues
-        logger.debug(f"Response data types: {[(k, type(v).__name__) for k, v in response_data.items()]}")
-        
+
         return jsonify(response_data), 200
-        
+
     except Exception as e:
-        logger.error(f"Error in anonymous chat endpoint: {str(e)}", exc_info=True)
+        logger.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
         return jsonify({
             "error": "An unexpected error occurred",
             "details": str(e)
@@ -1227,77 +1217,43 @@ def anonymous_chat():
 # NextGen AI Chat endpoint with multi-model orchestration
 @app.route('/api/nextgenchat', methods=['POST'])
 @validate_json_request
+@anon_or_auth_feature_limit('welth-ai-assistant')
 def nextgen_chat():
     """
     NextGen AI Chat endpoint with multi-model orchestration
-    Supports both authenticated users and anonymous sessions
+    Supports both authenticated users and anonymous sessions with trial limits
     """
     try:
         data = request.get_json()
         message = data.get('message', '').strip()
-        session_id = data.get('session_id')
         conversation_history = data.get('conversation_history', [])
-        
+
         if not message:
             return jsonify({"error": "Message is required"}), 400
-        
-        # Check if user is authenticated
+
+        # Check if user is authenticated (decorator already handled trial limits)
         user_id = None
-        is_authenticated = False
-        try:
-            from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
-            verify_jwt_in_request()
-            user_id = get_jwt_identity()
-            is_authenticated = True
+        is_authenticated = hasattr(g, 'current_user') and g.current_user is not None
+        if is_authenticated:
+            user_id = g.current_user.get('id') or g.current_user.get('email')
             logger.info(f"NextGen Chat request from authenticated user: {user_id}")
-        except:
-            is_authenticated = False
-            logger.info("NextGen Chat request from anonymous user")
-        
-        # Handle anonymous users
-        if not is_authenticated:
-            # Get or create session
-            if not session_id:
-                session_id = session_service.create_anonymous_session()
-                return jsonify({
-                    "session_id": session_id,
-                    "message": "Please include this session_id in future requests",
-                    "requires_login": False
-                }), 200
-            
-            # Check if user can send more messages
-            can_send = session_service.check_can_send_message(session_id)
-            if not can_send:
-                remaining_usage = session_service.get_remaining_usage(session_id)
-                return jsonify({
-                    "error": "Free message limit reached. Please log in to continue.",
-                    "message": "You've used all your free messages. Create an account to continue chatting!",
-                    "requires_login": True,
-                    "usage_info": remaining_usage
-                }), 403
-        
+
         # Process the query through NextGen AI Orchestrator
         logger.info(f"Processing NextGen query: {message[:100]}...")
-        
+
         # Use async processing
         import asyncio
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
+
         try:
             ai_response = loop.run_until_complete(
                 nextgen_orchestrator.process_query(message, conversation_history)
             )
         finally:
             loop.close()
-        
+
         logger.info(f"NextGen AI response type: {ai_response.get('query_type')}, model: {ai_response.get('model_used')}")
-        
-        # Update usage counters for anonymous users
-        remaining_usage = None
-        if not is_authenticated:
-            session_service.update_message_count(session_id)
-            remaining_usage = session_service.get_remaining_usage(session_id)
         
         # Save chat history for authenticated users
         if is_authenticated and user_id:
@@ -1329,6 +1285,9 @@ def nextgen_chat():
                 logger.error(f"Failed to save NextGen chat history: {e}")
                 # Continue without failing the request
         
+        # Get usage info from decorator (for anonymous users)
+        usage_info = getattr(g, '_anon_feature_usage', None)
+
         # Prepare response
         response_data = {
             "response": ai_response.get('response', 'Sorry, I could not process your request.'),
@@ -1337,14 +1296,13 @@ def nextgen_chat():
             "confidence": ai_response.get('confidence', 0.0),
             "stock_data": ai_response.get('stock_data'),
             "sentiment": ai_response.get('sentiment'),
-            "session_id": session_id,
             "requires_login": False
         }
-        
-        # Add usage info for anonymous users
-        if not is_authenticated and remaining_usage:
-            response_data["usage_info"] = remaining_usage
-        
+
+        # Add usage info from decorator
+        if usage_info:
+            response_data["usage"] = usage_info
+
         return jsonify(response_data), 200
         
     except Exception as e:
@@ -1356,152 +1314,198 @@ def nextgen_chat():
         }), 500
 
 # Anonymous Backtesting endpoint with session tracking
-@app.route('/api/backtest/anonymous', methods=['POST'])
+@app.route('/api/backtest/run', methods=['POST'])
 @validate_json_request
-def anonymous_backtest():
-    """Run backtest using session-based usage tracking"""
+@anon_or_auth_feature_limit('backtest-beta')
+def backtest_run():
+    """Run backtest with automatic anonymous trial limiting"""
     try:
         data = request.get_json()
-        
-        # Get or create session ID
-        session_id = data.get('session_id')
-        if not session_id:
-            session_id = session_service.create_anonymous_session()
-            return jsonify({
-                "session_id": session_id,
-                "message": "Please include this session_id in future requests",
-                "login_required": False
-            }), 200
-        
-        # Check if user can run more backtests
-        can_backtest = session_service.check_can_backtest(session_id)
-        if not can_backtest:
-            remaining_usage = session_service.get_remaining_usage(session_id)
-            return jsonify({
-                "error": "Backtest limit reached",
-                "login_required": True,
-                "remaining_usage": remaining_usage
-            }), 403
-        
-        # Remove session_id from parameters before processing
-        backtest_params = {k: v for k, v in data.items() if k != 'session_id'}
-        
-        # Initialize backtesting service
-        backtesting_service = BacktestingService()
-        
+
+        # Use global backtesting service instance
+        global backtesting_service
+
         # Run the backtest
         result = backtesting_service.comprehensive_backtest(
-            ticker=backtest_params.get('stock_symbol'),
-            selected_indicators=backtest_params.get('selected_indicators', {}),
-            voting_threshold=backtest_params.get('voting_threshold', 0.6),
-            period=backtest_params.get('period', '1y'),
-            timeframe=backtest_params.get('timeframe', '1d'),
-            initial_capital=backtest_params.get('initial_capital', 100000),
-            position_size_pct=backtest_params.get('position_size_pct', 0.1),
-            risk_reward_ratio=backtest_params.get('risk_reward_ratio', 2.0),
-            max_drawdown_pct=backtest_params.get('max_drawdown_pct', 0.05),
-            monte_carlo_simulations=backtest_params.get('monte_carlo_simulations', 1000),
-            confidence_level=backtest_params.get('confidence_level', 0.95)
+            ticker=data.get('stock_symbol'),
+            selected_indicators=data.get('selected_indicators', {}),
+            voting_threshold=data.get('voting_threshold', 0.6),
+            period=data.get('period', '1y'),
+            timeframe=data.get('timeframe', '1d'),
+            initial_capital=data.get('initial_capital', 100000),
+            position_size_pct=data.get('position_size_pct', 0.1),
+            risk_reward_ratio=data.get('risk_reward_ratio', 2.0),
+            max_drawdown_pct=data.get('max_drawdown_pct', 0.05),
+            monte_carlo_simulations=data.get('monte_carlo_simulations', 1000),
+            confidence_level=data.get('confidence_level', 0.95)
         )
-        
-        # Update usage count
-        session_service.update_backtest_count(session_id)
-        
-        # Get updated usage information
-        remaining_usage = session_service.get_remaining_usage(session_id)
-        
+
+        # Get usage info if available (set by decorator)
+        usage_info = getattr(g, '_anon_feature_usage', None)
+
         return jsonify({
             "success": True,
             "data": result,
-            "session_id": session_id,
-            "remaining_usage": remaining_usage,
-            "login_required": remaining_usage['backtests'] <= 0 if remaining_usage else False
+            "usage": usage_info
         }), 200
-        
+
     except Exception as e:
-        logger.error(f"Error in anonymous backtest endpoint: {str(e)}", exc_info=True)
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error in backtest endpoint: {str(e)}\n{error_trace}")
         return jsonify({
             "error": "An unexpected error occurred during backtesting",
-            "details": str(e)
+            "details": str(e),
+            "type": type(e).__name__
         }), 500
 
-# Anonymous AI Analysis endpoint with session tracking
-@app.route('/api/ai-analysis/anonymous', methods=['POST'])
+# Legacy anonymous endpoint - kept for backward compatibility
+@app.route('/api/backtest/anonymous', methods=['POST'])
 @validate_json_request
-def anonymous_ai_analysis():
-    """Run AI analysis using session-based usage tracking"""
+def anonymous_backtest():
+    """Legacy endpoint - redirects to new unified endpoint"""
+    return backtest_run()
+
+# AI Analysis endpoint with anonymous trial support
+@app.route('/api/ai-analysis/run', methods=['POST'])
+@validate_json_request
+@anon_or_auth_feature_limit('ai-market-analysis')
+def ai_analysis_run():
+    """Run AI analysis with automatic anonymous trial limiting"""
     try:
         data = request.get_json()
-        
-        # Get or create session ID
-        session_id = data.get('session_id')
-        if not session_id:
-            session_id = session_service.create_anonymous_session()
-            return jsonify({
-                "session_id": session_id,
-                "message": "Please include this session_id in future requests",
-                "login_required": False
-            }), 200
-        
-        # Check if user can run more AI analyses
-        can_analyze = session_service.check_can_ai_analyze(session_id)
-        if not can_analyze:
-            remaining_usage = session_service.get_remaining_usage(session_id)
-            return jsonify({
-                "error": "AI analysis limit reached",
-                "login_required": True,
-                "remaining_usage": remaining_usage
-            }), 403
-        
+
         # Get parameters
         ticker = data.get('ticker')
         period = data.get('period', '1y')
-        
+
         if not ticker:
             return jsonify({"error": "Ticker is required"}), 400
-        
+
         # Run AI analysis components
         prediction_result = None
         analysis_result = None
         recommendations_result = None
-        training_result = None
-        
+        hmm_analysis_result = None
+
         try:
-            # Get prediction
-            prediction_result = market_regime_service.predict_regime(ticker)
-            
-            # Get comprehensive analysis
-            analysis_result = market_regime_service.get_analysis(ticker)
-            
-            # Get recommendations
-            recommendations_result = market_regime_service.get_recommendations(ticker)
-            
+            # Get prediction using HMM service (same as authenticated endpoint)
+            prediction_result = hmm_service.predict_regime(ticker)
+
+            # Get HMM-specific analysis (transition matrix, regime persistence)
+            try:
+                hmm_analysis_result = hmm_service.analyze_regime_persistence(ticker, period)
+                analysis_result = hmm_analysis_result
+            except Exception as hmm_error:
+                logger.warning(f"HMM analysis failed: {str(hmm_error)}")
+                analysis_result = None
+
+            # Get recommendations from market regime service
+            recommendations_result = market_regime_service.get_regime_recommendations(ticker)
+
         except Exception as ai_error:
             logger.warning(f"Some AI analysis components failed: {str(ai_error)}")
-        
-        # Update usage count
-        session_service.update_ai_analysis_count(session_id)
-        
-        # Get updated usage information
-        remaining_usage = session_service.get_remaining_usage(session_id)
-        
+
+        # Get usage info if available (set by decorator)
+        usage_info = getattr(g, '_anon_feature_usage', None)
+
         return jsonify({
             "success": True,
             "prediction": prediction_result,
             "analysis": analysis_result,
             "recommendations": recommendations_result,
-            "training_result": training_result,
-            "session_id": session_id,
-            "remaining_usage": remaining_usage,
-            "login_required": remaining_usage['ai_analyses'] <= 0 if remaining_usage else False
+            "usage": usage_info
         }), 200
-        
+
     except Exception as e:
-        logger.error(f"Error in anonymous AI analysis endpoint: {str(e)}", exc_info=True)
+        logger.error(f"Error in AI analysis endpoint: {str(e)}", exc_info=True)
         return jsonify({
             "error": "An unexpected error occurred during AI analysis",
             "details": str(e)
         }), 500
+
+# Legacy anonymous endpoint - kept for backward compatibility
+@app.route('/api/ai-analysis/anonymous', methods=['POST'])
+@validate_json_request
+def anonymous_ai_analysis():
+    """Legacy endpoint - redirects to new unified endpoint"""
+    return ai_analysis_run()
+
+# Get current anonymous usage for all features
+@app.route('/api/usage/anonymous', methods=['GET'])
+def get_anonymous_usage():
+    """Get current anonymous usage counts for all features"""
+    try:
+        from services.usage_service import get_all_feature_usage, is_redis_available
+
+        # Get feature-specific limits from config
+        ai_analysis_limit = current_app.config.get('ANON_AI_ANALYSIS_LIMIT', 10)
+        backtest_limit = current_app.config.get('ANON_BACKTEST_LIMIT', 10)
+        chat_limit = current_app.config.get('ANON_CHAT_LIMIT', 5)
+
+        if not is_redis_available():
+            # Redis not available, return default limits
+            return jsonify({
+                "status": "unavailable",
+                "message": "Usage tracking unavailable",
+                "features": {
+                    "ai-market-analysis": {"remaining": ai_analysis_limit, "limit": ai_analysis_limit, "used": 0},
+                    "backtest-beta": {"remaining": backtest_limit, "limit": backtest_limit, "used": 0},
+                    "welth-ai-assistant": {"remaining": chat_limit, "limit": chat_limit, "used": 0}
+                }
+            }), 200
+
+        # Get session ID from cookie
+        cookie_name = current_app.config.get('ANON_SESSION_COOKIE', 'ww_session_id')
+        session_id = request.cookies.get(cookie_name)
+
+        # Get feature-specific limits from config
+        ai_analysis_limit = current_app.config.get('ANON_AI_ANALYSIS_LIMIT', 10)
+        backtest_limit = current_app.config.get('ANON_BACKTEST_LIMIT', 10)
+        chat_limit = current_app.config.get('ANON_CHAT_LIMIT', 5)
+
+        if not session_id:
+            # No session yet, return full limits
+            return jsonify({
+                "status": "no_session",
+                "features": {
+                    "ai-market-analysis": {"remaining": ai_analysis_limit, "limit": ai_analysis_limit, "used": 0},
+                    "backtest-beta": {"remaining": backtest_limit, "limit": backtest_limit, "used": 0},
+                    "welth-ai-assistant": {"remaining": chat_limit, "limit": chat_limit, "used": 0}
+                }
+            }), 200
+
+        # Get usage for all features
+        all_usage = get_all_feature_usage(session_id)
+
+        # Calculate remaining for each feature
+        features = {
+            "ai-market-analysis": {
+                "used": all_usage.get("ai-market-analysis", 0),
+                "limit": ai_analysis_limit,
+                "remaining": max(0, ai_analysis_limit - all_usage.get("ai-market-analysis", 0))
+            },
+            "backtest-beta": {
+                "used": all_usage.get("backtest-beta", 0),
+                "limit": backtest_limit,
+                "remaining": max(0, backtest_limit - all_usage.get("backtest-beta", 0))
+            },
+            "welth-ai-assistant": {
+                "used": all_usage.get("welth-ai-assistant", 0),
+                "limit": chat_limit,
+                "remaining": max(0, chat_limit - all_usage.get("welth-ai-assistant", 0))
+            }
+        }
+
+        return jsonify({
+            "status": "success",
+            "session_id": session_id,
+            "features": features
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting anonymous usage: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 # Upstox API Authentication routes
 @app.route('/api/upstox/login-url', methods=['GET'])
@@ -2337,7 +2341,7 @@ def stock_fundamentals():
 @jwt_required()
 @validate_json_request
 @require_subscription_feature('llm_query')
-def chat_with_ai():
+def market_chat():
     try:
         data = request.get_json()
         
@@ -4265,33 +4269,82 @@ def get_user_chat_history():
     """Get user's saved chat history"""
     try:
         user_id = get_jwt_identity()
-        
+
         # Get pagination parameters
         limit = request.args.get('limit', default=50, type=int)
         skip = request.args.get('skip', default=0, type=int)
-        
+
         # Validate pagination parameters
         if limit > 200:
             limit = 200
         if skip < 0:
             skip = 0
-        
+
         # Get user's chat history
         chat_history = user_service.get_user_chat_history(user_id, limit, skip)
-        
+
         return jsonify({
             "success": True,
             "chat_history": chat_history,
             "count": len(chat_history)
         }), 200
-        
+
     except Exception as e:
         logger.error(f"Error retrieving user chat history: {str(e)}")
         return jsonify({
             "success": False,
             "error": "Internal server error",
             "message": str(e)
-        }), 500 
+        }), 500
+
+@app.route('/api/usage/anonymous-status', methods=['GET'])
+def get_anonymous_usage_status():
+    """Get remaining anonymous trial quota for a specific feature"""
+    from services.usage_service import get_feature_usage
+
+    try:
+        feature = request.args.get('feature')
+        if not feature:
+            return jsonify({
+                "ok": False,
+                "error": "feature_required",
+                "message": "Feature parameter is required"
+            }), 400
+
+        # Get session ID from cookie
+        cookie_name = app.config['ANON_SESSION_COOKIE']
+        session_id = request.cookies.get(cookie_name)
+
+        # If no session yet, return full limit available
+        if not session_id:
+            limit = app.config['ANON_TRIAL_LIMIT']
+            return jsonify({
+                "ok": True,
+                "used": 0,
+                "limit": limit,
+                "remaining": limit,
+                "feature": feature
+            }), 200
+
+        # Get usage from Redis
+        used = get_feature_usage(session_id, feature)
+        limit = app.config['ANON_TRIAL_LIMIT']
+
+        return jsonify({
+            "ok": True,
+            "used": used,
+            "limit": limit,
+            "remaining": max(0, limit - used),
+            "feature": feature
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting anonymous usage status: {str(e)}")
+        return jsonify({
+            "ok": False,
+            "error": "internal_error",
+            "message": "Failed to retrieve usage status"
+        }), 500
 
 @app.route('/api/market-indices-new', methods=['GET'])
 def market_indices_new():

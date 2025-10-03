@@ -885,5 +885,45 @@ class IndianStockStrategyBuilder:
             yaxis_title='Drawdown (%)',
             height=300
         )
-        
+
         return fig
+
+    def create_comprehensive_charts(self, df, trades_df, equity_df):
+        """
+        Create comprehensive charts for backtesting results
+
+        Args:
+            df (pandas.DataFrame): OHLCV data with indicators
+            trades_df (pandas.DataFrame): Trade data
+            equity_df (pandas.DataFrame): Equity curve data
+
+        Returns:
+            dict: Dictionary containing chart data (as JSON-serializable format)
+        """
+        charts = {}
+
+        try:
+            # Create candlestick chart
+            candlestick_fig = self.create_candlestick_chart(df, trades_df)
+            charts['candlestick'] = candlestick_fig.to_json()
+        except Exception as e:
+            print(f"Error creating candlestick chart: {e}")
+            charts['candlestick'] = None
+
+        try:
+            # Create equity curve chart
+            equity_fig = self.create_equity_curve_chart(equity_df)
+            charts['equity_curve'] = equity_fig.to_json()
+        except Exception as e:
+            print(f"Error creating equity curve chart: {e}")
+            charts['equity_curve'] = None
+
+        try:
+            # Create drawdown chart
+            drawdown_fig = self.create_drawdown_chart(equity_df)
+            charts['drawdown'] = drawdown_fig.to_json()
+        except Exception as e:
+            print(f"Error creating drawdown chart: {e}")
+            charts['drawdown'] = None
+
+        return charts

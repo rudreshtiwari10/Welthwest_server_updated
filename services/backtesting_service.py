@@ -3086,20 +3086,33 @@ class BacktestingService:
             # Generate charts
             charts = builder.create_comprehensive_charts(df, trades_df, equity_df)
             
+            # Helper function to convert values to JSON-serializable format
+            def to_serializable(val):
+                """Convert pandas/numpy types to JSON-serializable types"""
+                if val is None or (isinstance(val, float) and pd.isna(val)):
+                    return None
+                if hasattr(val, 'isoformat'):  # datetime objects
+                    return val.isoformat()
+                if hasattr(val, 'item'):  # numpy types
+                    return val.item()
+                if isinstance(val, (int, float, str, bool)):
+                    return val
+                return str(val)
+
             # Create trades list in the expected format
             trades = []
             if not trades_df.empty:
                 for _, trade in trades_df.iterrows():
                     trades.append({
-                        'Entry_Date': trade.get('Entry_Date', ''),
-                        'Exit_Date': trade.get('Exit_Date', ''),
+                        'Entry_Date': to_serializable(trade.get('Entry_Date', '')),
+                        'Exit_Date': to_serializable(trade.get('Exit_Date', '')),
                         'Entry_Price': float(trade.get('Entry_Price', 0)),
                         'Exit_Price': float(trade.get('Exit_Price', 0)),
                         'Position_Size': float(trade.get('Position_Size', 0)),
-                        'Direction': trade.get('Direction', 'Long'),
+                        'Direction': str(trade.get('Direction', 'Long')),
                         'PnL': float(trade.get('PnL', 0)),
                         'Return_Pct': float(trade.get('Return_Pct', 0)),
-                        'Exit_Reason': trade.get('Exit_Reason', 'Signal')
+                        'Exit_Reason': str(trade.get('Exit_Reason', 'Signal'))
                     })
             
             # Create equity curve data
@@ -3107,7 +3120,7 @@ class BacktestingService:
             if not equity_df.empty:
                 for _, point in equity_df.iterrows():
                     equity_curve.append({
-                        'Date': point.get('Date', ''),
+                        'Date': to_serializable(point.get('Date', '')),
                         'Equity': float(point.get('Equity', 0)),
                         'Capital': float(point.get('Capital', 0)),
                         'Position': float(point.get('Position', 0)),
@@ -3121,17 +3134,37 @@ class BacktestingService:
                 mc_stats, mc_results = builder.monte_carlo_analysis(
                     trades_df, initial_capital, monte_carlo_simulations, confidence_level
                 )
+
+                # Convert mc_results DataFrame to JSON-serializable format
+                mc_results_list = []
+                if mc_results is not None and not mc_results.empty:
+                    for _, row in mc_results.iterrows():
+                        mc_results_list.append({
+                            'Simulation': int(row.get('Simulation', 0)),
+                            'Final_Return_Pct': float(row.get('Final_Return_Pct', 0)),
+                            'Final_Capital': float(row.get('Final_Capital', 0))
+                        })
+
                 monte_carlo = {
                     'statistics': mc_stats,
-                    'results': mc_results
+                    'results': mc_results_list
                 }
             
             # Prepare the result in the expected format
+            # Convert stock_data to JSON-serializable format
+            stock_data = []
+            if not df.empty:
+                for _, row in df.iterrows():
+                    row_dict = {}
+                    for col in df.columns:
+                        row_dict[col] = to_serializable(row[col])
+                    stock_data.append(row_dict)
+
             result = {
                 'metrics': metrics,
                 'trades': trades,
                 'equity_curve': equity_curve,
-                'stock_data': df.to_dict('records'),
+                'stock_data': stock_data,
                 'charts': charts,
                 'monte_carlo': monte_carlo,
                 'summary': {
@@ -3142,8 +3175,8 @@ class BacktestingService:
                     'indicators_used': list(selected_indicators.keys()),
                     'voting_threshold': voting_threshold,
                     'backtest_period': {
-                        'start_date': df.iloc[0]['Date'].strftime('%Y-%m-%d') if not df.empty else '',
-                        'end_date': df.iloc[-1]['Date'].strftime('%Y-%m-%d') if not df.empty else ''
+                        'start_date': to_serializable(df.iloc[0]['Date']) if not df.empty else '',
+                        'end_date': to_serializable(df.iloc[-1]['Date']) if not df.empty else ''
                     }
                 }
             }
