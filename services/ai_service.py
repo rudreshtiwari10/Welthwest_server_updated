@@ -6,7 +6,7 @@ import logging
 from services.stock_service import get_live_data, format_indian_ticker, validate_ticker
 import pandas as pd
 #kkk
-# Setup logging
+# Setup logginggg
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
