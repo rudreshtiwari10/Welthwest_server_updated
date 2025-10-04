@@ -29,7 +29,7 @@ try:
     redis_client.ping()
     print(f"✓ Redis connection established at {config.REDIS_HOST}:{config.REDIS_PORT}")
 except Exception as e:
-    print(f"⚠ Redis connection failed: {e}. Using in-memory storage as fallback.")
+    print(f"ℹ Redis not available, using in-memory storage (OK for development)")
     redis_client = None
 
 
