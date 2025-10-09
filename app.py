@@ -38,6 +38,7 @@ import re
 from services.backtesting_service import BacktestingService
 from services.market_regime_service import market_regime_service, MarketRegimeService
 from hmm_model import hmm_service
+from lstm_model import lstm_service, lstm_hmm_forecast_service
 from services.session_service import InMemorySessionService
 from bson import ObjectId
 from datetime import datetime
@@ -4093,6 +4094,155 @@ def evaluate_hmm_model():
             
     except Exception as e:
         logger.error(f"Error in evaluate_hmm_model: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+# LSTM Model Endpoints
+@app.route('/api/lstm_model/train', methods=['POST'])
+@jwt_required()
+@validate_json_request
+def train_lstm_model():
+    """Train the LSTM model"""
+    try:
+        # Check if user is admin
+        user_id = get_jwt_identity()
+        user = user_service.get_user_by_id(user_id)
+        if not user or user.get('role') != 'admin':
+            return jsonify({"error": "Unauthorized access"}), 403
+
+        data = request.get_json()
+        ticker = data.get('ticker', 'RELIANCE.NS')
+        period = data.get('period', '2y')
+        epochs = data.get('epochs', 50)
+        batch_size = data.get('batch_size', 32)
+        retrain = data.get('retrain', False)
+
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+
+        result = lstm_service.train_model(ticker, period, epochs, batch_size, retrain)
+
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+
+    except Exception as e:
+        logger.error(f"Error in train_lstm_model: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/lstm_model/predict', methods=['GET', 'POST'])
+def predict_lstm_prices():
+    """Predict future prices using LSTM"""
+    try:
+        # Handle both GET and POST requests
+        if request.method == 'GET':
+            ticker = request.args.get('ticker', 'RELIANCE.NS')
+        else:  # POST
+            data = request.get_json() or {}
+            ticker = data.get('ticker', 'RELIANCE.NS')
+
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+
+        result = lstm_service.predict_prices(ticker)
+
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+
+    except Exception as e:
+        logger.error(f"Error in predict_lstm_prices: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/lstm_model/evaluate', methods=['GET'])
+@jwt_required()
+def evaluate_lstm_model():
+    """Evaluate LSTM model performance"""
+    try:
+        # Check if user is admin
+        user_id = get_jwt_identity()
+        user = user_service.get_user_by_id(user_id)
+        if not user or user.get('role') != 'admin':
+            return jsonify({"error": "Unauthorized access"}), 403
+
+        ticker = request.args.get('ticker', 'RELIANCE.NS')
+        test_period = request.args.get('test_period', '3mo')
+
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+
+        result = lstm_service.evaluate_model(ticker, test_period)
+
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+
+    except Exception as e:
+        logger.error(f"Error in evaluate_lstm_model: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/lstm_model/model-info', methods=['GET'])
+@jwt_required()
+def get_lstm_model_info():
+    """Get information about the LSTM model"""
+    try:
+        result = lstm_service.get_model_info()
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.error(f"Error in get_lstm_model_info: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+# LSTM + HMM Combined Forecast Endpoints
+@app.route('/api/ai_forecast/full_trade_forecast', methods=['GET', 'POST'])
+def get_full_trade_forecast():
+    """Get comprehensive trade forecast using LSTM + HMM"""
+    try:
+        # Handle both GET and POST requests
+        if request.method == 'GET':
+            ticker = request.args.get('ticker', 'RELIANCE.NS')
+        else:  # POST
+            data = request.get_json() or {}
+            ticker = data.get('ticker', 'RELIANCE.NS')
+
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is required"}), 400
+
+        result = lstm_hmm_forecast_service.get_full_trade_forecast(ticker)
+
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+
+    except Exception as e:
+        logger.error(f"Error in get_full_trade_forecast: {str(e)}")
+        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+
+@app.route('/api/ai_forecast/multiple', methods=['POST'])
+@jwt_required()
+@validate_json_request
+@check_market_data_access
+def get_multiple_ai_forecasts():
+    """Get LSTM+HMM forecasts for multiple tickers"""
+    try:
+        data = request.get_json()
+        tickers = data.get('tickers', ['RELIANCE.NS'])
+
+        if not tickers or not isinstance(tickers, list):
+            return jsonify({"error": "tickers must be a list"}), 400
+
+        result = lstm_hmm_forecast_service.get_multiple_forecasts(tickers)
+
+        if result["status"] == "success":
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+
+    except Exception as e:
+        logger.error(f"Error in get_multiple_ai_forecasts: {str(e)}")
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
 # User Data Persistence Endpoints

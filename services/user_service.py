@@ -49,9 +49,23 @@ class UserService:
         hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
         return hashed
     
-    def check_password(self, password: str, hashed_password: bytes) -> bool:
+    def check_password(self, password: str, hashed_password) -> bool:
         """Check if password matches the hashed password"""
-        return bcrypt.checkpw(password.encode('utf-8'), hashed_password)
+        try:
+            # If hashed_password is a string (werkzeug hash), convert to bytes
+            if isinstance(hashed_password, str):
+                # Check if it's a werkzeug hash (starts with pbkdf2, scrypt, or bcrypt)
+                if hashed_password.startswith(('pbkdf2:', 'scrypt:', 'bcrypt:')):
+                    from werkzeug.security import check_password_hash
+                    return check_password_hash(hashed_password, password)
+                # Otherwise assume it's a bcrypt hash string, encode it
+                hashed_password = hashed_password.encode('utf-8')
+
+            # Standard bcrypt check
+            return bcrypt.checkpw(password.encode('utf-8'), hashed_password)
+        except Exception as e:
+            logger.error(f"Password check error: {str(e)}")
+            return False
     
     def register_user(self, email: str, username: str, password: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """

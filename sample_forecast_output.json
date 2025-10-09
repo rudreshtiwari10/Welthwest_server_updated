@@ -1,0 +1,117 @@
+{
+  "status": "success",
+  "ticker": "HDFCBANK.NS",
+  "timestamp": "2025-10-09T12:01:38.727847",
+  "trading_style": "swing",
+  "price_analysis": {
+    "current_price": 1952.3153906758562,
+    "forecast": [
+      {
+        "date": "2025-10-10",
+        "predicted_price": 1929.4034312006067,
+        "price_change": -1.1735787969851375,
+        "day": 1
+      },
+      {
+        "date": "2025-10-11",
+        "predicted_price": 1906.4914717253573,
+        "price_change": -2.347157593970275,
+        "day": 2
+      },
+      {
+        "date": "2025-10-12",
+        "predicted_price": 1883.5795122501079,
+        "price_change": -3.5207363909554124,
+        "day": 3
+      },
+      {
+        "date": "2025-10-13",
+        "predicted_price": 1860.6675527748587,
+        "price_change": -4.69431518794055,
+        "day": 4
+      },
+      {
+        "date": "2025-10-14",
+        "predicted_price": 1837.7555932996092,
+        "price_change": -5.867893984925687,
+        "day": 5
+      }
+    ],
+    "lstm_trend": "Bearish",
+    "average_change_percent": -5.867893984925687,
+    "technical_trend": "down",
+    "trend_strength": 0.3858248386342473
+  },
+  "market_regime": {
+    "current_regime": 1,
+    "regime_name": "Normal Volatility Regime",
+    "confidence": 0.75,
+    "volatility": 0.019339885548614107,
+    "regime_description": "Market shows normal volatility levels with balanced price action. Standard trading strategies and position sizing apply."
+  },
+  "recommendation": {
+    "action": "HOLD",
+    "confidence": "55%",
+    "reasoning": "Market is in Normal Volatility Regime. LSTM predicts Bearish trend. Market sentiment is negative. Recommendation confidence: low (55%).",
+    "model_agreement": "60%",
+    "model_signals": {
+      "hmm": 0.0,
+      "lstm": -0.5867893984925687,
+      "random_forest": 0.0,
+      "sentiment": -0.35722089235317545,
+      "technical": -0.3858248386342473
+    }
+  },
+  "risk_assessment": {
+    "level": "Medium",
+    "score": 4.444811663466375,
+    "description": "Moderate risk due to market volatility. The market shows mixed signals. Recommended position sizing: 2-3% of portfolio.",
+    "components": {
+      "volatility": 1.9339885548614106,
+      "regime": 5.0,
+      "pattern_uncertainty": 10.0,
+      "sentiment_risk": 1.7861044617658772
+    },
+    "recommendation": "Moderate risk - Use standard position sizing with tight stops"
+  },
+  "signals": {
+    "entry_price": 1952.3153906758562,
+    "stop_loss": 1875.2483813961003,
+    "take_profit": 1936.1056535016883,
+    "target_high": 2010.884852396132,
+    "target_low": 1875.2483813961003,
+    "exit_price": 1936.1056535016883
+  },
+  "position_sizing": {
+    "recommended_capital": 2000.0,
+    "position_percentage": 2.0,
+    "kelly_criterion": 43.01494023525671,
+    "max_risk": 40.0,
+    "recommendation": "Low confidence - Small position size (1-2% of portfolio)"
+  },
+  "insights": {
+    "detected_patterns": [],
+    "price_action_signals": [],
+    "breakouts": [],
+    "sentiment_analysis": {
+      "overall": -0.35722089235317545,
+      "trend": "negative",
+      "key_topics": [
+        "Weak earnings guidance",
+        "Analyst downgrades",
+        "Profit booking"
+      ]
+    },
+    "support_levels": [
+      2393.596765895271,
+      2154.2932366585055,
+      1950.2505249936366
+    ],
+    "resistance_levels": [
+      2789.1995137219287,
+      2692.3512785058306,
+      2287.552721299611
+    ]
+  },
+  "message": "Advanced AI trade forecast completed successfully"
+}

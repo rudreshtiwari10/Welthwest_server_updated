@@ -1,0 +1,77 @@
+{
+  "model_name": "LSTM Training Configuration for TCS",
+  "description": "Configuration for TCS (Tata Consultancy Services) stock prediction",
+
+  "data": {
+    "ticker": "TCS.NS",
+    "data_source": "yfinance",
+    "use_period": true,
+    "period": "5y",
+    "start_date": "2020-01-01",
+    "end_date": "2025-12-31"
+  },
+
+  "model_architecture": {
+    "sequence_length": 60,
+    "prediction_horizon": 5,
+    "lstm_layers": [
+      {"units": 128, "return_sequences": true, "dropout": 0.2},
+      {"units": 64, "return_sequences": true, "dropout": 0.2},
+      {"units": 32, "return_sequences": false, "dropout": 0.3}
+    ],
+    "dense_layers": [
+      {"units": 16, "activation": "relu", "dropout": 0.3},
+      {"units": 5, "activation": "linear"}
+    ]
+  },
+
+  "training": {
+    "batch_size": 32,
+    "epochs": 100,
+    "validation_split": 0.2,
+    "test_size": 0.2,
+    "learning_rate": 0.001,
+    "optimizer": "adam",
+    "loss": "mse"
+  },
+
+  "features": {
+    "use_technical_indicators": true,
+    "use_price_features": true,
+    "use_volume_features": true,
+    "use_returns": true,
+    "use_log_returns": true,
+    "normalize_data": true
+  },
+
+  "callbacks": {
+    "early_stopping": {
+      "enabled": true,
+      "patience": 15,
+      "min_delta": 0.0001
+    },
+    "reduce_lr": {
+      "enabled": true,
+      "patience": 5,
+      "factor": 0.5,
+      "min_lr": 1e-7
+    },
+    "model_checkpoint": {
+      "enabled": true,
+      "save_best_only": true
+    }
+  },
+
+  "persistence": {
+    "save_model": true,
+    "model_dir": "models/lstm",
+    "save_scaler": true,
+    "save_training_history": true
+  },
+
+  "evaluation": {
+    "evaluate_on_test": true,
+    "generate_plots": true,
+    "plot_dir": "plots/lstm"
+  }
+}
