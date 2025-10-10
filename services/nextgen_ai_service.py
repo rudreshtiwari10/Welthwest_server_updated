@@ -291,31 +291,56 @@ class NextGenAIOrchestrator:
             logger.error(f"Error in sentiment analysis: {e}")
             return {'sentiment': 'neutral', 'confidence': 0.5}
     
+    def clean_ai_response(self, text: str) -> str:
+        """Clean AI response by removing model artifacts and prefixes/suffixes"""
+        if not text:
+            return text
+
+        # Remove common LLM artifacts
+        cleaned = text.strip()
+
+        # Remove <s> prefix and </s> suffix (Mistral/LLama artifacts)
+        cleaned = re.sub(r'^<s>\s*', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\s*</s>$', '', cleaned, flags=re.IGNORECASE)
+
+        # Remove [OUT] and [/OUT] tags
+        cleaned = re.sub(r'\[OUT\]\s*', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\[/OUT\]\s*', '', cleaned, flags=re.IGNORECASE)
+
+        # Remove [INST] and [/INST] tags (instruction tags)
+        cleaned = re.sub(r'\[INST\]\s*', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\[/INST\]\s*', '', cleaned, flags=re.IGNORECASE)
+
+        return cleaned.strip()
+
     def call_openrouter_api(self, messages: List[Dict], model: str = "mistralai/mistral-7b-instruct") -> str:
         """Call OpenRouter API"""
         if not self.openrouter_api_key:
             raise Exception("OpenRouter API key not available")
-        
+
         try:
             url = "https://openrouter.ai/api/v1/chat/completions"
             headers = {
                 "Authorization": f"Bearer {self.openrouter_api_key}",
                 "Content-Type": "application/json"
             }
-            
+
             payload = {
                 "model": model,
                 "messages": messages,
                 "max_tokens": 1000,
                 "temperature": 0.7
             }
-            
+
             response = requests.post(url, headers=headers, json=payload, timeout=30)
             response.raise_for_status()
-            
+
             data = response.json()
-            return data['choices'][0]['message']['content']
-            
+            raw_response = data['choices'][0]['message']['content']
+
+            # Clean the response before returning
+            return self.clean_ai_response(raw_response)
+
         except Exception as e:
             logger.error(f"OpenRouter API error: {e}")
             raise
@@ -324,10 +349,10 @@ class NextGenAIOrchestrator:
         """Call Gemini API as fallback"""
         if not self.gemini_api_key:
             raise Exception("Gemini API key not available")
-        
+
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={self.gemini_api_key}"
-            
+
             payload = {
                 "contents": [{
                     "parts": [{
@@ -339,13 +364,16 @@ class NextGenAIOrchestrator:
                     "maxOutputTokens": 1000
                 }
             }
-            
+
             response = requests.post(url, json=payload, timeout=30)
             response.raise_for_status()
-            
+
             data = response.json()
-            return data['candidates'][0]['content']['parts'][0]['text']
-            
+            raw_response = data['candidates'][0]['content']['parts'][0]['text']
+
+            # Clean the response before returning
+            return self.clean_ai_response(raw_response)
+
         except Exception as e:
             logger.error(f"Gemini API error: {e}")
             raise
