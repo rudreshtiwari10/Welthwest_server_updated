@@ -33,16 +33,12 @@ class BatchTrainingConfig:
 
     # List of stocks to train
     TICKERS = [
-        'RELIANCE.NS',
-        'TCS.NS',
         'HDFCBANK.NS',
-        'INFY.NS',
-        'ICICIBANK.NS',
-        'WIPRO.NS',
-        'SBIN.NS',
         'BHARTIARTL.NS',
         'ITC.NS',
-        'KOTAKBANK.NS'
+        'KOTAKBANK.NS',
+        'RVNL.NS',
+        'TATAMOTORS.NS',
     ]
 
     # Training parameters (will be applied to all stocks)

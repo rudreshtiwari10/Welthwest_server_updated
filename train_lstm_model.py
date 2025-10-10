@@ -54,23 +54,23 @@ class TrainingConfig:
     """All configurable training parameters in one place"""
 
     # ===== DATA PARAMETERS =====
-    TICKER = 'CIPLA.NS'  # Stock ticker to train on
+    TICKER = 'ICICIBANK.NS'  # Stock ticker to train on
     DATA_SOURCE = 'yfinance'  # 'yfinance' or 'alphavantage'
-    START_DATE = '2020-01-01'  # Training data start date
+    START_DATE = '2025-08-01'  # Training data start date
     END_DATE = datetime.now().strftime('%Y-%m-%d')  # Training data end date
 
     # Alternative: Use period instead of dates
     USE_PERIOD = True
-    PERIOD = '5y'  # '1y', '2y', '5y', '10y', 'max'
+    PERIOD = '10y'  # '1y', '2y', '5y', '10y', 'max'
 
     # ===== MODEL ARCHITECTURE =====
-    SEQUENCE_LENGTH = 200  # Number of days to look back
+    SEQUENCE_LENGTH = 60  # Number of days to look back
     PREDICTION_HORIZON = 20  # Predict next N days
 
     # LSTM Layers Configuration
     LSTM_LAYERS = [
-        {'units': 128, 'return_sequences': True, 'dropout': 0.2},
-        {'units': 64, 'return_sequences': True, 'dropout': 0.2},
+        {'units': 128, 'return_sequences': True, 'dropout': 0.1},
+        {'units': 64, 'return_sequences': True, 'dropout': 0.1},
         {'units': 32, 'return_sequences': False, 'dropout': 0.3}
     ]
 
@@ -129,7 +129,7 @@ class TrainingConfig:
     USE_REDUCE_LR = True
     REDUCE_LR_PATIENCE = 5
     REDUCE_LR_FACTOR = 0.5
-    REDUCE_LR_MIN_LR = 1e-7
+    REDUCE_LR_MIN_LR = 1e-4
 
     USE_MODEL_CHECKPOINT = True
     CHECKPOINT_SAVE_BEST_ONLY = True
