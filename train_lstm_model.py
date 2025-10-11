@@ -54,9 +54,9 @@ class TrainingConfig:
     """All configurable training parameters in one place"""
 
     # ===== DATA PARAMETERS =====
-    TICKER = 'ICICIBANK.NS'  # Stock ticker to train on
+    TICKER = 'TVSMOTOR.NS'  # Stock ticker to train on
     DATA_SOURCE = 'yfinance'  # 'yfinance' or 'alphavantage'
-    START_DATE = '2025-08-01'  # Training data start date
+    START_DATE = '2023-08-01'  # Training data start date
     END_DATE = datetime.now().strftime('%Y-%m-%d')  # Training data end date
 
     # Alternative: Use period instead of dates
