@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, g
+from flask import Flask, request, jsonify, g, current_app
 from flask_cors import CORS
 from flask_jwt_extended import (
     JWTManager, create_access_token, create_refresh_token,
@@ -4197,13 +4197,17 @@ def get_lstm_model_info():
 
 # LSTM + HMM Combined Forecast Endpoints
 @app.route('/api/ai_forecast/full_trade_forecast', methods=['GET', 'POST'])
+@anon_or_auth_feature_limit('ai-market-analysis')
 def get_full_trade_forecast():
-    """Get comprehensive trade forecast using LSTM + HMM"""
+    """Get comprehensive trade forecast using LSTM + HMM (supports anonymous access with limits)"""
     try:
         # Handle both GET and POST requests
         if request.method == 'GET':
             ticker = request.args.get('ticker', 'RELIANCE.NS')
         else:  # POST
+            # Validate JSON for POST requests only
+            if not request.is_json:
+                return jsonify({"error": "POST request must be JSON"}), 400
             data = request.get_json() or {}
             ticker = data.get('ticker', 'RELIANCE.NS')
 
@@ -4212,8 +4216,15 @@ def get_full_trade_forecast():
 
         result = lstm_hmm_forecast_service.get_full_trade_forecast(ticker)
 
+        # Get usage info if available (set by decorator for anonymous users)
+        usage_info = getattr(g, '_anon_feature_usage', None)
+
         if result["status"] == "success":
-            return jsonify(result), 200
+            response_data = result
+            # Add usage information for anonymous users
+            if usage_info:
+                response_data['usage'] = usage_info
+            return jsonify(response_data), 200
         else:
             return jsonify(result), 400
 
