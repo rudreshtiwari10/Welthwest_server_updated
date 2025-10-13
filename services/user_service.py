@@ -93,6 +93,8 @@ class UserService:
             "updated_at": datetime.utcnow(),
             "first_name": "",
             "last_name": "",
+            "occupation": "",
+            "bio": "",
             "avatar_url": "",
             "watchlists": []
         }
@@ -139,9 +141,11 @@ class UserService:
             "email": user["email"],
             "first_name": user.get("first_name", ""),
             "last_name": user.get("last_name", ""),
+            "occupation": user.get("occupation", ""),
+            "bio": user.get("bio", ""),
             "avatar_url": user.get("avatar_url", "")
         }
-        
+
         return True, "Login successful", user_data
     
     def get_user_by_id(self, user_id) -> Optional[Dict[str, Any]]:
@@ -164,6 +168,8 @@ class UserService:
             "email": user["email"],
             "first_name": user.get("first_name", ""),
             "last_name": user.get("last_name", ""),
+            "occupation": user.get("occupation", ""),
+            "bio": user.get("bio", ""),
             "avatar_url": user.get("avatar_url", ""),
             "profile_picture": user.get("profile_picture", ""),
             "google_id": user.get("google_id", ""),
@@ -229,6 +235,8 @@ class UserService:
             "updated_at": datetime.utcnow(),
             "first_name": user_data.get("name", "").split(" ")[0] if user_data.get("name") else "",
             "last_name": " ".join(user_data.get("name", "").split(" ")[1:]) if user_data.get("name") and len(user_data.get("name", "").split(" ")) > 1 else "",
+            "occupation": "",
+            "bio": "",
             "avatar_url": user_data.get("picture", ""),
             "profile_picture": user_data.get("picture", ""),
             "google_id": user_data.get("google_id", ""),
@@ -274,26 +282,26 @@ class UserService:
             object_id = ObjectId(user_id)
         except:
             return False, "Invalid user ID", None
-        
-        # Get allowed fields to update
-        allowed_fields = ["first_name", "last_name", "avatar_url"]
+
+        # Get allowed fields to update (removed mobile_number, aadhar_number, pan_number)
+        allowed_fields = ["first_name", "last_name", "occupation", "bio", "avatar_url"]
         update_data = {k: v for k, v in profile_data.items() if k in allowed_fields}
-        
+
         # Add updated timestamp
         update_data["updated_at"] = datetime.utcnow()
-        
+
         # Update user
         result = self.users.update_one(
             {"_id": object_id},
             {"$set": update_data}
         )
-        
-        if result.modified_count > 0:
+
+        if result.modified_count > 0 or len(update_data) > 1:  # Check if there's more than just updated_at
             # Get updated user
             user_data = self.get_user_by_id(user_id)
             return True, "Profile updated successfully", user_data
-        
-        return False, "Failed to update profile", None
+
+        return False, "No changes made to profile", None
     
     def store_refresh_token(self, user_id: str, token: str) -> bool:
         """Store refresh token in database"""
