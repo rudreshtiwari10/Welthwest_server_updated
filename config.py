@@ -82,6 +82,7 @@ class Config:
         # API Configuration
         self.API_VERSION = os.getenv('API_VERSION', 'v1')
         self.BASE_URL = os.getenv('BASE_URL', 'http://localhost:8000')
+        self.FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 
         # Logging Configuration
         self.LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
@@ -109,6 +110,99 @@ class Config:
         self.DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
         self.TESTING = os.getenv('TESTING', 'False').lower() == 'true'
         self.ENV = os.getenv('FLASK_ENV', 'development')
+
+        # ============================================
+        # PREMIUM PLAN CONFIGURATION
+        # ============================================
+
+        # Cashfree Payment Gateway Configuration
+        self.IS_PAYMENT_GATEWAY_ENABLED = os.getenv('IS_PAYMENT_GATEWAY_ENABLED', 'false').lower() == 'true'
+        self.CASHFREE_ENV = os.getenv('CASHFREE_ENV', 'sandbox')  # 'sandbox' or 'production'
+        self.CASHFREE_APP_ID_SANDBOX = os.getenv('CASHFREE_APP_ID_SANDBOX')
+        self.CASHFREE_SECRET_KEY_SANDBOX = os.getenv('CASHFREE_SECRET_KEY_SANDBOX')
+        self.CASHFREE_APP_ID_PROD = os.getenv('CASHFREE_APP_ID_PROD')
+        self.CASHFREE_SECRET_KEY_PROD = os.getenv('CASHFREE_SECRET_KEY_PROD')
+        self.CASHFREE_WEBHOOK_SECRET = os.getenv('CASHFREE_WEBHOOK_SECRET')
+
+        # Get active Cashfree credentials based on environment
+        if self.CASHFREE_ENV == 'production':
+            self.CASHFREE_APP_ID = self.CASHFREE_APP_ID_PROD
+            self.CASHFREE_SECRET_KEY = self.CASHFREE_SECRET_KEY_PROD
+        else:
+            self.CASHFREE_APP_ID = self.CASHFREE_APP_ID_SANDBOX
+            self.CASHFREE_SECRET_KEY = self.CASHFREE_SECRET_KEY_SANDBOX
+
+        # Server Timezone for daily limit resets
+        self.SERVER_TIMEZONE = os.getenv('SERVER_TIMEZONE', 'Asia/Kolkata')
+
+        # Premium Plan Pricing (INR)
+        self.PLAN_PRICES = {
+            'FREE': {
+                'weekly': 0,
+                'monthly': 0,
+                'annual': 0
+            },
+            'STARTER': {
+                'weekly': int(os.getenv('PLAN_STARTER_WEEKLY', 149)),
+                'monthly': int(os.getenv('PLAN_STARTER_MONTHLY', 299)),
+                'annual': int(os.getenv('PLAN_STARTER_ANNUAL', 2999))
+            },
+            'PRO': {
+                'weekly': int(os.getenv('PLAN_PRO_WEEKLY', 249)),
+                'monthly': int(os.getenv('PLAN_PRO_MONTHLY', 499)),
+                'annual': int(os.getenv('PLAN_PRO_ANNUAL', 4999))
+            },
+            'ADVANCED': {
+                'weekly': int(os.getenv('PLAN_ADVANCED_WEEKLY', 499)),
+                'monthly': int(os.getenv('PLAN_ADVANCED_MONTHLY', 999)),
+                'annual': int(os.getenv('PLAN_ADVANCED_ANNUAL', 9999))
+            },
+            'ENTERPRISE': {
+                'weekly': int(os.getenv('PLAN_ENTERPRISE_WEEKLY', 999)),
+                'monthly': int(os.getenv('PLAN_ENTERPRISE_MONTHLY', 1999)),
+                'annual': int(os.getenv('PLAN_ENTERPRISE_ANNUAL', 19999))
+            }
+        }
+
+        # Premium Plan Limits (per-feature, per-day)
+        # Feature keys: welth-market-regime, welth-ai-assistant, backtest-beta
+        self.PLAN_LIMITS = {
+            'FREE': {
+                'welth-market-regime': int(os.getenv('PLAN_FREE__MARKET_REGIME', 10)),
+                'welth-ai-assistant': int(os.getenv('PLAN_FREE__AI_ASSISTANT', 15)),
+                'backtest-beta': int(os.getenv('PLAN_FREE__BACKTEST', 5))
+            },
+            'STARTER': {
+                'welth-market-regime': int(os.getenv('PLAN_STARTER__MARKET_REGIME', 20)),
+                'welth-ai-assistant': int(os.getenv('PLAN_STARTER__AI_ASSISTANT', 25)),
+                'backtest-beta': int(os.getenv('PLAN_STARTER__BACKTEST', 15))
+            },
+            'PRO': {
+                'welth-market-regime': int(os.getenv('PLAN_PRO__MARKET_REGIME', 30)),
+                'welth-ai-assistant': int(os.getenv('PLAN_PRO__AI_ASSISTANT', 35)),
+                'backtest-beta': int(os.getenv('PLAN_PRO__BACKTEST', 25))
+            },
+            'ADVANCED': {
+                'welth-market-regime': int(os.getenv('PLAN_ADVANCED__MARKET_REGIME', 40)),
+                'welth-ai-assistant': int(os.getenv('PLAN_ADVANCED__AI_ASSISTANT', 45)),
+                'backtest-beta': int(os.getenv('PLAN_ADVANCED__BACKTEST', 40))
+            },
+            'ENTERPRISE': {
+                'welth-market-regime': int(os.getenv('PLAN_ENTERPRISE__MARKET_REGIME', 50)),
+                'welth-ai-assistant': int(os.getenv('PLAN_ENTERPRISE__AI_ASSISTANT', 55)),
+                'backtest-beta': int(os.getenv('PLAN_ENTERPRISE__BACKTEST', 45))
+            }
+        }
+
+        # Anonymous User Limits (session-based)
+        self.ANON_LIMITS = {
+            'welth-market-regime': int(os.getenv('ANON_MARKET_REGIME_LIMIT', 10)),
+            'welth-ai-assistant': int(os.getenv('ANON_AI_ASSISTANT_LIMIT', 15)),
+            'backtest-beta': int(os.getenv('ANON_BACKTEST_LIMIT', 5))
+        }
+
+        # Usage Counter Configuration
+        self.USAGE_COUNTER_TTL_SECONDS = int(os.getenv('USAGE_COUNTER_TTL_SECONDS', 86400))  # 24 hours
 
         # Validate required configuration
         self._validate_config()

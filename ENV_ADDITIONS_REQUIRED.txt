@@ -1,0 +1,131 @@
+=================================================================================
+    COPY THESE LINES TO YOUR .env FILE
+=================================================================================
+
+# ============================================
+# CASHFREE PAYMENT GATEWAY
+# ============================================
+IS_PAYMENT_GATEWAY_ENABLED=true
+CASHFREE_ENV=sandbox
+CASHFREE_APP_ID_SANDBOX=YOUR_SANDBOX_APP_ID_HERE
+CASHFREE_SECRET_KEY_SANDBOX=YOUR_SANDBOX_SECRET_HERE
+CASHFREE_APP_ID_PROD=YOUR_PROD_APP_ID_HERE
+CASHFREE_SECRET_KEY_PROD=YOUR_PROD_SECRET_HERE
+CASHFREE_WEBHOOK_SECRET=YOUR_WEBHOOK_SECRET_HERE
+
+# ============================================
+# SERVER TIMEZONE
+# ============================================
+SERVER_TIMEZONE=Asia/Kolkata
+
+# ============================================
+# STARTER PLAN PRICES (INR)
+# ============================================
+PLAN_STARTER_WEEKLY=149
+PLAN_STARTER_MONTHLY=299
+PLAN_STARTER_ANNUAL=2999
+
+# ============================================
+# PRO PLAN PRICES (INR)
+# ============================================
+PLAN_PRO_WEEKLY=249
+PLAN_PRO_MONTHLY=499
+PLAN_PRO_ANNUAL=4999
+
+# ============================================
+# ADVANCED PLAN PRICES (INR)
+# ============================================
+PLAN_ADVANCED_WEEKLY=499
+PLAN_ADVANCED_MONTHLY=999
+PLAN_ADVANCED_ANNUAL=9999
+
+# ============================================
+# ENTERPRISE PLAN PRICES (INR)
+# ============================================
+PLAN_ENTERPRISE_WEEKLY=999
+PLAN_ENTERPRISE_MONTHLY=1999
+PLAN_ENTERPRISE_ANNUAL=19999
+
+# ============================================
+# FREE PLAN LIMITS
+# ============================================
+PLAN_FREE__MARKET_REGIME=10
+PLAN_FREE__AI_ASSISTANT=15
+PLAN_FREE__BACKTEST=5
+
+# ============================================
+# STARTER PLAN LIMITS
+# ============================================
+PLAN_STARTER__MARKET_REGIME=20
+PLAN_STARTER__AI_ASSISTANT=25
+PLAN_STARTER__BACKTEST=15
+
+# ============================================
+# PRO PLAN LIMITS
+# ============================================
+PLAN_PRO__MARKET_REGIME=30
+PLAN_PRO__AI_ASSISTANT=35
+PLAN_PRO__BACKTEST=25
+
+# ============================================
+# ADVANCED PLAN LIMITS
+# ============================================
+PLAN_ADVANCED__MARKET_REGIME=40
+PLAN_ADVANCED__AI_ASSISTANT=45
+PLAN_ADVANCED__BACKTEST=40
+
+# ============================================
+# ENTERPRISE PLAN LIMITS
+# ============================================
+PLAN_ENTERPRISE__MARKET_REGIME=50
+PLAN_ENTERPRISE__AI_ASSISTANT=55
+PLAN_ENTERPRISE__BACKTEST=45
+
+# ============================================
+# ANONYMOUS USER LIMITS
+# ============================================
+ANON_MARKET_REGIME_LIMIT=10
+ANON_AI_ASSISTANT_LIMIT=15
+ANON_BACKTEST_LIMIT=5
+
+# ============================================
+# USAGE COUNTER CONFIGURATION
+# ============================================
+USAGE_COUNTER_TTL_SECONDS=86400
+
+=================================================================================
+    IMPORTANT STEPS BEFORE STARTING IMPLEMENTATION
+=================================================================================
+
+1. GET CASHFREE CREDENTIALS:
+   - Go to https://www.cashfree.com/ and create a merchant account
+   - Get your Sandbox App ID and Secret Key from the dashboard
+   - Configure webhooks and get the Webhook Secret
+   - Replace the placeholder values above
+
+2. VERIFY REDIS IS RUNNING:
+   Run: redis-cli ping
+   Expected output: PONG
+
+3. VERIFY MONGODB IS RUNNING:
+   Check your MONGODB_URI is accessible
+
+4. DECIDE ON INITIAL PAYMENT GATEWAY STATE:
+   - For development/testing: IS_PAYMENT_GATEWAY_ENABLED=false
+   - For payment testing: IS_PAYMENT_GATEWAY_ENABLED=true with sandbox
+   - For production: IS_PAYMENT_GATEWAY_ENABLED=true with production
+
+=================================================================================
+    YOU CAN CUSTOMIZE THESE VALUES
+=================================================================================
+
+Feel free to adjust:
+- Plan prices (PLAN_*_WEEKLY, PLAN_*_MONTHLY, PLAN_*_ANNUAL)
+- Per-feature limits (PLAN_*__MARKET_REGIME, etc.)
+- Anonymous limits (ANON_*_LIMIT)
+- Server timezone (SERVER_TIMEZONE)
+
+The implementation will automatically read these values, so no code changes
+are needed when you adjust limits or prices!
+
+=================================================================================

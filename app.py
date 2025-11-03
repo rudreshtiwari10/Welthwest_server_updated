@@ -14,8 +14,11 @@ from services.user_service import UserService
 from services.ai_service import AIModelService
 from services.nextgen_ai_service import nextgen_orchestrator
 from services.subscription_service import SubscriptionService
-from services.razorpay_service import RazorpayPaymentService
 from services.email_service import email_service
+from routes.premium import premium_bp
+from routes.payment import payment_bp
+from middleware.feature_limit import feature_limit, admin_required
+from database.seed_plans import initialize_premium_system
 from services.google_auth_service import GoogleAuthService
 from services.feedback_service import feedback_service
 from services.news_service import news_service
@@ -183,8 +186,16 @@ app = create_app()
 jwt = JWTManager(app)
 user_service = UserService()
 subscription_service = SubscriptionService()
-payment_service = RazorpayPaymentService()
 session_service = InMemorySessionService()
+
+# Register premium and payment blueprints
+app.register_blueprint(premium_bp)
+app.register_blueprint(payment_bp)
+
+# Initialize premium system (seed plans, create indexes)
+with app.app_context():
+    logger.info("Initializing premium system...")
+    initialize_premium_system()
 
 # After request handler to set anonymous session cookie
 @app.after_request
@@ -1218,7 +1229,7 @@ def chat_with_ai():
 # NextGen AI Chat endpoint with multi-model orchestration
 @app.route('/api/nextgenchat', methods=['POST'])
 @validate_json_request
-@anon_or_auth_feature_limit('welth-ai-assistant')
+@feature_limit('welth-ai-assistant')
 def nextgen_chat():
     """
     NextGen AI Chat endpoint with multi-model orchestration
@@ -1317,7 +1328,7 @@ def nextgen_chat():
 # Anonymous Backtesting endpoint with session tracking
 @app.route('/api/backtest/run', methods=['POST'])
 @validate_json_request
-@anon_or_auth_feature_limit('backtest-beta')
+@feature_limit('backtest-beta')
 def backtest_run():
     """Run backtest with automatic anonymous trial limiting"""
     try:
@@ -3300,221 +3311,10 @@ def create_subscription_tier():
         
     return jsonify({"message": message}), 201
 
-# Payment API Endpoints
-@app.route('/api/payment/create-order', methods=['POST'])
-@jwt_required()
-@validate_json_request
-def create_payment_order():
-    """Create a new payment order for subscription upgrade"""
-    try:
-        user_id = get_jwt_identity()
-        data = request.get_json()
-        
-        # Validate required fields
-        required_fields = ['plan_tier', 'billing_details']
-        for field in required_fields:
-            if field not in data:
-                return jsonify({"error": f"Missing required field: {field}"}), 400
-        
-        # Validate billing details
-        billing_required = ['full_name', 'email', 'phone']
-        billing_details = data['billing_details']
-        for field in billing_required:
-            if field not in billing_details:
-                return jsonify({"error": f"Missing billing field: {field}"}), 400
-        
-        # Create payment order
-        result = payment_service.create_payment_order(
-            user_id=user_id,
-            plan_tier=data['plan_tier'],
-            billing_details=billing_details
-        )
-        
-        if result['success']:
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error creating payment order: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": "Failed to create payment order",
-            "message": str(e)
-        }), 500
-
-@app.route('/api/payment/verify', methods=['POST'])
-@jwt_required()
-@validate_json_request
-def verify_payment():
-    """Verify payment signature and activate subscription"""
-    try:
-        data = request.get_json()
-        logger.info(f"Payment verification request received: {data}")
-        
-        # Validate essential fields
-        essential_fields = ['razorpay_payment_id', 'razorpay_order_id']
-        for field in essential_fields:
-            if field not in data or not data[field]:
-                logger.error(f"Missing essential field: {field}")
-                return jsonify({
-                    "success": False, 
-                    "error": f"Missing required field: {field}"
-                }), 400
-        
-        # Check if signature is provided
-        if not data.get('razorpay_signature'):
-            logger.warning("Payment signature missing - this might be a test environment issue")
-            # In development, we might proceed with a warning
-            if get_config().DEBUG:
-                logger.warning("Debug mode: proceeding without signature verification")
-                data['razorpay_signature'] = 'debug_mode_no_signature'
-            else:
-                return jsonify({
-                    "success": False,
-                    "error": "Missing signature",
-                    "message": "Payment signature is required for verification"
-                }), 400
-        
-        # Verify payment
-        result = payment_service.verify_payment_signature(
-            razorpay_payment_id=data['razorpay_payment_id'],
-            razorpay_order_id=data['razorpay_order_id'],
-            razorpay_signature=data['razorpay_signature']
-        )
-        
-        if result['success']:
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error verifying payment: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": "Payment verification failed",
-            "message": str(e)
-        }), 500
-
-@app.route('/api/payment/status/<order_id>', methods=['GET'])
-@jwt_required()
-def get_payment_status(order_id):
-    """Get payment status for an order"""
-    try:
-        result = payment_service.get_payment_status(order_id)
-        
-        if result['success']:
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 404
-            
-    except Exception as e:
-        logger.error(f"Error getting payment status: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": "Failed to get payment status",
-            "message": str(e)
-        }), 500
-
-@app.route('/api/payment/cancel/<order_id>', methods=['POST'])
-@jwt_required()
-def cancel_payment(order_id):
-    """Cancel a payment order"""
-    try:
-        result = payment_service.cancel_payment(order_id)
-        
-        if result['success']:
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error cancelling payment: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": "Failed to cancel payment",
-            "message": str(e)
-        }), 500
-
-@app.route('/api/payment/history', methods=['GET'])
-@jwt_required()
-def get_payment_history():
-    """Get user's payment history"""
-    try:
-        user_id = get_jwt_identity()
-        
-        # Get pagination parameters
-        limit = request.args.get('limit', default=20, type=int)
-        skip = request.args.get('skip', default=0, type=int)
-        
-        # Validate pagination parameters
-        if limit > 100:
-            limit = 100
-        if skip < 0:
-            skip = 0
-        
-        result = payment_service.get_payment_history(user_id, limit, skip)
-        
-        if result['success']:
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error getting payment history: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": "Failed to get payment history",
-            "message": str(e)
-        }), 500
-
-@app.route('/api/payment/webhook', methods=['POST'])
-def handle_payment_webhook():
-    """Handle Razorpay webhook events"""
-    try:
-        # Get webhook signature from headers
-        webhook_signature = request.headers.get('X-Razorpay-Signature')
-        if not webhook_signature:
-            logger.warning("Webhook received without signature")
-            return jsonify({"error": "Missing webhook signature"}), 400
-        
-        # Get webhook data
-        webhook_data = request.get_json()
-        if not webhook_data:
-            logger.warning("Webhook received without data")
-            return jsonify({"error": "Missing webhook data"}), 400
-        
-        # Process webhook
-        result = payment_service.process_webhook(webhook_data, webhook_signature)
-        
-        if result['success']:
-            return jsonify({"status": "success"}), 200
-        else:
-            logger.error(f"Webhook processing failed: {result}")
-            return jsonify({"error": "Webhook processing failed"}), 400
-            
-    except Exception as e:
-        logger.error(f"Error processing webhook: {str(e)}")
-        return jsonify({"error": "Webhook processing failed"}), 500
-
-@app.route('/api/payment/plans', methods=['GET'])
-def get_payment_plans():
-    """Get available subscription plans with pricing"""
-    try:
-        result = payment_service.get_plan_pricing()
-        
-        if result['success']:
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 500
-            
-    except Exception as e:
-        logger.error(f"Error getting payment plans: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": "Failed to get payment plans",
-            "message": str(e)
-        }), 500
+# ============================================
+# OLD RAZORPAY ROUTES REMOVED
+# Now using Cashfree via routes/payment.py blueprint
+# ============================================
 
 # Billing details endpoints
 @app.route('/api/user/billing-details', methods=['GET'])
@@ -4197,7 +3997,7 @@ def get_lstm_model_info():
 
 # LSTM + HMM Combined Forecast Endpoints
 @app.route('/api/ai_forecast/full_trade_forecast', methods=['GET', 'POST'])
-@anon_or_auth_feature_limit('ai-market-analysis')
+@feature_limit('welth-market-regime')
 def get_full_trade_forecast():
     """Get comprehensive trade forecast using LSTM + HMM (supports anonymous access with limits)"""
     try:
@@ -4767,6 +4567,127 @@ def create_blog_post():
         return jsonify({
             "success": False,
             "message": f"Internal server error: {str(e)}"
+        }), 500
+
+# ============================================
+# ADMIN ENDPOINTS FOR PREMIUM SYSTEM
+# ============================================
+
+@app.route('/api/admin/manual-credit', methods=['POST'])
+@jwt_required()
+@admin_required
+@validate_json_request
+def manual_credit_subscription():
+    """
+    Manually credit a subscription to a user (admin only)
+
+    Request Body:
+        {
+            "user_id": "user_object_id",
+            "plan": "PRO",
+            "duration": "monthly",
+            "note": "Manual credit reason"
+        }
+    """
+    try:
+        data = request.get_json()
+
+        # Validate required fields
+        if not all(k in data for k in ['user_id', 'plan', 'duration']):
+            return jsonify({
+                "success": False,
+                "error": "Missing required fields: user_id, plan, duration"
+            }), 400
+
+        user_id = data['user_id']
+        plan = data['plan']
+        duration = data['duration']
+        note = data.get('note', 'Manual credit by admin')
+
+        # Apply subscription
+        success, message = subscription_service.apply_premium_subscription(
+            user_id=user_id,
+            plan_name=plan,
+            plan_duration=duration
+        )
+
+        if success:
+            logger.info(f"Admin manually credited {plan} ({duration}) to user {user_id}: {note}")
+            return jsonify({
+                "success": True,
+                "message": message,
+                "user_id": user_id,
+                "plan": plan,
+                "duration": duration
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": message
+            }), 400
+
+    except Exception as e:
+        logger.error(f"Error in manual credit: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": "Internal server error"
+        }), 500
+
+
+@app.route('/api/admin/reset-usage', methods=['POST'])
+@jwt_required()
+@admin_required
+@validate_json_request
+def admin_reset_usage():
+    """
+    Reset usage for a user (admin only - for testing/support)
+
+    Request Body:
+        {
+            "user_id": "user_object_id",
+            "feature": "welth-market-regime"  # optional, omit to reset all
+        }
+    """
+    try:
+        from services.premium_usage_service import get_premium_usage_service
+        usage_service = get_premium_usage_service()
+
+        data = request.get_json()
+        user_id = data.get('user_id')
+        feature = data.get('feature')
+
+        if not user_id:
+            return jsonify({
+                "success": False,
+                "error": "user_id is required"
+            }), 400
+
+        if feature:
+            # Reset specific feature
+            success = usage_service.reset_usage(user_id, feature, is_anonymous=False)
+            message = f"Reset usage for {feature}"
+        else:
+            # Reset all usage
+            success = usage_service.delete_all_usage(user_id, is_anonymous=False)
+            message = "Reset all usage"
+
+        if success:
+            logger.info(f"Admin reset usage for user {user_id}: {message}")
+            return jsonify({
+                "success": True,
+                "message": message
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Failed to reset usage"
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error resetting usage: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": "Internal server error"
         }), 500
 
 if __name__ == '__main__':

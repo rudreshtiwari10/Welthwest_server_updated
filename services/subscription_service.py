@@ -9,15 +9,18 @@ logger = logging.getLogger(__name__)
 
 class SubscriptionService:
     """Service for managing user subscriptions and usage tracking"""
-    
+
     def __init__(self):
         self.config = get_config()
         self.db = MongoClient(self.config.MONGODB_URI)[self.config.DB_NAME]
         self.users = self.db.users
-        
+        self.plans = self.db.plans
+
         # Ensure indexes for performance
         self.users.create_index([("subscription.expires_at", ASCENDING)])
         self.users.create_index([("subscription.tier", ASCENDING)])
+        self.users.create_index([("subscription.plan", ASCENDING)])
+        # Note: _id is already unique by default in MongoDB, no need to create index
         
     def initialize_subscription(self, user_id: str) -> bool:
         """Initialize a new user's subscription with FREE tier"""
@@ -668,7 +671,7 @@ class SubscriptionService:
         """Reset usage counters when subscription changes"""
         try:
             current_time = datetime.utcnow()
-            
+
             reset_data = {
                 "$set": {
                     "subscription.usage.daily.backtest_count": 0,
@@ -679,14 +682,262 @@ class SubscriptionService:
                     "subscription.usage.monthly.last_reset": current_time
                 }
             }
-            
+
             result = self.users.update_one(
                 {"_id": ObjectId(user_id)},
                 reset_data
             )
-            
+
             return result.modified_count > 0
-            
+
         except Exception as e:
             logger.error(f"Error resetting usage counters for user {user_id}: {str(e)}")
-            return False 
+            return False
+
+    # ============================================
+    # PREMIUM PLAN METHODS (NEW)
+    # ============================================
+
+    def get_premium_plan(self, plan_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get premium plan details from plans collection
+
+        Args:
+            plan_id: Plan identifier (FREE, STARTER, PRO, ADVANCED, ENTERPRISE)
+
+        Returns:
+            Plan details or None
+        """
+        try:
+            plan = self.plans.find_one({"_id": plan_id})
+            return plan
+        except Exception as e:
+            logger.error(f"Error getting premium plan {plan_id}: {str(e)}")
+            return None
+
+    def get_all_premium_plans(self) -> list:
+        """
+        Get all premium plans
+
+        Returns:
+            List of all plans
+        """
+        try:
+            plans = list(self.plans.find({}).sort("_id", 1))
+            return plans
+        except Exception as e:
+            logger.error(f"Error getting all premium plans: {str(e)}")
+            return []
+
+    def get_limits_for_user(self, user_id: str) -> Dict[str, int]:
+        """
+        Get per-feature limits for a user based on their subscription plan
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            Dict mapping feature keys to limits
+        """
+        try:
+            user = self.users.find_one({"_id": ObjectId(user_id)})
+            if not user:
+                logger.warning(f"User {user_id} not found, returning FREE limits")
+                return self.config.PLAN_LIMITS.get('FREE', {})
+
+            subscription = user.get('subscription', {})
+            plan_name = subscription.get('plan', 'FREE')
+
+            # Check for custom limits
+            custom_limits = subscription.get('custom_limits', {})
+            if custom_limits:
+                # Merge with plan limits
+                plan_limits = self.config.PLAN_LIMITS.get(plan_name, {}).copy()
+                plan_limits.update(custom_limits)
+                return plan_limits
+
+            # Return plan limits from config
+            return self.config.PLAN_LIMITS.get(plan_name, self.config.PLAN_LIMITS.get('FREE', {}))
+
+        except Exception as e:
+            logger.error(f"Error getting limits for user {user_id}: {str(e)}")
+            return self.config.PLAN_LIMITS.get('FREE', {})
+
+    def get_anonymous_limits(self) -> Dict[str, int]:
+        """
+        Get limits for anonymous users
+
+        Returns:
+            Dict mapping feature keys to limits
+        """
+        return self.config.ANON_LIMITS
+
+    def apply_premium_subscription(
+        self,
+        user_id: str,
+        plan_name: str,
+        plan_duration: str,
+        transaction_id: str = None
+    ) -> Tuple[bool, str]:
+        """
+        Apply premium subscription to a user
+
+        Args:
+            user_id: User identifier
+            plan_name: Plan name (STARTER, PRO, ADVANCED, ENTERPRISE)
+            plan_duration: Duration (weekly, monthly, annual)
+            transaction_id: Optional transaction ID
+
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        try:
+            # Validate plan
+            if plan_name not in self.config.PLAN_LIMITS:
+                return False, f"Invalid plan: {plan_name}"
+
+            # Calculate expiry date
+            duration_days = {
+                'weekly': 7,
+                'monthly': 30,
+                'annual': 365
+            }
+
+            if plan_duration not in duration_days:
+                return False, f"Invalid duration: {plan_duration}"
+
+            expiry_date = datetime.utcnow() + timedelta(days=duration_days[plan_duration])
+
+            # Update user subscription
+            update_data = {
+                "$set": {
+                    "subscription.plan": plan_name,
+                    "subscription.plan_duration": plan_duration,
+                    "subscription.start_date": datetime.utcnow(),
+                    "subscription.expiry_date": expiry_date,
+                    "subscription.updated_at": datetime.utcnow()
+                }
+            }
+
+            if transaction_id:
+                update_data["$set"]["subscription.transaction_id"] = transaction_id
+
+            result = self.users.update_one(
+                {"_id": ObjectId(user_id)},
+                update_data
+            )
+
+            if result.modified_count > 0:
+                logger.info(f"Applied {plan_name} subscription to user {user_id}")
+                return True, f"Successfully applied {plan_name} subscription"
+            else:
+                logger.error(f"Failed to apply subscription to user {user_id}")
+                return False, "Failed to update subscription"
+
+        except Exception as e:
+            logger.error(f"Error applying premium subscription: {str(e)}")
+            return False, str(e)
+
+    def get_user_subscription(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get user's current subscription with plan details
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            Subscription details with limits
+        """
+        try:
+            user = self.users.find_one({"_id": ObjectId(user_id)})
+            if not user:
+                return None
+
+            subscription = user.get('subscription', {})
+            plan_name = subscription.get('plan', 'FREE')
+
+            # Get plan limits
+            limits = self.get_limits_for_user(user_id)
+
+            # Get plan prices
+            prices = self.config.PLAN_PRICES.get(plan_name, {})
+
+            return {
+                "plan": plan_name,
+                "plan_duration": subscription.get('plan_duration'),
+                "start_date": subscription.get('start_date'),
+                "expiry_date": subscription.get('expiry_date'),
+                "limits": limits,
+                "prices": prices,
+                "is_active": self._is_subscription_active(subscription)
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting user subscription: {str(e)}")
+            return None
+
+    def _is_subscription_active(self, subscription: Dict[str, Any]) -> bool:
+        """Check if subscription is active"""
+        plan = subscription.get('plan', 'FREE')
+        if plan == 'FREE':
+            return True
+
+        expiry_date = subscription.get('expiry_date')
+        if not expiry_date:
+            return False
+
+        return datetime.utcnow() < expiry_date
+
+    def check_and_downgrade_expired(self) -> Dict[str, int]:
+        """
+        Check for expired subscriptions and downgrade to FREE
+        (Run this as a cron job daily)
+
+        Returns:
+            Dict with counts of processed subscriptions
+        """
+        try:
+            current_time = datetime.utcnow()
+
+            # Find expired subscriptions
+            expired = self.users.find({
+                "subscription.expiry_date": {"$lt": current_time},
+                "subscription.plan": {"$ne": "FREE"}
+            })
+
+            downgraded_count = 0
+            failed_count = 0
+
+            for user in expired:
+                try:
+                    result = self.users.update_one(
+                        {"_id": user["_id"]},
+                        {
+                            "$set": {
+                                "subscription.plan": "FREE",
+                                "subscription.plan_duration": None,
+                                "subscription.expiry_date": None,
+                                "subscription.updated_at": current_time,
+                                "subscription.downgraded_at": current_time,
+                                "subscription.downgrade_reason": "Subscription expired"
+                            }
+                        }
+                    )
+                    if result.modified_count > 0:
+                        downgraded_count += 1
+                        logger.info(f"Downgraded expired subscription for user {user['_id']}")
+                    else:
+                        failed_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to downgrade user {user['_id']}: {e}")
+                    failed_count += 1
+
+            return {
+                "downgraded": downgraded_count,
+                "failed": failed_count,
+                "total": downgraded_count + failed_count
+            }
+
+        except Exception as e:
+            logger.error(f"Error checking expired subscriptions: {str(e)}")
+            return {"downgraded": 0, "failed": 0, "total": 0} 
