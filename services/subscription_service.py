@@ -38,9 +38,14 @@ class SubscriptionService:
             # Create subscription data
             subscription_data = {
                 "subscription": {
-                    "tier": "FREE",
-                    "starts_at": datetime.utcnow(),
-                    "expires_at": None,  # FREE tier doesn't expire
+                    "plan": "FREE",  # New system field
+                    "tier": "FREE",  # Old system field (for backward compatibility)
+                    "plan_duration": None,
+                    "start_date": datetime.utcnow(),
+                    "expiry_date": None,  # FREE tier doesn't expire
+                    "starts_at": datetime.utcnow(),  # Old system field
+                    "expires_at": None,  # Old system field
+                    "is_active": True,
                     "usage": {
                         "daily": {
                             "backtest_count": 0,
@@ -374,15 +379,20 @@ class SubscriptionService:
             user = self.users.find_one({"_id": ObjectId(user_id)})
             if not user:
                 return False
-                
+
             updates = {}
-            
+
             # Check if subscription exists at all
             if "subscription" not in user:
                 updates["subscription"] = {
-                    "tier": "FREE",
+                    "plan": "FREE",  # New system field
+                    "tier": "FREE",  # Old system field
+                    "plan_duration": None,
+                    "start_date": datetime.utcnow(),
+                    "expiry_date": None,
                     "starts_at": datetime.utcnow(),
                     "expires_at": None,  # FREE tier doesn't expire
+                    "is_active": True,
                     "usage": {
                         "daily": {
                             "backtest_count": 0,
@@ -397,8 +407,33 @@ class SubscriptionService:
                     }
                 }
             else:
-                # Check if usage data is missing
                 subscription = user["subscription"]
+
+                # Add 'plan' field if missing (for backward compatibility)
+                if "plan" not in subscription:
+                    # Use tier value if it exists, otherwise default to FREE
+                    tier_value = subscription.get("tier", "FREE")
+                    updates["subscription.plan"] = tier_value
+
+                # Add 'tier' field if missing (for backward compatibility)
+                if "tier" not in subscription:
+                    # Use plan value if it exists, otherwise default to FREE
+                    plan_value = subscription.get("plan", "FREE")
+                    updates["subscription.tier"] = plan_value
+
+                # Add other missing fields
+                if "plan_duration" not in subscription:
+                    updates["subscription.plan_duration"] = None
+                if "start_date" not in subscription and "starts_at" in subscription:
+                    updates["subscription.start_date"] = subscription["starts_at"]
+                elif "start_date" not in subscription:
+                    updates["subscription.start_date"] = datetime.utcnow()
+                if "expiry_date" not in subscription and "expires_at" in subscription:
+                    updates["subscription.expiry_date"] = subscription["expires_at"]
+                if "is_active" not in subscription:
+                    updates["subscription.is_active"] = True
+
+                # Check if usage data is missing
                 if "usage" not in subscription:
                     updates["subscription.usage"] = {
                         "daily": {
@@ -426,7 +461,7 @@ class SubscriptionService:
                             "llm_query_count": 0,
                             "last_reset": datetime.utcnow()
                         }
-            
+
             if updates:
                 result = self.users.update_one(
                     {"_id": ObjectId(user_id)},
@@ -581,64 +616,72 @@ class SubscriptionService:
             user = self.users.find_one({"_id": ObjectId(user_id)})
             if not user:
                 return False, "User not found"
-            
+
             # Check if user has a subscription
             if "subscription" not in user:
                 return False, "User has no subscription"
-            
-            current_tier = user["subscription"].get("tier", "FREE")
-            
-            # If already on FREE tier, nothing to cancel
-            if current_tier == "FREE":
+
+            # Support both 'plan' (new system) and 'tier' (old system)
+            current_plan = user["subscription"].get("plan")
+            current_tier = user["subscription"].get("tier")
+
+            # Determine current subscription level
+            current_subscription = current_plan or current_tier or "FREE"
+
+            # If already on FREE, nothing to cancel
+            if current_subscription == "FREE":
                 return False, "User is already on FREE tier"
-            
+
             # Store cancellation information
             cancellation_info = {
                 "cancelled_at": datetime.utcnow(),
-                "cancelled_tier": current_tier,
+                "cancelled_plan": current_subscription,
                 "reason": reason,
                 "cancelled_by": "user"
             }
-            
-            # Update subscription to FREE tier with cancellation info
+
+            # Update subscription to FREE tier/plan with cancellation info
             update_data = {
                 "$set": {
-                    "subscription.tier": "FREE",
-                    "subscription.expires_at": None,  # FREE tier doesn't expire
+                    "subscription.plan": "FREE",
+                    "subscription.tier": "FREE",  # Also update tier for backward compatibility
+                    "subscription.plan_duration": None,
+                    "subscription.expiry_date": None,  # FREE tier doesn't expire
+                    "subscription.expires_at": None,  # Also clear old field
                     "subscription.cancelled_at": cancellation_info["cancelled_at"],
-                    "subscription.previous_tier": current_tier,
+                    "subscription.previous_plan": current_subscription,
+                    "subscription.previous_tier": current_subscription,  # Backward compatibility
                     "subscription.cancellation_reason": reason,
-                    "subscription.limits": self.config.SUBSCRIPTION_TIERS["FREE"]["limits"],
                     "updated_at": datetime.utcnow()
                 },
                 "$push": {
                     "subscription.history": {
                         "action": "cancelled",
-                        "from_tier": current_tier,
-                        "to_tier": "FREE",
+                        "from_plan": current_subscription,
+                        "to_plan": "FREE",
                         "timestamp": datetime.utcnow(),
                         "reason": reason
                     }
                 }
             }
-            
+
             # Perform the update
             result = self.users.update_one(
                 {"_id": ObjectId(user_id)},
                 update_data
             )
-            
+
             if result.modified_count > 0:
-                logger.info(f"Successfully cancelled subscription for user {user_id}. Downgraded from {current_tier} to FREE")
-                
+                logger.info(f"Successfully cancelled subscription for user {user_id}. Downgraded from {current_subscription} to FREE")
+
                 # Reset usage counters for new limits
                 self._reset_usage_counters(user_id)
-                
-                return True, f"Subscription cancelled successfully. Downgraded from {current_tier} to FREE tier."
+
+                return True, f"Subscription cancelled successfully. Downgraded from {current_subscription} to FREE tier."
             else:
                 logger.error(f"Failed to cancel subscription for user {user_id}")
                 return False, "Failed to update subscription"
-                
+
         except Exception as e:
             logger.error(f"Error canceling subscription for user {user_id}: {str(e)}")
             return False, f"Error canceling subscription: {str(e)}"

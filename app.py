@@ -17,7 +17,7 @@ from services.subscription_service import SubscriptionService
 from services.email_service import email_service
 from routes.premium import premium_bp
 from routes.payment import payment_bp
-from routes.lstm_api_routes import lstm_api, init_lstm_routes
+from routes.subscription import subscription_bp
 from middleware.feature_limit import feature_limit, admin_required
 from database.seed_plans import initialize_premium_system
 from services.google_auth_service import GoogleAuthService
@@ -189,23 +189,10 @@ user_service = UserService()
 subscription_service = SubscriptionService()
 session_service = InMemorySessionService()
 
-# Register premium and payment blueprints
+# Register premium, payment, and subscription blueprints
 app.register_blueprint(premium_bp)
 app.register_blueprint(payment_bp)
-
-# Register LSTM API blueprint
-app.register_blueprint(lstm_api)
-
-# Initialize LSTM routes with configuration
-config = get_config()
-lstm_config = {
-    'LSTM_ADMIN_API_KEY': config.LSTM_ADMIN_API_KEY,
-    'LSTM_MODEL_DIR': config.LSTM_MODEL_DIR,
-    'LSTM_SCALER_DIR': config.LSTM_SCALER_DIR,
-    'LSTM_METADATA_DIR': config.LSTM_METADATA_DIR
-}
-init_lstm_routes(lstm_config)
-logger.info("LSTM API routes initialized")
+app.register_blueprint(subscription_bp)
 
 # Initialize premium system (seed plans, create indexes)
 with app.app_context():
@@ -2992,7 +2979,7 @@ def calculate_performance_metrics(signals, df):
 @app.route('/api/backtesting/newrun', methods=['POST'])
 @jwt_required()
 @validate_json_request
-@require_subscription_feature('backtest')
+@feature_limit('backtest-beta')
 def run_new_backtest():
     """Run comprehensive backtest using IndianStockStrategyBuilder - Colab replication"""
     try:
@@ -3087,7 +3074,12 @@ def run_new_backtest():
                 "end_date": df['Date'].iloc[-1].strftime('%Y-%m-%d')
             }
         }
-        
+
+        # Get usage info if available (set by feature_limit decorator)
+        usage_info = getattr(g, '_anon_feature_usage', None)
+        if usage_info:
+            response["usage"] = usage_info
+
         return jsonify(response), 200
         
     except ValueError as e:
