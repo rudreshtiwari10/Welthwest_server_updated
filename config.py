@@ -204,6 +204,33 @@ class Config:
         # Usage Counter Configuration
         self.USAGE_COUNTER_TTL_SECONDS = int(os.getenv('USAGE_COUNTER_TTL_SECONDS', 86400))  # 24 hours
 
+        # ============================================
+        # LSTM STOCK PREDICTION CONFIGURATION
+        # ============================================
+
+        # LSTM Admin API Key
+        self.LSTM_ADMIN_API_KEY = os.getenv('LSTM_ADMIN_API_KEY', 'change-this-admin-key-in-production')
+
+        # LSTM Model Directories
+        self.LSTM_MODEL_DIR = os.getenv('LSTM_MODEL_DIR', './lstm_model/models')
+        self.LSTM_SCALER_DIR = os.getenv('LSTM_SCALER_DIR', './lstm_model/scalers')
+        self.LSTM_METADATA_DIR = os.getenv('LSTM_METADATA_DIR', './lstm_model/metadata')
+
+        # LSTM Training Configuration
+        self.LSTM_TIME_STEPS = int(os.getenv('LSTM_TIME_STEPS', 60))
+        self.LSTM_FORECAST_DAYS = int(os.getenv('LSTM_FORECAST_DAYS', 3))
+        self.LSTM_TRAINING_EPOCHS = int(os.getenv('LSTM_TRAINING_EPOCHS', 25))
+        self.LSTM_BATCH_SIZE = int(os.getenv('LSTM_BATCH_SIZE', 32))
+        self.LSTM_TRAIN_TEST_SPLIT = float(os.getenv('LSTM_TRAIN_TEST_SPLIT', 0.95))
+
+        # LSTM Data Configuration
+        self.LSTM_DATA_START_YEAR = os.getenv('LSTM_DATA_START_YEAR', '2019-01-01')
+        self.LSTM_DATA_SOURCE = os.getenv('LSTM_DATA_SOURCE', 'yahoo_finance')
+
+        # LSTM Rate Limiting
+        self.LSTM_RATE_LIMIT_PER_MINUTE = int(os.getenv('LSTM_RATE_LIMIT_PER_MINUTE', 10))
+        self.LSTM_ADMIN_RATE_LIMIT_PER_HOUR = int(os.getenv('LSTM_ADMIN_RATE_LIMIT_PER_HOUR', 5))
+
         # Validate required configuration
         self._validate_config()
 

@@ -1,0 +1,47 @@
+{
+  "stock_symbol": "RELIANCE.NS",
+  "training_info": {
+    "trained_at": "2025-11-07T00:02:02.061404Z",
+    "training_duration_seconds": 218,
+    "training_start_date": "2018-01-01 00:00:00",
+    "training_end_date": "2025-11-04 00:00:00",
+    "total_training_days": 1937,
+    "training_samples": 1587,
+    "test_samples": 290
+  },
+  "model_config": {
+    "time_steps": 60,
+    "forecast_days": 3,
+    "epochs": 60,
+    "batch_size": 32,
+    "lstm_layers": [
+      128,
+      64,
+      32
+    ],
+    "dense_layers": [
+      64,
+      1
+    ],
+    "dropout_rate": [
+      0.2,
+      0.2,
+      0.2,
+      0.3
+    ]
+  },
+  "model_performance": {
+    "mae": 25.725831340921335,
+    "rmse": 30.474990786935255,
+    "r2": 0.8953661671416531,
+    "mape": 1.8803076396571448
+  },
+  "last_training_price": 1473.0999755859375,
+  "model_files": {
+    "model_path": "../lstm_model/models\\lstm_reliance_ns.keras",
+    "scaler_path": "../lstm_model/scalers\\scaler_reliance_ns.pkl"
+  },
+  "version": "1.0",
+  "created_by": "train_lstm_new.py",
+  "last_updated": "2025-11-07T00:02:02.061404Z"
+}

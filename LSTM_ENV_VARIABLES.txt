@@ -1,0 +1,100 @@
+# ============================================
+# LSTM STOCK PREDICTION API - ENVIRONMENT VARIABLES
+# ============================================
+# Add these variables to your .env file
+
+# ============================================
+# REQUIRED: Admin API Key
+# ============================================
+# This key is required to access the admin training endpoint
+# IMPORTANT: Change this to a strong, random key in production
+LSTM_ADMIN_API_KEY=your-secure-admin-key-here-change-this-in-production
+
+# ============================================
+# Model Storage Directories
+# ============================================
+# Directories where trained models, scalers, and metadata are stored
+# These directories will be created automatically if they don't exist
+LSTM_MODEL_DIR=./lstm_model/models
+LSTM_SCALER_DIR=./lstm_model/scalers
+LSTM_METADATA_DIR=./lstm_model/metadata
+
+# ============================================
+# Training Configuration (Optional)
+# ============================================
+# These have default values and can be omitted if defaults are acceptable
+
+# Number of time steps (days) used for prediction window
+# Default: 60 days
+# Range: 10-200
+LSTM_TIME_STEPS=60
+
+# Number of days to forecast into the future
+# Default: 3 days
+# Note: Accuracy decreases beyond 3 days
+LSTM_FORECAST_DAYS=3
+
+# Number of training epochs
+# Default: 25
+# More epochs = better training but longer time
+# Range: 1-100
+LSTM_TRAINING_EPOCHS=25
+
+# Training batch size
+# Default: 32
+# Smaller batch size = more memory efficient but slower
+# Range: 1-256
+LSTM_BATCH_SIZE=32
+
+# Train-test split ratio
+# Default: 0.95 (95% training, 5% testing)
+# Range: 0.8-0.99
+LSTM_TRAIN_TEST_SPLIT=0.95
+
+# ============================================
+# Data Configuration
+# ============================================
+
+# Default start date for training data
+# Default: 2019-01-01
+# More historical data generally improves predictions
+LSTM_DATA_START_YEAR=2019-01-01
+
+# Data source (currently only Yahoo Finance is supported)
+LSTM_DATA_SOURCE=yahoo_finance
+
+# ============================================
+# Rate Limiting (Optional)
+# ============================================
+
+# Rate limit for prediction endpoint (requests per minute)
+# Default: 10 requests/minute
+# Set higher for production with many users
+LSTM_RATE_LIMIT_PER_MINUTE=10
+
+# Rate limit for admin training endpoint (requests per hour)
+# Default: 5 requests/hour
+# Training is resource-intensive, keep this low
+LSTM_ADMIN_RATE_LIMIT_PER_HOUR=5
+
+# ============================================
+# EXAMPLE PRODUCTION VALUES
+# ============================================
+# Uncomment and adjust these for production use:
+
+# LSTM_ADMIN_API_KEY=prod_abc123xyz789_secure_random_key_here
+# LSTM_MODEL_DIR=/var/www/lstm_models/models
+# LSTM_SCALER_DIR=/var/www/lstm_models/scalers
+# LSTM_METADATA_DIR=/var/www/lstm_models/metadata
+# LSTM_TRAINING_EPOCHS=30
+# LSTM_RATE_LIMIT_PER_MINUTE=50
+# LSTM_ADMIN_RATE_LIMIT_PER_HOUR=3
+
+# ============================================
+# NOTES
+# ============================================
+# 1. Always use a strong, unique LSTM_ADMIN_API_KEY in production
+# 2. Ensure the storage directories have proper read/write permissions
+# 3. Model files can be large (5-10 MB each), ensure sufficient disk space
+# 4. Training can take 5-10 minutes per model, plan accordingly
+# 5. Retrain models monthly with fresh data for best accuracy

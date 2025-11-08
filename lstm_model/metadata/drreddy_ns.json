@@ -1,0 +1,47 @@
+{
+  "stock_symbol": "DRREDDY.NS",
+  "training_info": {
+    "trained_at": "2025-11-06T12:35:44.260520Z",
+    "training_duration_seconds": 31,
+    "training_start_date": "2020-01-01 00:00:00",
+    "training_end_date": "2025-11-04 00:00:00",
+    "total_training_days": 1448,
+    "training_samples": 1316,
+    "test_samples": 72
+  },
+  "model_config": {
+    "time_steps": 60,
+    "forecast_days": 3,
+    "epochs": 25,
+    "batch_size": 60,
+    "lstm_layers": [
+      128,
+      64,
+      32
+    ],
+    "dense_layers": [
+      64,
+      1
+    ],
+    "dropout_rate": [
+      0.2,
+      0.2,
+      0.2,
+      0.3
+    ]
+  },
+  "model_performance": {
+    "mae": 33.72328525119357,
+    "rmse": 40.525488275780795,
+    "r2": -0.5386186854818833,
+    "mape": 2.646166724320346
+  },
+  "last_training_price": 1200.0,
+  "model_files": {
+    "model_path": "./lstm_model/models\\lstm_drreddy_ns.keras",
+    "scaler_path": "./lstm_model/scalers\\scaler_drreddy_ns.pkl"
+  },
+  "version": "1.0",
+  "created_by": "train_lstm_new.py",
+  "last_updated": "2025-11-06T12:35:44.260520Z"
+}

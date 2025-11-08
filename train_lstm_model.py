@@ -64,8 +64,8 @@ class TrainingConfig:
     PERIOD = '10y'  # '1y', '2y', '5y', '10y', 'max'
 
     # ===== MODEL ARCHITECTURE =====
-    SEQUENCE_LENGTH = 60  # Number of days to look back
-    PREDICTION_HORIZON = 20  # Predict next N days
+    SEQUENCE_LENGTH = 90  # Number of days to look back
+    PREDICTION_HORIZON = 1  # Predict next N days
 
     # LSTM Layers Configuration
     LSTM_LAYERS = [

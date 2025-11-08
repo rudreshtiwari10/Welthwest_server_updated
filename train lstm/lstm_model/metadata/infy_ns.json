@@ -1,0 +1,47 @@
+{
+  "stock_symbol": "INFY.NS",
+  "training_info": {
+    "trained_at": "2025-11-06T23:08:52.734789Z",
+    "training_duration_seconds": 132,
+    "training_start_date": "2018-01-01 00:00:00",
+    "training_end_date": "2025-11-04 00:00:00",
+    "total_training_days": 1937,
+    "training_samples": 1587,
+    "test_samples": 290
+  },
+  "model_config": {
+    "time_steps": 60,
+    "forecast_days": 3,
+    "epochs": 60,
+    "batch_size": 32,
+    "lstm_layers": [
+      128,
+      64,
+      32
+    ],
+    "dense_layers": [
+      64,
+      1
+    ],
+    "dropout_rate": [
+      0.2,
+      0.2,
+      0.2,
+      0.3
+    ]
+  },
+  "model_performance": {
+    "mae": 29.569772865032327,
+    "rmse": 37.36513021675378,
+    "r2": 0.9522737300883685,
+    "mape": 1.7901453423263376
+  },
+  "last_training_price": 1467.9000244140625,
+  "model_files": {
+    "model_path": "./lstm_model/models\\lstm_infy_ns.keras",
+    "scaler_path": "./lstm_model/scalers\\scaler_infy_ns.pkl"
+  },
+  "version": "1.0",
+  "created_by": "train_lstm_new.py",
+  "last_updated": "2025-11-06T23:08:52.734789Z"
+}

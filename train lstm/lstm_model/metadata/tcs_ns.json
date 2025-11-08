@@ -1,0 +1,47 @@
+{
+  "stock_symbol": "TCS.NS",
+  "training_info": {
+    "trained_at": "2025-11-06T19:56:54.889058Z",
+    "training_duration_seconds": 116,
+    "training_start_date": "2018-01-01 00:00:00",
+    "training_end_date": "2025-11-04 00:00:00",
+    "total_training_days": 1937,
+    "training_samples": 1587,
+    "test_samples": 290
+  },
+  "model_config": {
+    "time_steps": 60,
+    "forecast_days": 3,
+    "epochs": 60,
+    "batch_size": 32,
+    "lstm_layers": [
+      128,
+      64,
+      32
+    ],
+    "dense_layers": [
+      64,
+      1
+    ],
+    "dropout_rate": [
+      0.2,
+      0.2,
+      0.2,
+      0.3
+    ]
+  },
+  "model_performance": {
+    "mae": 252.31498602505388,
+    "rmse": 329.97723369906265,
+    "r2": 0.42470650529518794,
+    "mape": 6.51017575385641
+  },
+  "last_training_price": 2990.199951171875,
+  "model_files": {
+    "model_path": "./lstm_model/models\\lstm_tcs_ns.keras",
+    "scaler_path": "./lstm_model/scalers\\scaler_tcs_ns.pkl"
+  },
+  "version": "1.0",
+  "created_by": "train_lstm_new.py",
+  "last_updated": "2025-11-06T19:56:54.889058Z"
+}

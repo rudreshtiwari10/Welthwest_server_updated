@@ -1,0 +1,47 @@
+{
+  "stock_symbol": "SBIN.NS",
+  "training_info": {
+    "trained_at": "2025-11-07T01:48:00.921653Z",
+    "training_duration_seconds": 109,
+    "training_start_date": "2018-01-01 00:00:00",
+    "training_end_date": "2025-11-04 00:00:00",
+    "total_training_days": 1937,
+    "training_samples": 1587,
+    "test_samples": 290
+  },
+  "model_config": {
+    "time_steps": 60,
+    "forecast_days": 3,
+    "epochs": 60,
+    "batch_size": 32,
+    "lstm_layers": [
+      128,
+      64,
+      32
+    ],
+    "dense_layers": [
+      64,
+      1
+    ],
+    "dropout_rate": [
+      0.2,
+      0.2,
+      0.2,
+      0.3
+    ]
+  },
+  "model_performance": {
+    "mae": 85.5161425360318,
+    "rmse": 87.83338424937926,
+    "r2": -2.123003263398817,
+    "mape": 10.71204903343016
+  },
+  "last_training_price": 957.5999755859375,
+  "model_files": {
+    "model_path": "../lstm_model/models\\lstm_sbin_ns.keras",
+    "scaler_path": "../lstm_model/scalers\\scaler_sbin_ns.pkl"
+  },
+  "version": "1.0",
+  "created_by": "train_lstm_new.py",
+  "last_updated": "2025-11-07T01:48:00.921653Z"
+}

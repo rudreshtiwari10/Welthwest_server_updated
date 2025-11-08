@@ -17,6 +17,7 @@ from services.subscription_service import SubscriptionService
 from services.email_service import email_service
 from routes.premium import premium_bp
 from routes.payment import payment_bp
+from routes.lstm_api_routes import lstm_api, init_lstm_routes
 from middleware.feature_limit import feature_limit, admin_required
 from database.seed_plans import initialize_premium_system
 from services.google_auth_service import GoogleAuthService
@@ -191,6 +192,20 @@ session_service = InMemorySessionService()
 # Register premium and payment blueprints
 app.register_blueprint(premium_bp)
 app.register_blueprint(payment_bp)
+
+# Register LSTM API blueprint
+app.register_blueprint(lstm_api)
+
+# Initialize LSTM routes with configuration
+config = get_config()
+lstm_config = {
+    'LSTM_ADMIN_API_KEY': config.LSTM_ADMIN_API_KEY,
+    'LSTM_MODEL_DIR': config.LSTM_MODEL_DIR,
+    'LSTM_SCALER_DIR': config.LSTM_SCALER_DIR,
+    'LSTM_METADATA_DIR': config.LSTM_METADATA_DIR
+}
+init_lstm_routes(lstm_config)
+logger.info("LSTM API routes initialized")
 
 # Initialize premium system (seed plans, create indexes)
 with app.app_context():
