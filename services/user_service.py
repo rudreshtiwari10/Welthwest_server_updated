@@ -171,6 +171,7 @@ class UserService:
             "occupation": user.get("occupation", ""),
             "bio": user.get("bio", ""),
             "avatar_url": user.get("avatar_url", ""),
+            "billing_address": user.get("billing_address", ""),
             "profile_picture": user.get("profile_picture", ""),
             "google_id": user.get("google_id", ""),
             "is_google_user": user.get("is_google_user", False),
@@ -284,7 +285,7 @@ class UserService:
             return False, "Invalid user ID", None
 
         # Get allowed fields to update (removed mobile_number, aadhar_number, pan_number)
-        allowed_fields = ["first_name", "last_name", "occupation", "bio", "avatar_url"]
+        allowed_fields = ["first_name", "last_name", "occupation", "bio", "avatar_url", "billing_address"]
         update_data = {k: v for k, v in profile_data.items() if k in allowed_fields}
 
         # Add updated timestamp

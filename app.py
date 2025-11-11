@@ -1373,13 +1373,6 @@ def backtest_run():
             "type": type(e).__name__
         }), 500
 
-# Legacy anonymous endpoint - kept for backward compatibility
-@app.route('/api/backtest/anonymous', methods=['POST'])
-@validate_json_request
-def anonymous_backtest():
-    """Legacy endpoint - redirects to new unified endpoint"""
-    return backtest_run()
-
 # AI Analysis endpoint with anonymous trial support
 @app.route('/api/ai-analysis/run', methods=['POST'])
 @validate_json_request
@@ -1437,13 +1430,6 @@ def ai_analysis_run():
             "error": "An unexpected error occurred during AI analysis",
             "details": str(e)
         }), 500
-
-# Legacy anonymous endpoint - kept for backward compatibility
-@app.route('/api/ai-analysis/anonymous', methods=['POST'])
-@validate_json_request
-def anonymous_ai_analysis():
-    """Legacy endpoint - redirects to new unified endpoint"""
-    return ai_analysis_run()
 
 # Get current anonymous usage for all features
 @app.route('/api/usage/anonymous', methods=['GET'])
@@ -3323,6 +3309,37 @@ def create_subscription_tier():
 # Now using Cashfree via routes/payment.py blueprint
 # ============================================
 
+# Get plan details with limits
+@app.route('/api/subscription/plan-details/<plan_id>', methods=['GET'])
+def get_plan_details(plan_id):
+    """Get plan details including limits for each feature"""
+    try:
+        # Validate plan_id
+        plan_id = plan_id.upper()
+        if plan_id not in ['FREE', 'STARTER', 'PRO', 'ADVANCED', 'ENTERPRISE']:
+            return jsonify({
+                "success": False,
+                "error": "Invalid plan ID"
+            }), 400
+
+        # Get plan limits from config
+        plan_limits = app.config['PLAN_LIMITS'].get(plan_id, {})
+
+        return jsonify({
+            "success": True,
+            "plan_details": {
+                "plan": plan_id,
+                "limits": plan_limits
+            }
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting plan details: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 # Billing details endpoints
 @app.route('/api/user/billing-details', methods=['GET'])
 @jwt_required()
@@ -3582,6 +3599,7 @@ def train_market_regime_model():
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
 @app.route('/api/market-regime/predict', methods=['GET', 'POST'])
+@feature_limit('welth-market-regime')
 def predict_market_regime():
     """Predict market regime for a ticker"""
     try:
@@ -3631,6 +3649,7 @@ def predict_market_regime():
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
 @app.route('/api/market-regime/analysis', methods=['GET'])
+@feature_limit('welth-market-regime')
 def get_market_regime_analysis():
     """Get comprehensive market regime analysis"""
     try:
@@ -3668,6 +3687,7 @@ def get_market_regime_analysis():
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
 @app.route('/api/market-regime/recommendations', methods=['GET'])
+@feature_limit('welth-market-regime')
 def get_market_regime_recommendations():
     """Get trading recommendations based on market regime"""
     try:
@@ -3748,6 +3768,7 @@ def evaluate_market_regime_model():
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
 @app.route('/api/market-regime/definitions', methods=['GET'])
+@feature_limit('welth-market-regime')
 def get_market_regime_definitions():
     """Get market regime definitions"""
     try:

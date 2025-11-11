@@ -88,8 +88,19 @@ class SubscriptionService:
             )
             if user and "subscription" in user:
                 subscription = user["subscription"]
-                tier_info = self.config.SUBSCRIPTION_TIERS[subscription["tier"]]
-                
+
+                # Get tier from either 'tier' or 'plan' field (backward compatibility)
+                tier = subscription.get("tier") or subscription.get("plan", "FREE")
+
+                # If tier is still missing, fix it
+                if not tier:
+                    logger.warning(f"Missing tier for user {user_id}, fixing...")
+                    self.fix_missing_subscription(user_id)
+                    tier = "FREE"
+
+                # Get tier info with fallback to FREE if tier not found in config
+                tier_info = self.config.SUBSCRIPTION_TIERS.get(tier, self.config.SUBSCRIPTION_TIERS.get("FREE"))
+
                 # Ensure usage data exists
                 if "usage" not in subscription:
                     logger.warning(f"Missing usage data for user {user_id}, fixing...")
@@ -101,21 +112,25 @@ class SubscriptionService:
                     )
                     if user and "subscription" in user:
                         subscription = user["subscription"]
+                        # Re-get tier after fix
+                        tier = subscription.get("tier") or subscription.get("plan", "FREE")
                     else:
                         return None
                 
                 # Handle infinity values for JSON serialization
                 backtest_limit = tier_info["backtest_daily_limit"]
                 llm_limit = tier_info["llm_daily_limit"]
-                
+
                 # Convert infinity to a large number that can be JSON serialized
                 if backtest_limit == float('inf'):
                     backtest_limit = 999999
                 if llm_limit == float('inf'):
                     llm_limit = 999999
-                
+
                 return {
                     **subscription,
+                    "tier": tier,  # Ensure tier is always present in response
+                    "plan": tier,  # Ensure plan is always present for backward compatibility
                     "limits": {
                         "backtest_daily_limit": backtest_limit,
                         "llm_daily_limit": llm_limit,
@@ -855,9 +870,13 @@ class SubscriptionService:
             update_data = {
                 "$set": {
                     "subscription.plan": plan_name,
+                    "subscription.tier": plan_name,  # Set tier for backward compatibility
                     "subscription.plan_duration": plan_duration,
                     "subscription.start_date": datetime.utcnow(),
                     "subscription.expiry_date": expiry_date,
+                    "subscription.starts_at": datetime.utcnow(),  # Set for backward compatibility
+                    "subscription.expires_at": expiry_date,  # Set for backward compatibility
+                    "subscription.is_active": True,
                     "subscription.updated_at": datetime.utcnow()
                 }
             }

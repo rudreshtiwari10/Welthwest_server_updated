@@ -101,7 +101,13 @@ def create_order():
         # Generate unique order ID
         order_id = f"WW_{user_id}_{plan}_{duration}_{uuid.uuid4().hex[:8]}".upper()
 
-        # Create transaction record
+        # Get user billing details
+        customer_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or 'Customer'
+        customer_email = user.get('email', 'user@example.com')
+        customer_phone = user.get('phone', '9999999999')
+        billing_address = user.get('billing_address', '')
+
+        # Create transaction record with billing info
         transaction = {
             "user_id": ObjectId(user_id),
             "plan_id": plan,
@@ -111,16 +117,16 @@ def create_order():
             "status": "PENDING",
             "gateway": "CASHFREE",
             "gateway_order_id": order_id,
+            "customer_name": customer_name,
+            "customer_email": customer_email,
+            "customer_phone": customer_phone,
+            "billing_address": billing_address,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow()
         }
 
         result = transactions_collection.insert_one(transaction)
         transaction_id = str(result.inserted_id)
-
-        # Get user contact details
-        customer_email = user.get('email', 'user@example.com')
-        customer_phone = user.get('phone', '9999999999')
 
         # Create Cashfree order
         success, order_data = cashfree_service.create_order(
@@ -129,6 +135,7 @@ def create_order():
             customer_id=user_id,
             customer_email=customer_email,
             customer_phone=customer_phone,
+            customer_name=customer_name,
             return_url=f"{config.FRONTEND_URL}/payment-success",
             plan_name=plan,
             plan_duration=duration
@@ -411,6 +418,9 @@ def get_transaction_history():
                 "amount": txn.get('amount'),
                 "currency": txn.get('currency'),
                 "status": txn.get('status'),
+                "customer_name": txn.get('customer_name', ''),
+                "customer_email": txn.get('customer_email', ''),
+                "billing_address": txn.get('billing_address', ''),
                 "created_at": txn.get('created_at'),
                 "updated_at": txn.get('updated_at')
             })

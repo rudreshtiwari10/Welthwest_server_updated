@@ -93,10 +93,10 @@ class Config:
         self.RATE_LIMIT = os.getenv('RATE_LIMIT', '100/hour')
 
         # Anonymous Trial Configuration
-        self.ANON_TRIAL_LIMIT = int(os.getenv('ANON_TRIAL_LIMIT', 10))  # Default limit for all features
+        self.ANON_TRIAL_LIMIT = int(os.getenv('ANON_TRIAL_LIMIT', 0))  # Default limit for all features - set to 0 to require login
         self.ANON_AI_ANALYSIS_LIMIT = int(os.getenv('ANON_AI_ANALYSIS_LIMIT', self.ANON_TRIAL_LIMIT))
         self.ANON_BACKTEST_LIMIT = int(os.getenv('ANON_BACKTEST_LIMIT', self.ANON_TRIAL_LIMIT))
-        self.ANON_CHAT_LIMIT = int(os.getenv('ANON_CHAT_LIMIT', 5))
+        self.ANON_CHAT_LIMIT = int(os.getenv('ANON_CHAT_LIMIT', 0))
         self.ANON_SESSION_COOKIE = os.getenv('ANON_SESSION_COOKIE', 'ww_session_id')
         self.ANON_SESSION_TTL_SECONDS = int(os.getenv('ANON_SESSION_TTL_SECONDS', 30 * 24 * 3600))  # 30 days default
         self.ENABLE_ANON_TRIALS = os.getenv('ENABLE_ANON_TRIALS', 'True').lower() == 'true'
@@ -194,11 +194,11 @@ class Config:
             }
         }
 
-        # Anonymous User Limits (session-based)
+        # Anonymous User Limits (session-based) - set to 0 to require login
         self.ANON_LIMITS = {
-            'welth-market-regime': int(os.getenv('ANON_MARKET_REGIME_LIMIT', 10)),
-            'welth-ai-assistant': int(os.getenv('ANON_AI_ASSISTANT_LIMIT', 15)),
-            'backtest-beta': int(os.getenv('ANON_BACKTEST_LIMIT', 5))
+            'welth-market-regime': int(os.getenv('ANON_MARKET_REGIME_LIMIT', 0)),
+            'welth-ai-assistant': int(os.getenv('ANON_AI_ASSISTANT_LIMIT', 0)),
+            'backtest-beta': int(os.getenv('ANON_BACKTEST_LIMIT', 0))
         }
 
         # Usage Counter Configuration

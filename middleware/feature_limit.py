@@ -76,11 +76,21 @@ def feature_limit(feature_key: str):
 
                 if limit == 0:
                     logger.warning(f"Feature {feature_key} has zero limit for actor {actor_id}")
-                    return jsonify({
-                        "error": "feature_not_available",
-                        "message": "This feature is not available in your plan",
-                        "premium_url": "/premium"
-                    }), 403
+
+                    # Different messages for anonymous vs authenticated users
+                    if is_anonymous:
+                        return jsonify({
+                            "error": "authentication_required",
+                            "message": "Please log in to use this feature",
+                            "login_url": "/login",
+                            "premium_url": "/premium"
+                        }), 401
+                    else:
+                        return jsonify({
+                            "error": "feature_not_available",
+                            "message": "This feature is not available in your plan. Please upgrade to continue.",
+                            "premium_url": "/premium"
+                        }), 403
 
                 # Step 5: Check and increment usage atomically
                 allowed, remaining = usage_service.check_and_increment(

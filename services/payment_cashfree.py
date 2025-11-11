@@ -57,7 +57,8 @@ class CashfreePaymentService:
         customer_phone: str,
         return_url: str,
         plan_name: str,
-        plan_duration: str
+        plan_duration: str,
+        customer_name: str = None
     ) -> Tuple[bool, Dict[str, Any]]:
         """
         Create a Cashfree order
@@ -71,6 +72,7 @@ class CashfreePaymentService:
             return_url: URL to redirect after payment
             plan_name: Plan being purchased
             plan_duration: Plan duration (weekly/monthly/annual)
+            customer_name: Customer name (optional)
 
         Returns:
             Tuple of (success: bool, response_data: dict)
@@ -85,16 +87,23 @@ class CashfreePaymentService:
 
             logger.info(f"Creating order with return_url: {return_url_with_order}")
 
+            # Prepare customer details
+            customer_details = {
+                "customer_id": customer_id,
+                "customer_email": customer_email,
+                "customer_phone": customer_phone
+            }
+
+            # Add customer name if provided
+            if customer_name:
+                customer_details["customer_name"] = customer_name
+
             # Prepare order data
             order_data = {
                 "order_id": order_id,
                 "order_amount": amount,
                 "order_currency": "INR",
-                "customer_details": {
-                    "customer_id": customer_id,
-                    "customer_email": customer_email,
-                    "customer_phone": customer_phone
-                },
+                "customer_details": customer_details,
                 "order_meta": {
                     "return_url": return_url_with_order
                     # notify_url removed - will use webhook configured in Cashfree dashboard
