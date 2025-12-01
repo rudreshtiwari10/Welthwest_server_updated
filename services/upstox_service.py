@@ -243,18 +243,24 @@ class UpstoxAPI:
     def get_market_indices(self):
         """
         Fetch market indices data
-        
+
         Returns:
         dict: Market indices data
         """
-        # Common Indian market indices instrument keys
+        # Expanded Indian market indices instrument keys for better variety
         indices_keys = [
             'NSE_INDEX|Nifty 50',
+            'BSE_INDEX|SENSEX',
             'NSE_INDEX|Nifty Bank',
             'NSE_INDEX|Nifty IT',
-            'BSE_INDEX|SENSEX'
+            'NSE_INDEX|Nifty FMCG',
+            'NSE_INDEX|Nifty Pharma',
+            'NSE_INDEX|Nifty Auto',
+            'NSE_INDEX|Nifty Metal',
+            'NSE_INDEX|Nifty Realty',
+            'NSE_INDEX|Nifty Energy'
         ]
-        
+
         return self.get_live_data(indices_keys)
 
 # Global instance

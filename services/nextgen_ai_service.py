@@ -193,21 +193,37 @@ class NextGenAIOrchestrator:
         return formatted_symbols
     
     def fetch_stock_data(self, symbols: List[str]) -> Dict[str, Any]:
-        """Fetch stock data using yfinance"""
+        """Fetch stock data using yfinance with enhanced price information"""
         stock_data = {}
-        
+
         for symbol in symbols:
             try:
                 ticker = yf.Ticker(symbol)
                 info = ticker.info
-                hist = ticker.history(period="5d")
-                
+
+                # Fetch more data for charts - last 30 days with 1-day interval
+                hist = ticker.history(period="1mo", interval="1d")
+
                 if not hist.empty:
                     current_price = hist['Close'].iloc[-1]
                     prev_price = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
                     change = current_price - prev_price
                     change_percent = (change / prev_price) * 100 if prev_price != 0 else 0
-                    
+
+                    # Get the timestamp of the last data point
+                    last_updated = hist.index[-1].strftime('%Y-%m-%d %H:%M:%S UTC')
+
+                    # Prepare chart data (last 30 days)
+                    chart_data = {
+                        'dates': [date.strftime('%Y-%m-%d') for date in hist.index],
+                        'prices': [round(float(price), 2) for price in hist['Close'].tolist()],
+                        'volumes': [int(vol) for vol in hist['Volume'].tolist()] if 'Volume' in hist else []
+                    }
+
+                    # Get day range
+                    day_high = round(float(hist['High'].iloc[-1]), 2) if 'High' in hist else None
+                    day_low = round(float(hist['Low'].iloc[-1]), 2) if 'Low' in hist else None
+
                     stock_data[symbol] = {
                         'symbol': symbol,
                         'current_price': round(float(current_price), 2),
@@ -218,15 +234,19 @@ class NextGenAIOrchestrator:
                         'company_name': info.get('longName', symbol),
                         'market_cap': info.get('marketCap', 'N/A'),
                         'pe_ratio': info.get('forwardPE', 'N/A'),
-                        'sector': info.get('sector', 'N/A')
+                        'sector': info.get('sector', 'N/A'),
+                        'day_high': day_high,
+                        'day_low': day_low,
+                        'last_updated': last_updated,
+                        'chart_data': chart_data
                     }
-                    
-                    logger.info(f"Fetched data for {symbol}: ${current_price}")
-                    
+
+                    logger.info(f"Fetched data for {symbol}: ${current_price} (updated: {last_updated})")
+
             except Exception as e:
                 logger.error(f"Error fetching data for {symbol}: {e}")
                 stock_data[symbol] = {'error': str(e)}
-        
+
         return stock_data
     
     def fetch_financial_news(self, query: str, symbols: List[str] = None) -> List[Dict]:

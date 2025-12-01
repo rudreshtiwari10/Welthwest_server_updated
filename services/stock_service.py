@@ -850,15 +850,32 @@ def get_market_indices_yfinance_optimized():
     Get market indices data using Yahoo Finance with optimized bulk data fetching
     No unnecessary delays, optimized period, and better error handling
     """
-    # Define the indices to fetch
-    indices = ["^NSEI", "^BSESN", "^CNXIT", "^NSEBANK"]  # NIFTY 50, SENSEX, NIFTY IT, NIFTY BANK
-    
+    # Define the indices to fetch - expanded list for better horizontal scrolling
+    indices = [
+        "^NSEI",      # NIFTY 50
+        "^BSESN",     # BSE SENSEX
+        "^NSEBANK",   # NIFTY BANK
+        "^CNXIT",     # NIFTY IT
+        "^CNXFMCG",   # NIFTY FMCG
+        "^CNXPHARMA", # NIFTY PHARMA
+        "^CNXAUTO",   # NIFTY AUTO
+        "^CNXMETAL",  # NIFTY METAL
+        "^CNXREALTY", # NIFTY REALTY
+        "^CNXENERGY"  # NIFTY ENERGY
+    ]
+
     # Define index names mapping
     index_names = {
         "^NSEI": "NIFTY 50",
         "^BSESN": "BSE SENSEX",
+        "^NSEBANK": "NIFTY BANK",
         "^CNXIT": "NIFTY IT",
-        "^NSEBANK": "NIFTY BANK"
+        "^CNXFMCG": "NIFTY FMCG",
+        "^CNXPHARMA": "NIFTY PHARMA",
+        "^CNXAUTO": "NIFTY AUTO",
+        "^CNXMETAL": "NIFTY METAL",
+        "^CNXREALTY": "NIFTY REALTY",
+        "^CNXENERGY": "NIFTY ENERGY"
     }
     
     result = {}
@@ -868,10 +885,10 @@ def get_market_indices_yfinance_optimized():
         logger.info(f"Fetching data for {len(indices)} market indices in optimized bulk call")
         
         # Use yfinance's download function to get data for all indices in a single call
-        # No sleep delay for market indices - they're less rate-limited
+        # Fetch 7 days of data to provide chart history
         data = yf.download(
             tickers=indices,
-            period="2d",  # Reduced from 5d to 2d - only need current + previous close
+            period="7d",  # 7 days for chart data
             group_by="ticker",
             auto_adjust=True,
             progress=False
@@ -895,21 +912,28 @@ def get_market_indices_yfinance_optimized():
                 if index_symbol in data and not data[index_symbol].empty:
                     # Get the Close prices and drop NaN values
                     close_prices = data[index_symbol]['Close'].dropna()
-                    
+
                     if len(close_prices) >= 2:
                         # Use the last valid price and second-to-last valid price
                         latest_price = close_prices.iloc[-1]
                         prev_close = close_prices.iloc[-2]
-                        
+
                         # Calculate change and percent change
                         change = latest_price - prev_close
                         pct_change = (change / prev_close * 100) if prev_close and prev_close != 0 else 0
-                        
+
+                        # Prepare chart data (dates and prices)
+                        chart_data = {
+                            'dates': [d.strftime('%Y-%m-%d') for d in close_prices.index],
+                            'prices': [round(float(p), 2) for p in close_prices.values]
+                        }
+
                         result[index_symbol] = {
                             'name': index_names.get(index_symbol, index_symbol),
                             'price': round(latest_price, 2),
                             'change': round(change, 2),
                             'percentChange': round(pct_change, 2),
+                            'chartData': chart_data,
                             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                             'source': 'Yahoo Finance (Bulk)'
                         }
@@ -1045,14 +1069,32 @@ def get_market_indices_individual_optimized():
     No unnecessary delays and improved data accuracy
     """
     logger.warning("Using optimized individual API calls as fallback for market indices")
-    indices = ["^NSEI", "^BSESN", "^CNXIT", "^NSEBANK"]  # NIFTY 50, SENSEX, NIFTY IT, NIFTY BANK
-    
+    # Define the indices to fetch - expanded list for better horizontal scrolling
+    indices = [
+        "^NSEI",      # NIFTY 50
+        "^BSESN",     # BSE SENSEX
+        "^NSEBANK",   # NIFTY BANK
+        "^CNXIT",     # NIFTY IT
+        "^CNXFMCG",   # NIFTY FMCG
+        "^CNXPHARMA", # NIFTY PHARMA
+        "^CNXAUTO",   # NIFTY AUTO
+        "^CNXMETAL",  # NIFTY METAL
+        "^CNXREALTY", # NIFTY REALTY
+        "^CNXENERGY"  # NIFTY ENERGY
+    ]
+
     # Define index names mapping
     index_names = {
         "^NSEI": "NIFTY 50",
         "^BSESN": "BSE SENSEX",
+        "^NSEBANK": "NIFTY BANK",
         "^CNXIT": "NIFTY IT",
-        "^NSEBANK": "NIFTY BANK"
+        "^CNXFMCG": "NIFTY FMCG",
+        "^CNXPHARMA": "NIFTY PHARMA",
+        "^CNXAUTO": "NIFTY AUTO",
+        "^CNXMETAL": "NIFTY METAL",
+        "^CNXREALTY": "NIFTY REALTY",
+        "^CNXENERGY": "NIFTY ENERGY"
     }
     
     start_time = time.time()
@@ -1063,35 +1105,43 @@ def get_market_indices_individual_optimized():
             # No sleep delay for market indices - they're less rate-limited
             # Don't pass custom session - let yfinance handle its own session
             index = yf.Ticker(index_symbol)
-            
-            # Get 2 days of data to ensure we have current and previous close
-            hist = index.history(period="2d")
-            
+
+            # Get 7 days of data for chart
+            hist = index.history(period="7d")
+
             if len(hist) > 0:
-                latest_price = hist['Close'].iloc[-1]
-                
+                close_prices = hist['Close'].dropna()
+                latest_price = close_prices.iloc[-1]
+
                 # Always try to get real previous close data
                 prev_close = None
-                if len(hist) >= 2:
+                if len(close_prices) >= 2:
                     # Use actual previous day's close if available
-                    prev_close = hist['Close'].iloc[-2]
+                    prev_close = close_prices.iloc[-2]
                 else:
                     # Try to get from ticker info
                     try:
                         prev_close = index.info.get('previousClose')
                     except:
                         pass
-                
+
+                # Prepare chart data
+                chart_data = {
+                    'dates': [d.strftime('%Y-%m-%d') for d in close_prices.index],
+                    'prices': [round(float(p), 2) for p in close_prices.values]
+                }
+
                 # Only calculate change if we have real previous close data
                 if prev_close and prev_close > 0:
                     change = latest_price - prev_close
                     pct_change = (change / prev_close * 100)
-                    
+
                     result[index_symbol] = {
                         'name': index_names.get(index_symbol, index_symbol),
                         'price': round(latest_price, 2),
                         'change': round(change, 2),
                         'percentChange': round(pct_change, 2),
+                        'chartData': chart_data,
                         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                         'source': 'Yahoo Finance (Individual)'
                     }

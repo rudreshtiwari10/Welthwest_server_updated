@@ -18,6 +18,7 @@ from services.email_service import email_service
 from routes.premium import premium_bp
 from routes.payment import payment_bp
 from routes.subscription import subscription_bp
+from routes.finance_ai_routes import register_finance_ai_routes
 from middleware.feature_limit import feature_limit, admin_required
 from database.seed_plans import initialize_premium_system
 from services.google_auth_service import GoogleAuthService
@@ -193,6 +194,9 @@ session_service = InMemorySessionService()
 app.register_blueprint(premium_bp)
 app.register_blueprint(payment_bp)
 app.register_blueprint(subscription_bp)
+
+# Register enhanced Finance AI routes
+register_finance_ai_routes(app)
 
 # Initialize premium system (seed plans, create indexes)
 with app.app_context():

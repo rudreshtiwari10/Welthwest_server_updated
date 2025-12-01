@@ -616,25 +616,25 @@ class IndianStockStrategyBuilder:
     
     def create_candlestick_chart(self, df, trades_df=None):
         """
-        Create candlestick chart with indicators and buy/sell signals
-        
+        Create candlestick chart with indicators and buy/sell signals in separate panels
+
         Args:
             df (pandas.DataFrame): OHLCV data with indicators
             trades_df (pandas.DataFrame): Trade data for buy/sell markers
-        
+
         Returns:
             plotly.graph_objects.Figure: Interactive candlestick chart
         """
-        # Create subplots
+        # Create subplots with separate panels for each indicator
         fig = make_subplots(
-            rows=4, cols=1,
+            rows=6, cols=1,
             shared_xaxes=True,
-            vertical_spacing=0.03,
-            subplot_titles=('Price & Indicators', 'RSI', 'MACD', 'Volume'),
-            row_heights=[0.5, 0.2, 0.2, 0.1]
+            vertical_spacing=0.02,
+            subplot_titles=('Price with Trading Signals', 'Moving Averages', 'Bollinger Bands', 'RSI', 'MACD', 'Volume'),
+            row_heights=[0.3, 0.15, 0.15, 0.15, 0.15, 0.1]
         )
         
-        # Candlestick chart
+        # Panel 1: Candlestick chart ONLY (cleaner view)
         fig.add_trace(
             go.Candlestick(
                 x=df['Date'],
@@ -642,12 +642,13 @@ class IndianStockStrategyBuilder:
                 high=df['High'],
                 low=df['Low'],
                 close=df['Close'],
-                name='Price'
+                name='Price',
+                showlegend=True
             ),
             row=1, col=1
         )
-        
-        # Add moving averages if available
+
+        # Panel 2: Moving Averages (separate from price for clarity)
         if 'SMA_20' in df.columns:
             fig.add_trace(
                 go.Scatter(
@@ -655,11 +656,11 @@ class IndianStockStrategyBuilder:
                     y=df['SMA_20'],
                     mode='lines',
                     name='SMA 20',
-                    line=dict(color='orange', width=1)
+                    line=dict(color='orange', width=2)
                 ),
-                row=1, col=1
+                row=2, col=1
             )
-        
+
         if 'SMA_50' in df.columns:
             fig.add_trace(
                 go.Scatter(
@@ -667,37 +668,76 @@ class IndianStockStrategyBuilder:
                     y=df['SMA_50'],
                     mode='lines',
                     name='SMA 50',
-                    line=dict(color='blue', width=1)
+                    line=dict(color='blue', width=2)
                 ),
-                row=1, col=1
+                row=2, col=1
             )
-        
-        # Add Bollinger Bands if available
+
+        # Also show price line in MA panel for reference
+        fig.add_trace(
+            go.Scatter(
+                x=df['Date'],
+                y=df['Close'],
+                mode='lines',
+                name='Close Price',
+                line=dict(color='lightgray', width=1, dash='dot'),
+                showlegend=False
+            ),
+            row=2, col=1
+        )
+
+        # Panel 3: Bollinger Bands (separate panel)
         if 'BB_Upper' in df.columns:
+            # Show price line for reference
+            fig.add_trace(
+                go.Scatter(
+                    x=df['Date'],
+                    y=df['Close'],
+                    mode='lines',
+                    name='Close Price',
+                    line=dict(color='black', width=1.5),
+                    showlegend=False
+                ),
+                row=3, col=1
+            )
+
             fig.add_trace(
                 go.Scatter(
                     x=df['Date'],
                     y=df['BB_Upper'],
                     mode='lines',
                     name='BB Upper',
-                    line=dict(color='gray', width=1, dash='dash'),
-                    showlegend=False
+                    line=dict(color='red', width=1.5, dash='dash'),
+                    showlegend=True
                 ),
-                row=1, col=1
+                row=3, col=1
             )
-            
+
+            if 'BB_Middle' in df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=df['Date'],
+                        y=df['BB_Middle'],
+                        mode='lines',
+                        name='BB Middle',
+                        line=dict(color='gray', width=1),
+                        showlegend=True
+                    ),
+                    row=3, col=1
+                )
+
             fig.add_trace(
                 go.Scatter(
                     x=df['Date'],
                     y=df['BB_Lower'],
                     mode='lines',
                     name='BB Lower',
-                    line=dict(color='gray', width=1, dash='dash'),
+                    line=dict(color='green', width=1.5, dash='dash'),
                     fill='tonexty',
-                    fillcolor='rgba(128,128,128,0.1)',
-                    showlegend=False
+                    fillcolor='rgba(173, 216, 230, 0.2)',
+                    showlegend=True
                 ),
-                row=1, col=1
+                row=3, col=1
             )
         
         # Add buy/sell signals from trades
@@ -738,7 +778,7 @@ class IndianStockStrategyBuilder:
                     row=1, col=1
                 )
         
-        # RSI
+        # Panel 4: RSI (separate panel)
         if 'RSI' in df.columns:
             fig.add_trace(
                 go.Scatter(
@@ -746,80 +786,575 @@ class IndianStockStrategyBuilder:
                     y=df['RSI'],
                     mode='lines',
                     name='RSI',
-                    line=dict(color='purple')
+                    line=dict(color='purple', width=2),
+                    fill='tozeroy',
+                    fillcolor='rgba(128, 0, 128, 0.1)'
                 ),
-                row=2, col=1
+                row=4, col=1
             )
-            
-            # RSI levels
-            fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
-            fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+
+            # RSI levels with shaded zones
+            fig.add_hline(y=70, line_dash="dash", line_color="red", line_width=1, row=4, col=1,
+                         annotation_text="Overbought (70)", annotation_position="right")
+            fig.add_hline(y=30, line_dash="dash", line_color="green", line_width=1, row=4, col=1,
+                         annotation_text="Oversold (30)", annotation_position="right")
+            fig.add_hline(y=50, line_dash="dot", line_color="gray", line_width=0.5, row=4, col=1)
         
-        # MACD
+        # Panel 5: MACD (separate panel)
         if 'MACD' in df.columns:
+            # MACD Histogram first (background)
+            if 'MACD_Histogram' in df.columns:
+                colors = ['green' if val >= 0 else 'red' for val in df['MACD_Histogram']]
+                fig.add_trace(
+                    go.Bar(
+                        x=df['Date'],
+                        y=df['MACD_Histogram'],
+                        name='MACD Histogram',
+                        marker_color=colors,
+                        opacity=0.5,
+                        showlegend=True
+                    ),
+                    row=5, col=1
+                )
+
+            # MACD Line
             fig.add_trace(
                 go.Scatter(
                     x=df['Date'],
                     y=df['MACD'],
                     mode='lines',
                     name='MACD',
-                    line=dict(color='blue')
+                    line=dict(color='blue', width=2)
                 ),
-                row=3, col=1
+                row=5, col=1
             )
-            
+
+            # Signal Line
             if 'MACD_Signal' in df.columns:
                 fig.add_trace(
                     go.Scatter(
                         x=df['Date'],
                         y=df['MACD_Signal'],
                         mode='lines',
-                        name='MACD Signal',
-                        line=dict(color='red')
+                        name='Signal',
+                        line=dict(color='red', width=2)
                     ),
-                    row=3, col=1
+                    row=5, col=1
                 )
-            
-            if 'MACD_Histogram' in df.columns:
-                fig.add_trace(
-                    go.Bar(
-                        x=df['Date'],
-                        y=df['MACD_Histogram'],
-                        name='MACD Histogram',
-                        marker_color='gray',
-                        opacity=0.6
-                    ),
-                    row=3, col=1
-                )
+
+            # Zero line
+            fig.add_hline(y=0, line_dash="dot", line_color="gray", line_width=1, row=5, col=1)
         
-        # Volume
+        # Panel 6: Volume (separate panel)
+        # Color volume bars based on price movement
+        colors = []
+        for i in range(len(df)):
+            if i == 0:
+                colors.append('lightblue')
+            else:
+                if df['Close'].iloc[i] >= df['Close'].iloc[i-1]:
+                    colors.append('green')
+                else:
+                    colors.append('red')
+
         fig.add_trace(
             go.Bar(
                 x=df['Date'],
                 y=df['Volume'],
                 name='Volume',
-                marker_color='lightblue',
-                opacity=0.7
+                marker_color=colors,
+                opacity=0.6,
+                showlegend=True
             ),
-            row=4, col=1
+            row=6, col=1
         )
         
-        # Update layout
+        # Update layout for better visibility
         fig.update_layout(
-            title='Stock Analysis with Trading Signals',
+            title={
+                'text': 'Stock Analysis with Trading Signals',
+                'font': {'size': 20, 'color': '#2c3e50'}
+            },
             xaxis_rangeslider_visible=False,
-            height=800,
-            showlegend=True
+            height=1200,  # Increased height for more panels
+            showlegend=True,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+                font=dict(size=10)
+            ),
+            hovermode='x unified',
+            template='plotly_white'
         )
-        
-        # Update y-axes labels
-        fig.update_yaxes(title_text="Price", row=1, col=1)
-        fig.update_yaxes(title_text="RSI", row=2, col=1)
-        fig.update_yaxes(title_text="MACD", row=3, col=1)
-        fig.update_yaxes(title_text="Volume", row=4, col=1)
-        
+
+        # Update y-axes labels for each panel
+        fig.update_yaxes(title_text="Price ($)", row=1, col=1, gridcolor='lightgray')
+        fig.update_yaxes(title_text="Moving Averages ($)", row=2, col=1, gridcolor='lightgray')
+        fig.update_yaxes(title_text="Bollinger Bands ($)", row=3, col=1, gridcolor='lightgray')
+        fig.update_yaxes(title_text="RSI", row=4, col=1, range=[0, 100], gridcolor='lightgray')
+        fig.update_yaxes(title_text="MACD", row=5, col=1, gridcolor='lightgray')
+        fig.update_yaxes(title_text="Volume", row=6, col=1, gridcolor='lightgray')
+
+        # Update x-axes
+        fig.update_xaxes(showgrid=True, gridcolor='lightgray')
+
         return fig
-    
+
+    def create_price_chart_simple(self, df, trades_df=None):
+        """
+        Create a clean price chart with ONLY candlesticks and trading signals
+
+        Args:
+            df (pandas.DataFrame): OHLCV data
+            trades_df (pandas.DataFrame): Trade data for buy/sell markers
+
+        Returns:
+            plotly.graph_objects.Figure: Simple price chart
+        """
+        fig = go.Figure()
+
+        # Candlestick chart
+        fig.add_trace(
+            go.Candlestick(
+                x=df['Date'],
+                open=df['Open'],
+                high=df['High'],
+                low=df['Low'],
+                close=df['Close'],
+                name='Price',
+                increasing_line_color='#10b981',
+                decreasing_line_color='#ef4444'
+            )
+        )
+
+        # Add buy/sell signals from trades
+        if trades_df is not None and not trades_df.empty:
+            # Buy signals
+            buy_signals = trades_df[trades_df['Direction'] == 'Long']
+            if not buy_signals.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=buy_signals['Entry_Date'],
+                        y=buy_signals['Entry_Price'],
+                        mode='markers',
+                        name='Buy Signal',
+                        marker=dict(
+                            symbol='triangle-up',
+                            size=14,
+                            color='#10b981',
+                            line=dict(color='white', width=2)
+                        )
+                    )
+                )
+
+            # Sell signals
+            sell_signals = trades_df[trades_df['Direction'] == 'Short']
+            if not sell_signals.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=sell_signals['Entry_Date'],
+                        y=sell_signals['Entry_Price'],
+                        mode='markers',
+                        name='Sell Signal',
+                        marker=dict(
+                            symbol='triangle-down',
+                            size=14,
+                            color='#ef4444',
+                            line=dict(color='white', width=2)
+                        )
+                    )
+                )
+
+        fig.update_layout(
+            title={
+                'text': 'Price Action with Trading Signals',
+                'font': {'size': 18, 'color': '#1f2937'}
+            },
+            xaxis_title='Date',
+            yaxis_title='Price ($)',
+            xaxis_rangeslider_visible=False,
+            height=500,
+            showlegend=True,
+            hovermode='x unified',
+            template='plotly_white',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
+        )
+
+        fig.update_xaxes(showgrid=True, gridcolor='#f3f4f6')
+        fig.update_yaxes(showgrid=True, gridcolor='#f3f4f6')
+
+        return fig
+
+    def create_moving_averages_chart_simple(self, df):
+        """
+        Create a clean moving averages chart
+
+        Args:
+            df (pandas.DataFrame): OHLCV data with moving averages
+
+        Returns:
+            plotly.graph_objects.Figure: Moving averages chart
+        """
+        fig = go.Figure()
+
+        # Price line
+        fig.add_trace(
+            go.Scatter(
+                x=df['Date'],
+                y=df['Close'],
+                mode='lines',
+                name='Close Price',
+                line=dict(color='#6b7280', width=1.5)
+            )
+        )
+
+        # SMA 20
+        if 'SMA_20' in df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=df['Date'],
+                    y=df['SMA_20'],
+                    mode='lines',
+                    name='SMA 20',
+                    line=dict(color='#f97316', width=2.5)
+                )
+            )
+
+        # SMA 50
+        if 'SMA_50' in df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=df['Date'],
+                    y=df['SMA_50'],
+                    mode='lines',
+                    name='SMA 50',
+                    line=dict(color='#3b82f6', width=2.5)
+                )
+            )
+
+        fig.update_layout(
+            title={
+                'text': 'Moving Averages',
+                'font': {'size': 18, 'color': '#1f2937'}
+            },
+            xaxis_title='Date',
+            yaxis_title='Price ($)',
+            height=400,
+            showlegend=True,
+            hovermode='x unified',
+            template='plotly_white',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
+        )
+
+        fig.update_xaxes(showgrid=True, gridcolor='#f3f4f6')
+        fig.update_yaxes(showgrid=True, gridcolor='#f3f4f6')
+
+        return fig
+
+    def create_bollinger_bands_chart_simple(self, df):
+        """
+        Create a clean Bollinger Bands chart
+
+        Args:
+            df (pandas.DataFrame): OHLCV data with Bollinger Bands
+
+        Returns:
+            plotly.graph_objects.Figure: Bollinger Bands chart
+        """
+        fig = go.Figure()
+
+        if 'BB_Upper' in df.columns and 'BB_Lower' in df.columns:
+            # Upper band
+            fig.add_trace(
+                go.Scatter(
+                    x=df['Date'],
+                    y=df['BB_Upper'],
+                    mode='lines',
+                    name='Upper Band',
+                    line=dict(color='#ef4444', width=1.5, dash='dash')
+                )
+            )
+
+            # Middle band
+            if 'BB_Middle' in df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=df['Date'],
+                        y=df['BB_Middle'],
+                        mode='lines',
+                        name='Middle Band (SMA 20)',
+                        line=dict(color='#6b7280', width=1.5)
+                    )
+                )
+
+            # Lower band with fill
+            fig.add_trace(
+                go.Scatter(
+                    x=df['Date'],
+                    y=df['BB_Lower'],
+                    mode='lines',
+                    name='Lower Band',
+                    line=dict(color='#10b981', width=1.5, dash='dash'),
+                    fill='tonexty',
+                    fillcolor='rgba(59, 130, 246, 0.1)'
+                )
+            )
+
+            # Price line
+            fig.add_trace(
+                go.Scatter(
+                    x=df['Date'],
+                    y=df['Close'],
+                    mode='lines',
+                    name='Close Price',
+                    line=dict(color='#1f2937', width=2)
+                )
+            )
+
+        fig.update_layout(
+            title={
+                'text': 'Bollinger Bands',
+                'font': {'size': 18, 'color': '#1f2937'}
+            },
+            xaxis_title='Date',
+            yaxis_title='Price ($)',
+            height=400,
+            showlegend=True,
+            hovermode='x unified',
+            template='plotly_white',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
+        )
+
+        fig.update_xaxes(showgrid=True, gridcolor='#f3f4f6')
+        fig.update_yaxes(showgrid=True, gridcolor='#f3f4f6')
+
+        return fig
+
+    def create_rsi_chart_simple(self, df):
+        """
+        Create a clean RSI chart
+
+        Args:
+            df (pandas.DataFrame): OHLCV data with RSI
+
+        Returns:
+            plotly.graph_objects.Figure: RSI chart
+        """
+        fig = go.Figure()
+
+        if 'RSI' in df.columns:
+            # RSI line with gradient fill
+            fig.add_trace(
+                go.Scatter(
+                    x=df['Date'],
+                    y=df['RSI'],
+                    mode='lines',
+                    name='RSI',
+                    line=dict(color='#8b5cf6', width=2.5),
+                    fill='tozeroy',
+                    fillcolor='rgba(139, 92, 246, 0.1)'
+                )
+            )
+
+            # Overbought zone
+            fig.add_shape(
+                type="rect",
+                x0=df['Date'].iloc[0],
+                x1=df['Date'].iloc[-1],
+                y0=70,
+                y1=100,
+                fillcolor="rgba(239, 68, 68, 0.1)",
+                line=dict(width=0),
+                layer="below"
+            )
+
+            # Oversold zone
+            fig.add_shape(
+                type="rect",
+                x0=df['Date'].iloc[0],
+                x1=df['Date'].iloc[-1],
+                y0=0,
+                y1=30,
+                fillcolor="rgba(16, 185, 129, 0.1)",
+                line=dict(width=0),
+                layer="below"
+            )
+
+            # Reference lines
+            fig.add_hline(y=70, line_dash="dash", line_color="#ef4444", line_width=1.5,
+                         annotation_text="Overbought (70)", annotation_position="right")
+            fig.add_hline(y=50, line_dash="dot", line_color="#6b7280", line_width=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="#10b981", line_width=1.5,
+                         annotation_text="Oversold (30)", annotation_position="right")
+
+        fig.update_layout(
+            title={
+                'text': 'Relative Strength Index (RSI)',
+                'font': {'size': 18, 'color': '#1f2937'}
+            },
+            xaxis_title='Date',
+            yaxis_title='RSI',
+            height=350,
+            showlegend=True,
+            hovermode='x unified',
+            template='plotly_white',
+            yaxis_range=[0, 100]
+        )
+
+        fig.update_xaxes(showgrid=True, gridcolor='#f3f4f6')
+        fig.update_yaxes(showgrid=True, gridcolor='#f3f4f6')
+
+        return fig
+
+    def create_macd_chart_simple(self, df):
+        """
+        Create a clean MACD chart
+
+        Args:
+            df (pandas.DataFrame): OHLCV data with MACD
+
+        Returns:
+            plotly.graph_objects.Figure: MACD chart
+        """
+        fig = go.Figure()
+
+        if 'MACD' in df.columns:
+            # MACD Histogram
+            if 'MACD_Histogram' in df.columns:
+                colors = ['#10b981' if val >= 0 else '#ef4444' for val in df['MACD_Histogram']]
+                fig.add_trace(
+                    go.Bar(
+                        x=df['Date'],
+                        y=df['MACD_Histogram'],
+                        name='MACD Histogram',
+                        marker_color=colors,
+                        opacity=0.5
+                    )
+                )
+
+            # MACD Line
+            fig.add_trace(
+                go.Scatter(
+                    x=df['Date'],
+                    y=df['MACD'],
+                    mode='lines',
+                    name='MACD',
+                    line=dict(color='#3b82f6', width=2.5)
+                )
+            )
+
+            # Signal Line
+            if 'MACD_Signal' in df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=df['Date'],
+                        y=df['MACD_Signal'],
+                        mode='lines',
+                        name='Signal',
+                        line=dict(color='#f97316', width=2.5)
+                    )
+                )
+
+            # Zero line
+            fig.add_hline(y=0, line_dash="dot", line_color="#6b7280", line_width=1.5)
+
+        fig.update_layout(
+            title={
+                'text': 'MACD (Moving Average Convergence Divergence)',
+                'font': {'size': 18, 'color': '#1f2937'}
+            },
+            xaxis_title='Date',
+            yaxis_title='MACD',
+            height=350,
+            showlegend=True,
+            hovermode='x unified',
+            template='plotly_white',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
+        )
+
+        fig.update_xaxes(showgrid=True, gridcolor='#f3f4f6')
+        fig.update_yaxes(showgrid=True, gridcolor='#f3f4f6')
+
+        return fig
+
+    def create_volume_chart_simple(self, df):
+        """
+        Create a clean volume chart
+
+        Args:
+            df (pandas.DataFrame): OHLCV data
+
+        Returns:
+            plotly.graph_objects.Figure: Volume chart
+        """
+        fig = go.Figure()
+
+        # Color volume bars based on price movement
+        colors = []
+        for i in range(len(df)):
+            if i == 0:
+                colors.append('#3b82f6')
+            else:
+                if df['Close'].iloc[i] >= df['Close'].iloc[i-1]:
+                    colors.append('#10b981')
+                else:
+                    colors.append('#ef4444')
+
+        fig.add_trace(
+            go.Bar(
+                x=df['Date'],
+                y=df['Volume'],
+                name='Volume',
+                marker_color=colors,
+                opacity=0.7
+            )
+        )
+
+        fig.update_layout(
+            title={
+                'text': 'Trading Volume',
+                'font': {'size': 18, 'color': '#1f2937'}
+            },
+            xaxis_title='Date',
+            yaxis_title='Volume',
+            height=300,
+            showlegend=True,
+            hovermode='x unified',
+            template='plotly_white'
+        )
+
+        fig.update_xaxes(showgrid=True, gridcolor='#f3f4f6')
+        fig.update_yaxes(showgrid=True, gridcolor='#f3f4f6')
+
+        return fig
+
     def create_equity_curve_chart(self, equity_df):
         """
         Create equity curve chart
@@ -890,7 +1425,7 @@ class IndianStockStrategyBuilder:
 
     def create_comprehensive_charts(self, df, trades_df, equity_df):
         """
-        Create comprehensive charts for backtesting results
+        Create comprehensive charts for backtesting results - now with separate, clean charts!
 
         Args:
             df (pandas.DataFrame): OHLCV data with indicators
@@ -903,15 +1438,55 @@ class IndianStockStrategyBuilder:
         charts = {}
 
         try:
-            # Create candlestick chart
-            candlestick_fig = self.create_candlestick_chart(df, trades_df)
-            charts['candlestick'] = candlestick_fig.to_json()
+            # 1. Simple price chart with trading signals
+            price_fig = self.create_price_chart_simple(df, trades_df)
+            charts['price_chart'] = price_fig.to_json()
         except Exception as e:
-            print(f"Error creating candlestick chart: {e}")
-            charts['candlestick'] = None
+            print(f"Error creating price chart: {e}")
+            charts['price_chart'] = None
 
         try:
-            # Create equity curve chart
+            # 2. Moving averages chart
+            ma_fig = self.create_moving_averages_chart_simple(df)
+            charts['moving_averages'] = ma_fig.to_json()
+        except Exception as e:
+            print(f"Error creating moving averages chart: {e}")
+            charts['moving_averages'] = None
+
+        try:
+            # 3. Bollinger Bands chart
+            bb_fig = self.create_bollinger_bands_chart_simple(df)
+            charts['bollinger_bands'] = bb_fig.to_json()
+        except Exception as e:
+            print(f"Error creating Bollinger Bands chart: {e}")
+            charts['bollinger_bands'] = None
+
+        try:
+            # 4. RSI chart
+            rsi_fig = self.create_rsi_chart_simple(df)
+            charts['rsi'] = rsi_fig.to_json()
+        except Exception as e:
+            print(f"Error creating RSI chart: {e}")
+            charts['rsi'] = None
+
+        try:
+            # 5. MACD chart
+            macd_fig = self.create_macd_chart_simple(df)
+            charts['macd'] = macd_fig.to_json()
+        except Exception as e:
+            print(f"Error creating MACD chart: {e}")
+            charts['macd'] = None
+
+        try:
+            # 6. Volume chart
+            volume_fig = self.create_volume_chart_simple(df)
+            charts['volume'] = volume_fig.to_json()
+        except Exception as e:
+            print(f"Error creating volume chart: {e}")
+            charts['volume'] = None
+
+        try:
+            # 7. Equity curve chart
             equity_fig = self.create_equity_curve_chart(equity_df)
             charts['equity_curve'] = equity_fig.to_json()
         except Exception as e:
@@ -919,11 +1494,19 @@ class IndianStockStrategyBuilder:
             charts['equity_curve'] = None
 
         try:
-            # Create drawdown chart
+            # 8. Drawdown chart
             drawdown_fig = self.create_drawdown_chart(equity_df)
             charts['drawdown'] = drawdown_fig.to_json()
         except Exception as e:
             print(f"Error creating drawdown chart: {e}")
             charts['drawdown'] = None
+
+        # Keep the old complex candlestick chart for backward compatibility (optional)
+        try:
+            candlestick_fig = self.create_candlestick_chart(df, trades_df)
+            charts['candlestick'] = candlestick_fig.to_json()
+        except Exception as e:
+            print(f"Error creating legacy candlestick chart: {e}")
+            charts['candlestick'] = None
 
         return charts

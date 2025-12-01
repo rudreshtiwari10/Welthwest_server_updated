@@ -81,3 +81,9 @@ websockets==15.0.1
 Werkzeug==2.3.7
 wrapt==1.17.2
 yfinance==0.2.65
+
+# New dependencies for Finance AI upgrade
+matplotlib==3.8.2
+PyPDF2==3.0.1
+sentence-transformers==2.2.2
+chromadb==0.4.18
