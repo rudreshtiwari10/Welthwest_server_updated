@@ -334,28 +334,30 @@ def register():
 def send_registration_otp():
     """Send OTP for email verification during registration"""
     data = request.get_json()
-    
+
     # Validate required fields
     if 'email' not in data:
         return jsonify({"error": "Email is required"}), 400
-    
+
     email = data['email'].strip().lower()
-    
+    first_name = data.get('first_name', '').strip()
+    last_name = data.get('last_name', '').strip()
+
     # Check if email already exists
     if user_service.users.find_one({"email": email}):
         return jsonify({"error": "Email already exists"}), 400
-    
-    # Generate and send OTP
-    success, message, otp = user_service.create_registration_otp(email)
-    
+
+    # Generate and send OTP with user's name
+    success, message, otp = user_service.create_registration_otp(email, first_name, last_name)
+
     if not success:
         return jsonify({"error": message}), 400
-    
-    # Send OTP email
+
+    # Send OTP email with user's name
     try:
-        email_sent = email_service.send_registration_otp(email, otp)
+        email_sent = email_service.send_registration_otp(email, otp, first_name, last_name)
         if email_sent:
-            logger.info(f"Registration OTP sent to {email}")
+            logger.info(f"Registration OTP sent to {email} for {first_name} {last_name}")
             return jsonify({
                 "message": "OTP sent to your email for verification",
                 "email_sent": True
@@ -412,16 +414,23 @@ def complete_registration():
     email = data['email'].strip().lower()
     username = data['username'].strip()
     password = data['password']
-    
+
     # Check if email is verified
     if not user_service.is_email_verified(email):
         return jsonify({"error": "Email not verified. Please verify your email first."}), 400
-    
-    # Register user
+
+    # Retrieve first_name and last_name from OTP record
+    otp_data = user_service.get_registration_otp_data(email)
+    first_name = otp_data.get("first_name", "") if otp_data else ""
+    last_name = otp_data.get("last_name", "") if otp_data else ""
+
+    # Register user with name
     success, message, user_data = user_service.register_user(
         email=email,
         username=username,
-        password=password
+        password=password,
+        first_name=first_name,
+        last_name=last_name
     )
     
     if not success:
@@ -456,9 +465,13 @@ def complete_registration():
     
     # Send welcome email to new user
     try:
+        # Use full name if available, otherwise use username
+        full_name = f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}".strip()
+        user_name = full_name if full_name else user_data['username']
+
         email_service.send_welcome_email(
             user_email=user_data['email'],
-            user_name=user_data['username']
+            user_name=user_name
         )
         logger.info(f"Welcome email sent to {user_data['email']}")
     except Exception as e:
@@ -1272,6 +1285,7 @@ def nextgen_chat():
             loop.close()
 
         logger.info(f"NextGen AI response type: {ai_response.get('query_type')}, model: {ai_response.get('model_used')}")
+        logger.info(f"Analysis buttons: {ai_response.get('analysis_buttons')}")
         
         # Save chat history for authenticated users
         if is_authenticated and user_id:
@@ -1314,6 +1328,7 @@ def nextgen_chat():
             "confidence": ai_response.get('confidence', 0.0),
             "stock_data": ai_response.get('stock_data'),
             "sentiment": ai_response.get('sentiment'),
+            "analysis_buttons": ai_response.get('analysis_buttons', {'show_buttons': False, 'suggested_tools': []}),
             "requires_login": False
         }
 

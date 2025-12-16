@@ -46,18 +46,62 @@ class FinanceOrchestrator:
     Advanced orchestrator for finance AI queries
     """
 
+    # Comprehensive trigger words for analysis-related features (100+ keywords)
+    ANALYSIS_TRIGGER_WORDS = {
+        # General analysis keywords
+        'analysis', 'analyze', 'technical analysis', 'fundamental analysis',
+        'regime', 'market regime', 'rsi', 'rsa', 'macd', 'moving average', 'ma', 'ema', 'sma',
+        'bollinger bands', 'fibonacci', 'candlestick', 'chart pattern', 'pattern',
+        'support', 'resistance', 'trend', 'breakout', 'breakdown',
+        'momentum', 'volatility', 'oscillator', 'stochastic', 'adx', 'atr',
+        'volume analysis', 'price action', 'swing trading', 'day trading', 'scalping',
+        'position trading', 'bull market', 'bear market', 'market trend',
+        'technical indicator', 'indicator', 'signal',
+        'entry point', 'exit point', 'stop loss', 'target',
+        'trade setup', 'chart analysis', 'market analysis', 'stock analysis',
+        'equity analysis',
+
+        # Backtesting / Strategy engine keywords
+        'backtest', 'backtesting', 'strategy test', 'strategy testing', 'test my strategy',
+        'validate strategy', 'strategy', 'historical test', 'historical testing',
+        'paper trading', 'simulate trades', 'trading simulator', 'performance test',
+        'performance analysis', 'pnl analysis', 'profit and loss', 'drawdown',
+        'max drawdown', 'sharpe ratio', 'risk reward', 'win rate', 'success rate',
+        'equity curve', 'trade log', 'trade history', 'optimize strategy',
+        'strategy optimization', 'parameter tuning', 'indicator test',
+        'rsi strategy', 'macd strategy', 'moving average strategy',
+        'trading strategy', 'test strategy', 'performance', 'historical data', 'historical analysis',
+
+        # AI price forecasting / signals keywords
+        'forecast', 'prediction', 'predict', 'price forecast', 'price prediction',
+        'price predicting', 'stock forecast', 'stock prediction', 'stock signals',
+        'buy signal', 'sell signal', 'trading signals', 'market forecast',
+        'market prediction', 'ai forecast', 'ai signals', 'ml model',
+        'machine learning forecast', 'time series forecast', 'next day price',
+        'tomorrow price', 'short term forecast', 'swing trade signal',
+        'regime prediction', 'bull bear signal', 'trend prediction',
+        'volatility forecast', 'hmm', 'hidden markov', 'ai analysis',
+        'machine learning', 'pattern recognition',
+
+        # Generic platform-intent keywords
+        'automated trading', 'trading bot', 'auto buy sell', 'quant tools',
+        'analysis tools', 'trading platform', 'ai trading platform',
+        'strategy builder', 'portfolio analysis'
+    }
+
     def __init__(self):
         # Load API keys
         self.gemini_api_key = os.environ.get('GEMINI_API_KEY', '')
         self.openrouter_api_key = os.environ.get('OPENROUTER_API_KEY', '')
 
         # System prompts
-        self.finance_system_prompt = """You are a professional financial analyst AI assistant for WelthWest.
+        self.finance_system_prompt = """You are a professional financial analyst AI assistant for WelthWest, specializing in Indian markets.
 
 Your role:
 - Provide accurate, data-driven financial analysis
 - Explain technical indicators and market concepts clearly
 - Help users understand stock performance and trends
+- ALWAYS use ₹ (Indian Rupees symbol) when mentioning prices or monetary values, NEVER use $ or USD
 - NEVER give specific buy/sell recommendations
 - Always remind users that past performance doesn't guarantee future results
 - Emphasize that you provide information, not financial advice
@@ -66,7 +110,107 @@ When analyzing data:
 - Be objective and balanced
 - Cite the specific indicators and metrics
 - Explain what the data suggests, not what users should do
-- Use professional but accessible language"""
+- Use professional but accessible language
+- Always display prices with ₹ symbol for Indian markets"""
+
+    def detect_analysis_intent(self, query: str) -> dict:
+        """
+        Detect if query contains analysis-related keywords and return suggested tools.
+        Returns a dict with 'show_buttons' (bool) and 'suggested_tools' (list).
+        """
+        query_lower = query.lower().strip()
+
+        # Check if any trigger word is present in the query
+        has_trigger_word = any(
+            trigger_word in query_lower
+            for trigger_word in self.ANALYSIS_TRIGGER_WORDS
+        )
+
+        if not has_trigger_word:
+            return {'show_buttons': False, 'suggested_tools': []}
+
+        # Build suggested tools based on specific keywords
+        suggested_tools = []
+
+        # Market Regime & AI Analysis triggers
+        regime_keywords = {
+            'regime', 'market regime', 'forecast', 'prediction', 'predict',
+            'hmm', 'hidden markov', 'ai analysis', 'market analysis',
+            'technical analysis', 'analysis', 'pattern recognition',
+            'price forecast', 'price prediction', 'stock forecast', 'stock prediction',
+            'market forecast', 'market prediction', 'ai forecast', 'ai signals',
+            'ml model', 'machine learning forecast', 'time series forecast',
+            'next day price', 'tomorrow price', 'short term forecast',
+            'swing trade signal', 'regime prediction', 'bull bear signal',
+            'trend prediction', 'volatility forecast', 'stock signals',
+            'trading signals', 'buy signal', 'sell signal'
+        }
+
+        # Backtesting triggers
+        backtest_keywords = {
+            'backtest', 'backtesting', 'strategy test', 'strategy testing',
+            'test my strategy', 'validate strategy', 'strategy', 'historical test',
+            'historical testing', 'paper trading', 'simulate trades',
+            'trading simulator', 'performance test', 'performance analysis',
+            'pnl analysis', 'profit and loss', 'drawdown', 'max drawdown',
+            'sharpe ratio', 'win rate', 'success rate', 'equity curve',
+            'trade log', 'trade history', 'optimize strategy',
+            'strategy optimization', 'parameter tuning', 'indicator test',
+            'rsi strategy', 'macd strategy', 'moving average strategy',
+            'trading strategy', 'test strategy', 'performance',
+            'historical data', 'historical analysis'
+        }
+
+        # Check for regime/forecast keywords
+        has_regime_keywords = any(kw in query_lower for kw in regime_keywords)
+
+        # Check for backtest keywords
+        has_backtest_keywords = any(kw in query_lower for kw in backtest_keywords)
+
+        # For general "analysis" or "technical analysis" queries, show BOTH tools
+        general_analysis_keywords = {'analysis', 'analyze', 'technical analysis', 'fundamental analysis', 'chart analysis', 'stock analysis'}
+        has_general_analysis = any(kw in query_lower for kw in general_analysis_keywords)
+
+        # Add Market Regime button if relevant keywords found OR general analysis
+        if has_regime_keywords or has_general_analysis:
+            suggested_tools.append({
+                'name': 'AI Market Regime & Forecast',
+                'description': 'Get AI-powered market regime analysis and trade forecasts',
+                'url': '/welth-market-regime',
+                'icon': 'chart'
+            })
+
+        # Add Backtesting button if relevant keywords found OR general analysis
+        if has_backtest_keywords or has_general_analysis:
+            suggested_tools.append({
+                'name': 'Advanced Backtesting',
+                'description': 'Test your trading strategies with historical data',
+                'url': '/backtest-beta',
+                'icon': 'backtest'
+            })
+
+        # If no specific match but general trigger words detected, suggest both
+        if not suggested_tools:
+            suggested_tools = [
+                {
+                    'name': 'AI Market Regime & Forecast',
+                    'description': 'Get AI-powered market regime analysis and trade forecasts',
+                    'url': '/welth-market-regime',
+                    'icon': 'chart'
+                },
+                {
+                    'name': 'Advanced Backtesting',
+                    'description': 'Test your trading strategies with historical data',
+                    'url': '/backtest-beta',
+                    'icon': 'backtest'
+                }
+            ]
+
+        logger.info(f"Analysis intent detected! Showing {len(suggested_tools)} tool suggestions")
+        return {
+            'show_buttons': True,
+            'suggested_tools': suggested_tools
+        }
 
     def classify_query(self, query: str, conversation_history: List[Dict[str, str]] = None) -> str:
         """
@@ -562,14 +706,14 @@ When analyzing data:
         if data_type == 'stock_price':
             stock_data = context.get('stock_data', {})
             prompt_parts.append(f"Stock Price Data for {stock_data.get('symbol')}:\n")
-            prompt_parts.append(f"- Current Price: ${stock_data.get('current_price')}\n")
+            prompt_parts.append(f"- Current Price: ₹{stock_data.get('current_price')}\n")
             prompt_parts.append(f"- Change: {stock_data.get('change')} ({stock_data.get('change_percent')}%)\n")
-            prompt_parts.append(f"- Day Range: ${stock_data.get('day_low')} - ${stock_data.get('day_high')}\n")
+            prompt_parts.append(f"- Day Range: ₹{stock_data.get('day_low')} - ₹{stock_data.get('day_high')}\n")
             prompt_parts.append(f"- Volume: {stock_data.get('volume'):,}\n\n")
 
         elif data_type == 'technical_analysis':
             prompt_parts.append(f"Technical Analysis for {context.get('symbol')}:\n")
-            prompt_parts.append(f"Current Price: ${context.get('current_price')}\n\n")
+            prompt_parts.append(f"Current Price: ₹{context.get('current_price')}\n\n")
 
             indicators = context.get('indicators', {})
             if 'rsi' in indicators:
@@ -620,7 +764,12 @@ When analyzing data:
         full_prompt = "".join(prompt_parts)
 
         # Call LLM
-        return self.call_gemini(full_prompt, temperature=0.2)
+        response = self.call_gemini(full_prompt, temperature=0.2)
+
+        # Post-process to replace any $ symbols with ₹
+        response = response.replace('$', '₹')
+
+        return response
 
     def process_query(self, query: str, conversation_history: List[Dict[str, str]] = None) -> Dict[str, Any]:
         """
@@ -634,6 +783,9 @@ When analyzing data:
             Complete response with data, charts, and AI explanation
         """
         try:
+            # Detect analysis intent for all queries
+            analysis_intent = self.detect_analysis_intent(query)
+
             # Classify query with conversation context
             category = self.classify_query(query, conversation_history)
             logger.info(f"Query classified as: {category}")
@@ -683,6 +835,7 @@ When analyzing data:
 
             result['query'] = query
             result['timestamp'] = datetime.now().isoformat()
+            result['analysis_buttons'] = analysis_intent
 
             return result
 

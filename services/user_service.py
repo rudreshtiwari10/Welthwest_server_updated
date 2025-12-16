@@ -67,10 +67,17 @@ class UserService:
             logger.error(f"Password check error: {str(e)}")
             return False
     
-    def register_user(self, email: str, username: str, password: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+    def register_user(self, email: str, username: str, password: str, first_name: str = "", last_name: str = "") -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """
         Register a new user
-        
+
+        Args:
+        - email: User's email address
+        - username: User's username
+        - password: User's password
+        - first_name: User's first name (optional)
+        - last_name: User's last name (optional)
+
         Returns:
         Tuple containing:
         - Success status (bool)
@@ -80,10 +87,10 @@ class UserService:
         # Check if username or email already exists
         if self.users.find_one({"username": username}):
             return False, "Username already exists", None
-        
+
         if self.users.find_one({"email": email}):
             return False, "Email already exists", None
-        
+
         # Create user document without subscription (will be initialized separately)
         user = {
             "username": username,
@@ -91,24 +98,24 @@ class UserService:
             "password": self.hash_password(password),
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
-            "first_name": "",
-            "last_name": "",
+            "first_name": first_name,
+            "last_name": last_name,
             "occupation": "",
             "bio": "",
             "avatar_url": "",
             "watchlists": []
         }
-        
+
         try:
             # Insert user into database
             result = self.users.insert_one(user)
-            
+
             if result.inserted_id:
                 # Return user data without password
                 user_data = self.get_user_by_id(result.inserted_id)
                 if user_data:
                     return True, "User registered successfully", user_data
-            
+
             return False, "Failed to register user", None
         except Exception as e:
             print(f"Error registering user: {str(e)}")
@@ -712,10 +719,15 @@ class UserService:
             logger.error(f"Error resetting password: {str(e)}")
             return False, "Failed to reset password"
     
-    def create_registration_otp(self, email: str) -> Tuple[bool, str, Optional[str]]:
+    def create_registration_otp(self, email: str, first_name: str = "", last_name: str = "") -> Tuple[bool, str, Optional[str]]:
         """
         Create registration OTP for email verification
-        
+
+        Args:
+        - email: User's email address
+        - first_name: User's first name (optional)
+        - last_name: User's last name (optional)
+
         Returns:
         - Success status (bool)
         - Message (str)
@@ -725,25 +737,27 @@ class UserService:
             # Generate OTP
             otp = self.generate_otp()
             expires_at = datetime.utcnow() + timedelta(minutes=15)  # 15 minutes expiry
-            
-            # Store OTP in database
+
+            # Store OTP in database with user's name
             otp_record = {
                 "email": email,
+                "first_name": first_name,
+                "last_name": last_name,
                 "otp": otp,
                 "expires_at": expires_at,
                 "used": False,
                 "created_at": datetime.utcnow()
             }
-            
+
             # Remove any existing OTPs for this email
             self.registration_otps.delete_many({"email": email})
-            
+
             # Insert new OTP
             self.registration_otps.insert_one(otp_record)
-            
+
             logger.info(f"Registration OTP created for email: {email}")
             return True, "OTP generated successfully", otp
-            
+
         except Exception as e:
             logger.error(f"Error creating registration OTP: {str(e)}")
             return False, "Failed to generate OTP", None
@@ -796,7 +810,7 @@ class UserService:
     def is_email_verified(self, email: str) -> bool:
         """
         Check if email is verified and verification hasn't expired
-        
+
         Returns:
         - True if email is verified and valid, False otherwise
         """
@@ -805,12 +819,39 @@ class UserService:
                 "email": email,
                 "expires_at": {"$gt": datetime.utcnow()}
             })
-            
+
             return verified_record is not None
-            
+
         except Exception as e:
             logger.error(f"Error checking email verification: {str(e)}")
             return False
+
+    def get_registration_otp_data(self, email: str) -> Optional[Dict[str, Any]]:
+        """
+        Get registration OTP data including first_name and last_name
+
+        Returns:
+        - Dict with OTP data or None
+        """
+        try:
+            otp_record = self.registration_otps.find_one({
+                "email": email,
+                "used": False,
+                "expires_at": {"$gt": datetime.utcnow()}
+            })
+
+            if otp_record:
+                return {
+                    "first_name": otp_record.get("first_name", ""),
+                    "last_name": otp_record.get("last_name", ""),
+                    "email": otp_record.get("email", "")
+                }
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting registration OTP data: {str(e)}")
+            return None
 
     def verify_registration_otp(self, email: str, otp: str) -> Tuple[bool, str]:
         """

@@ -629,9 +629,9 @@ class IndianStockStrategyBuilder:
         fig = make_subplots(
             rows=6, cols=1,
             shared_xaxes=True,
-            vertical_spacing=0.02,
+            vertical_spacing=0.05,  # Increased spacing for better separation
             subplot_titles=('Price with Trading Signals', 'Moving Averages', 'Bollinger Bands', 'RSI', 'MACD', 'Volume'),
-            row_heights=[0.3, 0.15, 0.15, 0.15, 0.15, 0.1]
+            row_heights=[0.35, 0.15, 0.15, 0.12, 0.13, 0.1]  # Adjusted for better proportions
         )
         
         # Panel 1: Candlestick chart ONLY (cleaner view)
@@ -656,7 +656,7 @@ class IndianStockStrategyBuilder:
                     y=df['SMA_20'],
                     mode='lines',
                     name='SMA 20',
-                    line=dict(color='orange', width=2)
+                    line=dict(color='#FF6B35', width=2.5)  # Bright orange for better visibility
                 ),
                 row=2, col=1
             )
@@ -668,7 +668,7 @@ class IndianStockStrategyBuilder:
                     y=df['SMA_50'],
                     mode='lines',
                     name='SMA 50',
-                    line=dict(color='blue', width=2)
+                    line=dict(color='#004E89', width=2.5)  # Deep blue for better visibility
                 ),
                 row=2, col=1
             )
@@ -680,7 +680,7 @@ class IndianStockStrategyBuilder:
                 y=df['Close'],
                 mode='lines',
                 name='Close Price',
-                line=dict(color='lightgray', width=1, dash='dot'),
+                line=dict(color='rgba(128, 128, 128, 0.5)', width=1.5, dash='dot'),
                 showlegend=False
             ),
             row=2, col=1
@@ -695,7 +695,7 @@ class IndianStockStrategyBuilder:
                     y=df['Close'],
                     mode='lines',
                     name='Close Price',
-                    line=dict(color='black', width=1.5),
+                    line=dict(color='#2c3e50', width=2),
                     showlegend=False
                 ),
                 row=3, col=1
@@ -707,7 +707,7 @@ class IndianStockStrategyBuilder:
                     y=df['BB_Upper'],
                     mode='lines',
                     name='BB Upper',
-                    line=dict(color='red', width=1.5, dash='dash'),
+                    line=dict(color='#E63946', width=2, dash='dash'),  # Vibrant red
                     showlegend=True
                 ),
                 row=3, col=1
@@ -720,7 +720,7 @@ class IndianStockStrategyBuilder:
                         y=df['BB_Middle'],
                         mode='lines',
                         name='BB Middle',
-                        line=dict(color='gray', width=1),
+                        line=dict(color='#6C757D', width=1.5),  # Medium gray
                         showlegend=True
                     ),
                     row=3, col=1
@@ -732,9 +732,9 @@ class IndianStockStrategyBuilder:
                     y=df['BB_Lower'],
                     mode='lines',
                     name='BB Lower',
-                    line=dict(color='green', width=1.5, dash='dash'),
+                    line=dict(color='#06A77D', width=2, dash='dash'),  # Vibrant green
                     fill='tonexty',
-                    fillcolor='rgba(173, 216, 230, 0.2)',
+                    fillcolor='rgba(6, 167, 125, 0.1)',
                     showlegend=True
                 ),
                 row=3, col=1
@@ -786,32 +786,34 @@ class IndianStockStrategyBuilder:
                     y=df['RSI'],
                     mode='lines',
                     name='RSI',
-                    line=dict(color='purple', width=2),
+                    line=dict(color='#9D4EDD', width=2.5),  # Vibrant purple
                     fill='tozeroy',
-                    fillcolor='rgba(128, 0, 128, 0.1)'
+                    fillcolor='rgba(157, 78, 221, 0.15)'
                 ),
                 row=4, col=1
             )
 
             # RSI levels with shaded zones
-            fig.add_hline(y=70, line_dash="dash", line_color="red", line_width=1, row=4, col=1,
-                         annotation_text="Overbought (70)", annotation_position="right")
-            fig.add_hline(y=30, line_dash="dash", line_color="green", line_width=1, row=4, col=1,
-                         annotation_text="Oversold (30)", annotation_position="right")
-            fig.add_hline(y=50, line_dash="dot", line_color="gray", line_width=0.5, row=4, col=1)
+            fig.add_hline(y=70, line_dash="dash", line_color="#E63946", line_width=2, row=4, col=1,
+                         annotation_text="Overbought (70)", annotation_position="right",
+                         annotation_font=dict(size=11, color="#E63946"))
+            fig.add_hline(y=30, line_dash="dash", line_color="#06A77D", line_width=2, row=4, col=1,
+                         annotation_text="Oversold (30)", annotation_position="right",
+                         annotation_font=dict(size=11, color="#06A77D"))
+            fig.add_hline(y=50, line_dash="dot", line_color="rgba(108, 117, 125, 0.5)", line_width=1, row=4, col=1)
         
         # Panel 5: MACD (separate panel)
         if 'MACD' in df.columns:
             # MACD Histogram first (background)
             if 'MACD_Histogram' in df.columns:
-                colors = ['green' if val >= 0 else 'red' for val in df['MACD_Histogram']]
+                colors = ['#06A77D' if val >= 0 else '#E63946' for val in df['MACD_Histogram']]
                 fig.add_trace(
                     go.Bar(
                         x=df['Date'],
                         y=df['MACD_Histogram'],
                         name='MACD Histogram',
                         marker_color=colors,
-                        opacity=0.5,
+                        opacity=0.6,
                         showlegend=True
                     ),
                     row=5, col=1
@@ -824,7 +826,7 @@ class IndianStockStrategyBuilder:
                     y=df['MACD'],
                     mode='lines',
                     name='MACD',
-                    line=dict(color='blue', width=2)
+                    line=dict(color='#0077B6', width=2.5)  # Bright blue
                 ),
                 row=5, col=1
             )
@@ -837,25 +839,25 @@ class IndianStockStrategyBuilder:
                         y=df['MACD_Signal'],
                         mode='lines',
                         name='Signal',
-                        line=dict(color='red', width=2)
+                        line=dict(color='#FF6B35', width=2.5)  # Orange
                     ),
                     row=5, col=1
                 )
 
             # Zero line
-            fig.add_hline(y=0, line_dash="dot", line_color="gray", line_width=1, row=5, col=1)
+            fig.add_hline(y=0, line_dash="dot", line_color="rgba(108, 117, 125, 0.7)", line_width=1.5, row=5, col=1)
         
         # Panel 6: Volume (separate panel)
         # Color volume bars based on price movement
         colors = []
         for i in range(len(df)):
             if i == 0:
-                colors.append('lightblue')
+                colors.append('#0096C7')  # Light blue
             else:
                 if df['Close'].iloc[i] >= df['Close'].iloc[i-1]:
-                    colors.append('green')
+                    colors.append('#06A77D')  # Green for up days
                 else:
-                    colors.append('red')
+                    colors.append('#E63946')  # Red for down days
 
         fig.add_trace(
             go.Bar(
@@ -863,7 +865,7 @@ class IndianStockStrategyBuilder:
                 y=df['Volume'],
                 name='Volume',
                 marker_color=colors,
-                opacity=0.6,
+                opacity=0.7,
                 showlegend=True
             ),
             row=6, col=1
@@ -873,33 +875,90 @@ class IndianStockStrategyBuilder:
         fig.update_layout(
             title={
                 'text': 'Stock Analysis with Trading Signals',
-                'font': {'size': 20, 'color': '#2c3e50'}
+                'font': {'size': 20, 'color': '#2c3e50', 'family': 'Arial, sans-serif'},
+                'y': 0.995,  # Position title higher to avoid overlap
+                'x': 0.5,
+                'xanchor': 'center',
+                'yanchor': 'top'
             },
             xaxis_rangeslider_visible=False,
-            height=1200,  # Increased height for more panels
+            height=1800,  # Significantly increased height for better panel visibility
             showlegend=True,
             legend=dict(
                 orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1,
-                font=dict(size=10)
+                yanchor="top",
+                y=0.99,  # Position legend below title
+                xanchor="center",
+                x=0.5,
+                font=dict(size=10),
+                bgcolor='rgba(255, 255, 255, 0.9)',
+                bordercolor='rgba(0, 0, 0, 0.2)',
+                borderwidth=1
             ),
             hovermode='x unified',
-            template='plotly_white'
+            template='plotly_white',
+            # Improved styling for better readability
+            plot_bgcolor='rgba(250, 250, 250, 0.95)',
+            paper_bgcolor='white',
+            font=dict(size=12, color='#2c3e50')
         )
 
-        # Update y-axes labels for each panel
-        fig.update_yaxes(title_text="Price ($)", row=1, col=1, gridcolor='lightgray')
-        fig.update_yaxes(title_text="Moving Averages ($)", row=2, col=1, gridcolor='lightgray')
-        fig.update_yaxes(title_text="Bollinger Bands ($)", row=3, col=1, gridcolor='lightgray')
-        fig.update_yaxes(title_text="RSI", row=4, col=1, range=[0, 100], gridcolor='lightgray')
-        fig.update_yaxes(title_text="MACD", row=5, col=1, gridcolor='lightgray')
-        fig.update_yaxes(title_text="Volume", row=6, col=1, gridcolor='lightgray')
+        # Update y-axes labels for each panel with better styling
+        fig.update_yaxes(
+            title_text="Price ($)",
+            row=1, col=1,
+            gridcolor='rgba(200, 200, 200, 0.5)',
+            title_font=dict(size=13, color='#2c3e50'),
+            tickfont=dict(size=11)
+        )
+        fig.update_yaxes(
+            title_text="Moving Averages ($)",
+            row=2, col=1,
+            gridcolor='rgba(200, 200, 200, 0.5)',
+            title_font=dict(size=13, color='#2c3e50'),
+            tickfont=dict(size=11)
+        )
+        fig.update_yaxes(
+            title_text="Bollinger Bands ($)",
+            row=3, col=1,
+            gridcolor='rgba(200, 200, 200, 0.5)',
+            title_font=dict(size=13, color='#2c3e50'),
+            tickfont=dict(size=11)
+        )
+        fig.update_yaxes(
+            title_text="RSI",
+            row=4, col=1,
+            range=[0, 100],
+            gridcolor='rgba(200, 200, 200, 0.5)',
+            title_font=dict(size=13, color='#2c3e50'),
+            tickfont=dict(size=11)
+        )
+        fig.update_yaxes(
+            title_text="MACD",
+            row=5, col=1,
+            gridcolor='rgba(200, 200, 200, 0.5)',
+            title_font=dict(size=13, color='#2c3e50'),
+            tickfont=dict(size=11)
+        )
+        fig.update_yaxes(
+            title_text="Volume",
+            row=6, col=1,
+            gridcolor='rgba(200, 200, 200, 0.5)',
+            title_font=dict(size=13, color='#2c3e50'),
+            tickfont=dict(size=11)
+        )
 
-        # Update x-axes
-        fig.update_xaxes(showgrid=True, gridcolor='lightgray')
+        # Update x-axes with better styling
+        fig.update_xaxes(
+            showgrid=True,
+            gridcolor='rgba(200, 200, 200, 0.5)',
+            tickfont=dict(size=11)
+        )
+
+        # Update subplot title annotations for better visibility
+        for annotation in fig['layout']['annotations']:
+            annotation['font'] = dict(size=14, color='#2c3e50', family='Arial, sans-serif')
+            annotation['yshift'] = 5
 
         return fig
 

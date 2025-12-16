@@ -41,17 +41,60 @@ class NextGenAIOrchestrator:
     """
     Multi-model AI orchestration service for NextGen chatbot
     """
-    
+
+    # Comprehensive trigger words for analysis-related features (100+ keywords)
+    ANALYSIS_TRIGGER_WORDS = {
+        # General analysis keywords
+        'analysis', 'analyze', 'technical analysis', 'fundamental analysis',
+        'regime', 'market regime', 'rsi', 'rsa', 'macd', 'moving average', 'ma', 'ema', 'sma',
+        'bollinger bands', 'fibonacci', 'candlestick', 'chart pattern', 'pattern',
+        'support', 'resistance', 'trend', 'breakout', 'breakdown',
+        'momentum', 'volatility', 'oscillator', 'stochastic', 'adx', 'atr',
+        'volume analysis', 'price action', 'swing trading', 'day trading', 'scalping',
+        'position trading', 'bull market', 'bear market', 'market trend',
+        'technical indicator', 'indicator', 'signal',
+        'entry point', 'exit point', 'stop loss', 'target',
+        'trade setup', 'chart analysis', 'market analysis', 'stock analysis',
+        'equity analysis',
+
+        # Backtesting / Strategy engine keywords
+        'backtest', 'backtesting', 'strategy test', 'strategy testing', 'test my strategy',
+        'validate strategy', 'strategy', 'historical test', 'historical testing',
+        'paper trading', 'simulate trades', 'trading simulator', 'performance test',
+        'performance analysis', 'pnl analysis', 'profit and loss', 'drawdown',
+        'max drawdown', 'sharpe ratio', 'risk reward', 'win rate', 'success rate',
+        'equity curve', 'trade log', 'trade history', 'optimize strategy',
+        'strategy optimization', 'parameter tuning', 'indicator test',
+        'rsi strategy', 'macd strategy', 'moving average strategy',
+        'trading strategy', 'test strategy', 'performance', 'historical data', 'historical analysis',
+
+        # AI price forecasting / signals keywords
+        'forecast', 'prediction', 'predict', 'price forecast', 'price prediction',
+        'price predicting', 'stock forecast', 'stock prediction', 'stock signals',
+        'buy signal', 'sell signal', 'trading signals', 'market forecast',
+        'market prediction', 'ai forecast', 'ai signals', 'ml model',
+        'machine learning forecast', 'time series forecast', 'next day price',
+        'tomorrow price', 'short term forecast', 'swing trade signal',
+        'regime prediction', 'bull bear signal', 'trend prediction',
+        'volatility forecast', 'hmm', 'hidden markov', 'ai analysis',
+        'machine learning', 'pattern recognition',
+
+        # Generic platform-intent keywords
+        'automated trading', 'trading bot', 'auto buy sell', 'quant tools',
+        'analysis tools', 'trading platform', 'ai trading platform',
+        'strategy builder', 'portfolio analysis'
+    }
+
     def __init__(self):
         # Load API keys
         self.openrouter_api_key = os.environ.get('OPENROUTER_API_KEY', '')
         self.gemini_api_key = os.environ.get('GEMINI_API_KEY', '')
         self.newsapi_key = os.environ.get('NEWSAPI_KEY', '')
         self.huggingface_token = os.environ.get('HUGGINGFACE_TOKEN', '')
-        
+
         # Initialize base AI service
         self.base_ai_service = AIModelService()
-        
+
         # Track model availability
         self.available_models = {
             "openrouter": bool(self.openrouter_api_key),
@@ -60,19 +103,118 @@ class NextGenAIOrchestrator:
             "finbert": bool(self.huggingface_token),
             "yfinance": True
         }
-        
+
         # Initialize FinBERT for sentiment analysis (if available)
         self.finbert_pipeline = None
         try:
             if self.huggingface_token and HAS_TRANSFORMERS:
                 self.finbert_pipeline = pipeline(
-                    "sentiment-analysis", 
+                    "sentiment-analysis",
                     model="ProsusAI/finbert",
                     use_auth_token=self.huggingface_token
                 )
         except Exception as e:
             logger.warning(f"Failed to load FinBERT: {e}")
-    
+
+    def detect_analysis_intent(self, query: str) -> dict:
+        """
+        Detect if query contains analysis-related keywords and return suggested tools.
+        Returns a dict with 'show_buttons' (bool) and 'suggested_tools' (list).
+        """
+        query_lower = query.lower().strip()
+
+        # Check if any trigger word is present in the query
+        has_trigger_word = any(
+            trigger_word in query_lower
+            for trigger_word in self.ANALYSIS_TRIGGER_WORDS
+        )
+
+        if not has_trigger_word:
+            return {'show_buttons': False, 'suggested_tools': []}
+
+        # Build suggested tools based on specific keywords
+        suggested_tools = []
+
+        # Market Regime & AI Analysis triggers
+        regime_keywords = {
+            'regime', 'market regime', 'forecast', 'prediction', 'predict',
+            'hmm', 'hidden markov', 'ai analysis', 'market analysis',
+            'technical analysis', 'analysis', 'pattern recognition',
+            'price forecast', 'price prediction', 'stock forecast', 'stock prediction',
+            'market forecast', 'market prediction', 'ai forecast', 'ai signals',
+            'ml model', 'machine learning forecast', 'time series forecast',
+            'next day price', 'tomorrow price', 'short term forecast',
+            'swing trade signal', 'regime prediction', 'bull bear signal',
+            'trend prediction', 'volatility forecast', 'stock signals',
+            'trading signals', 'buy signal', 'sell signal'
+        }
+
+        # Backtesting triggers
+        backtest_keywords = {
+            'backtest', 'backtesting', 'strategy test', 'strategy testing',
+            'test my strategy', 'validate strategy', 'strategy', 'historical test',
+            'historical testing', 'paper trading', 'simulate trades',
+            'trading simulator', 'performance test', 'performance analysis',
+            'pnl analysis', 'profit and loss', 'drawdown', 'max drawdown',
+            'sharpe ratio', 'win rate', 'success rate', 'equity curve',
+            'trade log', 'trade history', 'optimize strategy',
+            'strategy optimization', 'parameter tuning', 'indicator test',
+            'rsi strategy', 'macd strategy', 'moving average strategy',
+            'trading strategy', 'test strategy', 'performance',
+            'historical data', 'historical analysis'
+        }
+
+        # Check for regime/forecast keywords
+        has_regime_keywords = any(kw in query_lower for kw in regime_keywords)
+
+        # Check for backtest keywords
+        has_backtest_keywords = any(kw in query_lower for kw in backtest_keywords)
+
+        # For general "analysis" or "technical analysis" queries, show BOTH tools
+        general_analysis_keywords = {'analysis', 'analyze', 'technical analysis', 'fundamental analysis', 'chart analysis', 'stock analysis'}
+        has_general_analysis = any(kw in query_lower for kw in general_analysis_keywords)
+
+        # Add Market Regime button if relevant keywords found OR general analysis
+        if has_regime_keywords or has_general_analysis:
+            suggested_tools.append({
+                'name': 'AI Market Regime & Forecast',
+                'description': 'Get AI-powered market regime analysis and trade forecasts',
+                'url': '/welth-market-regime',
+                'icon': 'chart'
+            })
+
+        # Add Backtesting button if relevant keywords found OR general analysis
+        if has_backtest_keywords or has_general_analysis:
+            suggested_tools.append({
+                'name': 'Advanced Backtesting',
+                'description': 'Test your trading strategies with historical data',
+                'url': '/backtest-beta',
+                'icon': 'backtest'
+            })
+
+        # If no specific match but general trigger words detected, suggest both
+        if not suggested_tools:
+            suggested_tools = [
+                {
+                    'name': 'AI Market Regime & Forecast',
+                    'description': 'Get AI-powered market regime analysis and trade forecasts',
+                    'url': '/welth-market-regime',
+                    'icon': 'chart'
+                },
+                {
+                    'name': 'Advanced Backtesting',
+                    'description': 'Test your trading strategies with historical data',
+                    'url': '/backtest-beta',
+                    'icon': 'backtest'
+                }
+            ]
+
+        logger.info(f"Analysis intent detected! Showing {len(suggested_tools)} tool suggestions")
+        return {
+            'show_buttons': True,
+            'suggested_tools': suggested_tools
+        }
+
     def classify_query(self, query: str) -> str:
         """
         Classify user query into one of four paths:
@@ -241,7 +383,7 @@ class NextGenAIOrchestrator:
                         'chart_data': chart_data
                     }
 
-                    logger.info(f"Fetched data for {symbol}: ${current_price} (updated: {last_updated})")
+                    logger.info(f"Fetched data for {symbol}: ₹{current_price} (updated: {last_updated})")
 
             except Exception as e:
                 logger.error(f"Error fetching data for {symbol}: {e}")
@@ -404,17 +546,24 @@ class NextGenAIOrchestrator:
         """
         query_type = self.classify_query(query)
         logger.info(f"Query classified as: {query_type}")
-        
+
+        # Detect analysis intent for all queries
+        analysis_intent = self.detect_analysis_intent(query)
+
         try:
             if query_type == 'stock_price':
-                return await self._handle_stock_price_query(query)
+                result = await self._handle_stock_price_query(query)
             elif query_type == 'news_analysis':
-                return await self._handle_news_analysis_query(query)
+                result = await self._handle_news_analysis_query(query)
             elif query_type == 'finance_explanation':
-                return await self._handle_finance_explanation_query(query, conversation_history)
+                result = await self._handle_finance_explanation_query(query, conversation_history)
             else:  # general
-                return await self._handle_general_query(query, conversation_history)
-                
+                result = await self._handle_general_query(query, conversation_history)
+
+            # Add analysis intent metadata to result
+            result['analysis_buttons'] = analysis_intent
+            return result
+
         except Exception as e:
             logger.error(f"Error processing query: {e}")
             return {
@@ -422,7 +571,8 @@ class NextGenAIOrchestrator:
                 'query_type': query_type,
                 'model_used': 'error',
                 'confidence': 0.0,
-                'error': str(e)
+                'error': str(e),
+                'analysis_buttons': {'show_buttons': False, 'suggested_tools': []}
             }
     
     async def _handle_stock_price_query(self, query: str) -> Dict[str, Any]:
@@ -467,21 +617,21 @@ class NextGenAIOrchestrator:
             messages = [
                 {
                     "role": "system",
-                    "content": "You are a financial assistant. Provide clear, concise stock price information with brief context. Include current prices, changes, and simple analysis. Keep responses under 200 words."
+                    "content": "You are a financial assistant for Indian markets. ALWAYS use ₹ (Rupees symbol) when mentioning prices, never use $ or USD. Provide clear, concise stock price information with brief context. Include current prices, changes, and simple analysis. Keep responses under 200 words."
                 },
                 {
-                    "role": "user", 
-                    "content": f"User asked: '{query}'\n\n{context}\n\nPlease provide a helpful response about these stock prices."
+                    "role": "user",
+                    "content": f"User asked: '{query}'\n\n{context}\n\nPlease provide a helpful response about these stock prices. Remember to use ₹ symbol for all prices."
                 }
             ]
-            
+
             # Try OpenRouter first, fallback to Gemini
             model_used = "openrouter"
             try:
                 response_text = self.call_openrouter_api(messages)
             except:
                 model_used = "gemini"
-                prompt = f"User asked about stock prices: '{query}'\n\nStock data: {context}\n\nProvide a helpful, concise response about these stock prices."
+                prompt = f"User asked about stock prices: '{query}'\n\nStock data: {context}\n\nProvide a helpful, concise response about these stock prices. IMPORTANT: Always use ₹ (Rupees symbol) for prices, never use $ or USD."
                 response_text = self.call_gemini_api(prompt)
             
             return {
@@ -602,9 +752,9 @@ class NextGenAIOrchestrator:
             messages = [
                 {
                     "role": "system",
-                    "content": """You are a knowledgeable financial educator. Explain financial concepts clearly and practically. 
-                    Focus on Indian markets when relevant. Always include risk warnings for investment advice. 
-                    Keep explanations beginner-friendly but comprehensive. Limit responses to 300 words."""
+                    "content": """You are a knowledgeable financial educator for Indian markets. Explain financial concepts clearly and practically.
+                    Focus on Indian markets when relevant. When mentioning prices or amounts, ALWAYS use ₹ (Rupees symbol), never $ or USD.
+                    Always include risk warnings for investment advice. Keep explanations beginner-friendly but comprehensive. Limit responses to 300 words."""
                 }
             ]
             

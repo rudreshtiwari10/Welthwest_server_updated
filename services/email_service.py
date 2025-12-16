@@ -161,19 +161,26 @@ class EmailService:
         
         return self.send_email(user_email, subject, template, context)
     
-    def send_registration_otp(self, user_email: str, otp: str) -> bool:
+    def send_registration_otp(self, user_email: str, otp: str, first_name: str = "", last_name: str = "") -> bool:
         """Send registration OTP email for email verification"""
-        
+
         template = self._get_registration_otp_template()
-        
+
+        # Create greeting with user's name if provided
+        full_name = f"{first_name} {last_name}".strip()
+        greeting = f"Hi {full_name}," if full_name else "Hello,"
+
         context = {
             'user_email': user_email,
             'otp': otp,
-            'expiry_minutes': 15
+            'expiry_minutes': 15,
+            'greeting': greeting,
+            'first_name': first_name,
+            'last_name': last_name
         }
-        
+
         subject = "Email Verification OTP - WelthWest"
-        
+
         return self.send_email(user_email, subject, template, context)
     
     def send_new_user_notification_to_company(self, user_email: str, user_name: str, registration_date: str, registration_method: str = "Email & Password") -> bool:
@@ -447,9 +454,9 @@ class EmailService:
                 </div>
                 
                 <div class="content">
-                    <h2>Email Verification Required</h2>
+                    <h2>{{ greeting }}</h2>
                     <p>Thank you for registering with WelthWest! To complete your account setup, please verify your email address.</p>
-                    
+
                     <div class="otp-box">
                         <h3>Your Verification Code:</h3>
                         <div class="otp-code">{{ otp }}</div>

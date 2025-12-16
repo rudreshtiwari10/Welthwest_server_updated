@@ -17,6 +17,9 @@ import logging
 import os
 from werkzeug.utils import secure_filename
 
+# Import middleware
+from middleware.anon_limit import anon_or_auth_feature_limit
+
 # Import services
 from services.finance_orchestrator import process_finance_query
 from services.indicators_service import get_indicators, get_signal_summary
@@ -57,6 +60,7 @@ def validate_json_request(f):
 
 @finance_ai_bp.route('/query', methods=['POST'])
 @validate_json_request
+@anon_or_auth_feature_limit('welth-ai-assistant')
 def enhanced_query():
     """
     Main enhanced query endpoint - processes any finance question with conversation context
@@ -77,10 +81,13 @@ def enhanced_query():
         "ai_response": "Based on the technical analysis...",
         "data": {...},
         "chart_base64": "...",
-        "timestamp": "2024-01-01T12:00:00"
+        "timestamp": "2024-01-01T12:00:00",
+        "usage": {...}  // For anonymous users
     }
     """
     try:
+        from flask import g
+
         data = request.get_json()
         query = data.get('query', '').strip()
         conversation_history = data.get('conversation_history', [])
@@ -90,6 +97,14 @@ def enhanced_query():
 
         # Process query through orchestrator with conversation context
         result = process_finance_query(query, conversation_history)
+
+        # Add usage info for anonymous users (set by middleware)
+        if hasattr(g, '_anon_feature_usage'):
+            result['usage'] = {
+                'remaining': g._anon_feature_usage['remaining'],
+                'limit': g._anon_feature_usage['limit'],
+                'used': g._anon_feature_usage['used']
+            }
 
         return jsonify(result), 200
 
