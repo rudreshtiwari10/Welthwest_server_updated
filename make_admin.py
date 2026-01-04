@@ -45,7 +45,7 @@ def make_admin(email):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        email = "test1113@email.com"  # Default email
+        email = "test1112@email.com"  # Default email
     else:
         email = sys.argv[1]
 

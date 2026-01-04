@@ -19,6 +19,12 @@ from routes.premium import premium_bp
 from routes.payment import payment_bp
 from routes.subscription import subscription_bp
 from routes.finance_ai_routes import register_finance_ai_routes
+from routes.news_blog_routes import news_blog_bp
+from routes.admin import admin_bp
+from routes.admin_content import admin_content_bp
+from routes.admin_support import admin_support_bp
+from routes.admin_monitoring import admin_monitoring_bp
+from routes.support import support_bp
 from middleware.feature_limit import feature_limit, admin_required
 from database.seed_plans import initialize_premium_system
 from services.google_auth_service import GoogleAuthService
@@ -194,6 +200,16 @@ session_service = InMemorySessionService()
 app.register_blueprint(premium_bp)
 app.register_blueprint(payment_bp)
 app.register_blueprint(subscription_bp)
+app.register_blueprint(news_blog_bp)
+app.register_blueprint(admin_bp)
+
+# Register user support blueprint
+app.register_blueprint(support_bp)
+
+# Register new admin module blueprints
+app.register_blueprint(admin_content_bp)
+app.register_blueprint(admin_support_bp)
+app.register_blueprint(admin_monitoring_bp)
 
 # Register enhanced Finance AI routes
 register_finance_ai_routes(app)
