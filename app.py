@@ -25,6 +25,7 @@ from routes.admin_content import admin_content_bp
 from routes.admin_support import admin_support_bp
 from routes.admin_monitoring import admin_monitoring_bp
 from routes.support import support_bp
+from routes.mtf_screener_routes import mtf_screener_bp
 from middleware.feature_limit import feature_limit, admin_required
 from database.seed_plans import initialize_premium_system
 from services.google_auth_service import GoogleAuthService
@@ -210,6 +211,9 @@ app.register_blueprint(support_bp)
 app.register_blueprint(admin_content_bp)
 app.register_blueprint(admin_support_bp)
 app.register_blueprint(admin_monitoring_bp)
+
+# Register MTF Stock Screener blueprint
+app.register_blueprint(mtf_screener_bp)
 
 # Register enhanced Finance AI routes
 register_finance_ai_routes(app)

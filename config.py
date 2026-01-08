@@ -165,32 +165,37 @@ class Config:
         }
 
         # Premium Plan Limits (per-feature, per-day)
-        # Feature keys: welth-market-regime, welth-ai-assistant, backtest-beta
+        # Feature keys: welth-market-regime, welth-ai-assistant, backtest-beta, mtf-screener
         self.PLAN_LIMITS = {
             'FREE': {
                 'welth-market-regime': int(os.getenv('PLAN_FREE__MARKET_REGIME', 10)),
                 'welth-ai-assistant': int(os.getenv('PLAN_FREE__AI_ASSISTANT', 15)),
-                'backtest-beta': int(os.getenv('PLAN_FREE__BACKTEST', 5))
+                'backtest-beta': int(os.getenv('PLAN_FREE__BACKTEST', 5)),
+                'mtf-screener': int(os.getenv('PLAN_FREE__MTF_SCREENER', 5))
             },
             'STARTER': {
                 'welth-market-regime': int(os.getenv('PLAN_STARTER__MARKET_REGIME', 20)),
                 'welth-ai-assistant': int(os.getenv('PLAN_STARTER__AI_ASSISTANT', 25)),
-                'backtest-beta': int(os.getenv('PLAN_STARTER__BACKTEST', 15))
+                'backtest-beta': int(os.getenv('PLAN_STARTER__BACKTEST', 15)),
+                'mtf-screener': int(os.getenv('PLAN_STARTER__MTF_SCREENER', 15))
             },
             'PRO': {
                 'welth-market-regime': int(os.getenv('PLAN_PRO__MARKET_REGIME', 30)),
                 'welth-ai-assistant': int(os.getenv('PLAN_PRO__AI_ASSISTANT', 35)),
-                'backtest-beta': int(os.getenv('PLAN_PRO__BACKTEST', 25))
+                'backtest-beta': int(os.getenv('PLAN_PRO__BACKTEST', 25)),
+                'mtf-screener': int(os.getenv('PLAN_PRO__MTF_SCREENER', 30))
             },
             'ADVANCED': {
                 'welth-market-regime': int(os.getenv('PLAN_ADVANCED__MARKET_REGIME', 40)),
                 'welth-ai-assistant': int(os.getenv('PLAN_ADVANCED__AI_ASSISTANT', 45)),
-                'backtest-beta': int(os.getenv('PLAN_ADVANCED__BACKTEST', 40))
+                'backtest-beta': int(os.getenv('PLAN_ADVANCED__BACKTEST', 40)),
+                'mtf-screener': int(os.getenv('PLAN_ADVANCED__MTF_SCREENER', 50))
             },
             'ENTERPRISE': {
                 'welth-market-regime': int(os.getenv('PLAN_ENTERPRISE__MARKET_REGIME', 50)),
                 'welth-ai-assistant': int(os.getenv('PLAN_ENTERPRISE__AI_ASSISTANT', 55)),
-                'backtest-beta': int(os.getenv('PLAN_ENTERPRISE__BACKTEST', 45))
+                'backtest-beta': int(os.getenv('PLAN_ENTERPRISE__BACKTEST', 45)),
+                'mtf-screener': int(os.getenv('PLAN_ENTERPRISE__MTF_SCREENER', 1010))
             }
         }
 
@@ -198,7 +203,8 @@ class Config:
         self.ANON_LIMITS = {
             'welth-market-regime': int(os.getenv('ANON_MARKET_REGIME_LIMIT', 0)),
             'welth-ai-assistant': int(os.getenv('ANON_AI_ASSISTANT_LIMIT', 0)),
-            'backtest-beta': int(os.getenv('ANON_BACKTEST_LIMIT', 0))
+            'backtest-beta': int(os.getenv('ANON_BACKTEST_LIMIT', 0)),
+            'mtf-screener': int(os.getenv('ANON_MTF_SCREENER_LIMIT', 0))
         }
 
         # Usage Counter Configuration
