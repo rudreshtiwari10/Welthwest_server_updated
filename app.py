@@ -19,7 +19,7 @@ from routes.premium import premium_bp
 from routes.payment import payment_bp
 from routes.subscription import subscription_bp
 from routes.finance_ai_routes import register_finance_ai_routes
-from routes.news_blog_routes import news_blog_bp
+# from routes.news_blog_routes import news_blog_bp  # Commented out - using direct endpoints in app.py
 from routes.admin import admin_bp
 from routes.admin_content import admin_content_bp
 from routes.admin_support import admin_support_bp
@@ -30,6 +30,7 @@ from database.seed_plans import initialize_premium_system
 from services.google_auth_service import GoogleAuthService
 from services.feedback_service import feedback_service
 from services.news_service import news_service
+from services.news_aggregator import NewsAggregator
 from middleware.subscription_middleware import require_subscription_feature, check_market_data_access
 from middleware.anon_limit import anon_or_auth_feature_limit
 import os
@@ -200,7 +201,7 @@ session_service = InMemorySessionService()
 app.register_blueprint(premium_bp)
 app.register_blueprint(payment_bp)
 app.register_blueprint(subscription_bp)
-app.register_blueprint(news_blog_bp)
+# app.register_blueprint(news_blog_bp)  # Commented out - using direct endpoints in app.py
 app.register_blueprint(admin_bp)
 
 # Register user support blueprint
@@ -4385,30 +4386,58 @@ def market_indices_new():
 
 @app.route('/api/news', methods=['GET'])
 def get_news():
-    """Get all news posts with pagination and filtering"""
+    """
+    Get news from external sources
+    Query params:
+    - category: all|indian_markets|global_markets|nse|bse|ipos|economy|banking|corporate
+    - region: indian|global
+    - limit: number of articles
+    """
     try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 10))
-        category = request.args.get('category')
-        featured_only = request.args.get('featured') == 'true'
-        
-        result = news_service.get_all_news(
-            page=page, 
-            limit=limit, 
-            category=category, 
-            featured_only=featured_only
-        )
-        
-        if result['success']:
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 500
-            
+        category = request.args.get('category', 'all')
+        region = request.args.get('region', 'indian')
+        limit = int(request.args.get('limit', 50))
+
+        result = NewsAggregator.get_news(category=category, region=region, limit=limit)
+
+        return jsonify(result), 200
+
     except Exception as e:
-        logger.error(f"Error in get_news endpoint: {str(e)}")
+        logger.error(f"Error fetching news: {str(e)}")
         return jsonify({
-            "success": False,
-            "message": f"Internal server error: {str(e)}"
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/news/search', methods=['GET'])
+def search_news():
+    """
+    Search news articles
+    Query params:
+    - q: search query
+    - category: filter by category
+    - limit: number of results
+    """
+    try:
+        query = request.args.get('q', '')
+        category = request.args.get('category', 'all')
+        limit = int(request.args.get('limit', 20))
+
+        if not query:
+            return jsonify({
+                'success': False,
+                'error': 'Search query required'
+            }), 400
+
+        result = NewsAggregator.search_news(query=query, category=category, limit=limit)
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.error(f"Error searching news: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
         }), 500
 
 @app.route('/api/blogs', methods=['GET'])
@@ -4419,24 +4448,31 @@ def get_blogs():
         limit = int(request.args.get('limit', 10))
         category = request.args.get('category')
         featured_only = request.args.get('featured') == 'true'
-        
+
+        logger.info(f"GET /api/blogs - Page: {page}, Limit: {limit}, Category: {category}")
+
         result = news_service.get_all_blogs(
-            page=page, 
-            limit=limit, 
-            category=category, 
+            page=page,
+            limit=limit,
+            category=category,
             featured_only=featured_only
         )
-        
+
+        logger.info(f"Result from news_service: success={result.get('success')}, blogs_count={len(result.get('blogs', []))}")
+
         if result['success']:
             return jsonify(result), 200
         else:
             return jsonify(result), 500
-            
+
     except Exception as e:
-        logger.error(f"Error in get_blogs endpoint: {str(e)}")
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error in get_blogs endpoint: {str(e)}\n{error_trace}")
         return jsonify({
             "success": False,
-            "message": f"Internal server error: {str(e)}"
+            "message": f"Internal server error: {str(e)}",
+            "error": str(e)
         }), 500
 
 @app.route('/api/news/<post_id>', methods=['GET'])
@@ -4624,9 +4660,171 @@ def create_blog_post():
             return jsonify(result), 201
         else:
             return jsonify(result), 500
-            
+
     except Exception as e:
         logger.error(f"Error in create_blog_post endpoint: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Internal server error: {str(e)}"
+        }), 500
+
+@app.route('/api/blogs/debug/count', methods=['GET'])
+def debug_blogs_count():
+    """Debug endpoint to check blog count in database"""
+    try:
+        from services.news_service import NewsService
+        service = NewsService()
+
+        # Get total blogs
+        all_blogs = service.blogs_collection.count_documents({})
+        blogs_with_type = service.blogs_collection.count_documents({"type": "blog"})
+
+        # Get sample blog
+        sample = service.blogs_collection.find_one({})
+        sample_id = str(sample["_id"]) if sample else None
+        sample_type = sample.get("type") if sample else None
+
+        return jsonify({
+            "success": True,
+            "total_documents": all_blogs,
+            "documents_with_type_blog": blogs_with_type,
+            "sample_id": sample_id,
+            "sample_type": sample_type,
+            "sample_doc": {k: str(v) for k, v in sample.items()} if sample else None
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/blogs/debug/test', methods=['GET'])
+def debug_blogs_test():
+    """Test endpoint to check if blogs can be fetched and serialized"""
+    try:
+        from services.news_service import NewsService
+        from datetime import datetime
+        service = NewsService()
+
+        # Try to fetch blogs directly
+        blogs_raw = list(service.blogs_collection.find({"type": "blog"}).limit(3))
+        logger.info(f"Found {len(blogs_raw)} raw blogs")
+
+        # Manually serialize each blog
+        serialized = []
+        for i, blog in enumerate(blogs_raw):
+            try:
+                logger.info(f"Serializing blog {i}: keys = {list(blog.keys())}")
+                item = {
+                    "_id": str(blog.get("_id", "")),
+                    "title": str(blog.get("title", "")),
+                    "author": str(blog.get("author", "")),
+                    "category": str(blog.get("category", "")),
+                }
+
+                # Check datetime fields
+                created_at = blog.get("created_at")
+                logger.info(f"created_at type: {type(created_at)}, value: {created_at}")
+
+                if created_at:
+                    if hasattr(created_at, 'isoformat'):
+                        item["createdAt"] = created_at.isoformat()
+                    else:
+                        item["createdAt"] = str(created_at)
+                else:
+                    item["createdAt"] = ""
+
+                serialized.append(item)
+                logger.info(f"Successfully serialized blog {i}")
+            except Exception as e:
+                logger.error(f"Error serializing blog {i}: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+
+        return jsonify({
+            "success": True,
+            "count": len(serialized),
+            "blogs": serialized
+        }), 200
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Debug test error: {str(e)}\n{error_trace}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "trace": error_trace
+        }), 500
+
+@app.route('/api/blogs/<post_id>', methods=['PUT'])
+@jwt_required()
+def update_blog_post(post_id):
+    """Update a blog post (admin only)"""
+    try:
+        current_user_id = get_jwt_identity()
+        user_info = user_service.get_user_by_id(current_user_id)
+
+        if not user_info or user_info.get('role') != 'admin':
+            return jsonify({
+                "success": False,
+                "message": "Admin access required"
+            }), 403
+
+        data = request.get_json()
+
+        if not data:
+            return jsonify({
+                "success": False,
+                "message": "Request body is required"
+            }), 400
+
+        result = news_service.update_blog_post(
+            post_id=post_id,
+            title=data.get('title'),
+            content=data.get('content'),
+            author=data.get('author'),
+            category=data.get('category'),
+            tags=data.get('tags'),
+            image_url=data.get('image_url'),
+            summary=data.get('summary'),
+            status=data.get('status')
+        )
+
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 500
+
+    except Exception as e:
+        logger.error(f"Error in update_blog_post endpoint: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Internal server error: {str(e)}"
+        }), 500
+
+@app.route('/api/blogs/<post_id>', methods=['DELETE'])
+@jwt_required()
+def delete_blog_post(post_id):
+    """Delete a blog post (admin only)"""
+    try:
+        current_user_id = get_jwt_identity()
+        user_info = user_service.get_user_by_id(current_user_id)
+
+        if not user_info or user_info.get('role') != 'admin':
+            return jsonify({
+                "success": False,
+                "message": "Admin access required"
+            }), 403
+
+        result = news_service.delete_post(post_id, post_type="blog")
+
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 500
+
+    except Exception as e:
+        logger.error(f"Error in delete_blog_post endpoint: {str(e)}")
         return jsonify({
             "success": False,
             "message": f"Internal server error: {str(e)}"

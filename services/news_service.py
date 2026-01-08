@@ -96,12 +96,18 @@ class NewsService:
             
             result = self.blogs_collection.insert_one(blog_post)
             blog_post["_id"] = str(result.inserted_id)
-            
-            logger.info(f"Blog post created with ID: {result.inserted_id}")
+
+            # Convert datetime to ISO format for JSON response
+            if "created_at" in blog_post and blog_post["created_at"]:
+                blog_post["created_at"] = blog_post["created_at"].isoformat()
+            if "updated_at" in blog_post and blog_post["updated_at"]:
+                blog_post["updated_at"] = blog_post["updated_at"].isoformat()
+
+            logger.info(f"Blog post created successfully with ID: {result.inserted_id}, Title: {title}, Type: blog")
             return {
                 "success": True,
                 "message": "Blog post created successfully",
-                "post": blog_post
+                "blog": blog_post
             }
             
         except Exception as e:
@@ -110,7 +116,92 @@ class NewsService:
                 "success": False,
                 "message": f"Error creating blog post: {str(e)}"
             }
-    
+
+    def update_blog_post(self, post_id: str, title: str = None, content: str = None,
+                        author: str = None, category: str = None, tags: List[str] = None,
+                        image_url: str = None, summary: str = None, status: str = None) -> Dict[str, Any]:
+        """Update a blog post"""
+        try:
+            # Build update object with only provided fields
+            update_data = {
+                "updated_at": datetime.now(timezone.utc)
+            }
+
+            if title is not None:
+                update_data["title"] = title
+            if content is not None:
+                update_data["content"] = content
+                # Update summary if content changes
+                if summary is None:
+                    update_data["summary"] = content[:200] + "..." if len(content) > 200 else content
+            if summary is not None:
+                update_data["summary"] = summary
+            if author is not None:
+                update_data["author"] = author
+            if category is not None:
+                update_data["category"] = category
+            if tags is not None:
+                update_data["tags"] = tags
+            if image_url is not None:
+                update_data["image_url"] = image_url
+            if status is not None:
+                update_data["status"] = status
+
+            result = self.blogs_collection.update_one(
+                {"_id": ObjectId(post_id)},
+                {"$set": update_data}
+            )
+
+            if result.matched_count == 0:
+                return {
+                    "success": False,
+                    "message": "Blog post not found"
+                }
+
+            # Fetch updated post
+            updated_post = self.blogs_collection.find_one({"_id": ObjectId(post_id)})
+            updated_post["_id"] = str(updated_post["_id"])
+
+            logger.info(f"Blog post updated with ID: {post_id}")
+            return {
+                "success": True,
+                "message": "Blog post updated successfully",
+                "blog": updated_post
+            }
+
+        except Exception as e:
+            logger.error(f"Error updating blog post: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Error updating blog post: {str(e)}"
+            }
+
+    def delete_post(self, post_id: str, post_type: str = "blog") -> Dict[str, Any]:
+        """Delete a post by ID"""
+        try:
+            collection = self.news_collection if post_type == "news" else self.blogs_collection
+
+            result = collection.delete_one({"_id": ObjectId(post_id)})
+
+            if result.deleted_count == 0:
+                return {
+                    "success": False,
+                    "message": f"{post_type.title()} post not found"
+                }
+
+            logger.info(f"{post_type.title()} post deleted with ID: {post_id}")
+            return {
+                "success": True,
+                "message": f"{post_type.title()} post deleted successfully"
+            }
+
+        except Exception as e:
+            logger.error(f"Error deleting {post_type} post: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Error deleting {post_type} post: {str(e)}"
+            }
+
     def get_all_news(self, page: int = 1, limit: int = 10, 
                      category: str = None, featured_only: bool = False) -> Dict[str, Any]:
         """Get all news posts with pagination and filtering"""
@@ -150,7 +241,7 @@ class NewsService:
                 "message": f"Error fetching news posts: {str(e)}"
             }
     
-    def get_all_blogs(self, page: int = 1, limit: int = 10, 
+    def get_all_blogs(self, page: int = 1, limit: int = 10,
                       category: str = None, featured_only: bool = False) -> Dict[str, Any]:
         """Get all blog posts with pagination and filtering"""
         try:
@@ -159,27 +250,74 @@ class NewsService:
                 query["category"] = category
             if featured_only:
                 query["is_featured"] = True
-            
+
             skip = (page - 1) * limit
-            
+
             total_count = self.blogs_collection.count_documents(query)
-            
+            logger.info(f"Fetching blogs - Query: {query}, Total count: {total_count}, Page: {page}, Limit: {limit}")
+
             blog_posts = list(self.blogs_collection.find(query)
                             .sort("created_at", -1)
                             .skip(skip)
                             .limit(limit))
-            
-            # Convert ObjectId to string for JSON serialization
+
+            logger.info(f"Found {len(blog_posts)} blog posts")
+
+            # Convert all fields to JSON-serializable format
+            serialized_blogs = []
             for post in blog_posts:
-                post["_id"] = str(post["_id"])
-            
+                try:
+                    serialized_post = {
+                        "_id": str(post.get("_id", "")),
+                        "title": post.get("title", ""),
+                        "content": post.get("content", ""),
+                        "summary": post.get("summary", ""),
+                        "author": post.get("author", ""),
+                        "category": post.get("category", "General"),
+                        "tags": post.get("tags", []),
+                        "imageUrl": post.get("image_url", ""),
+                        "status": post.get("status", "published"),
+                        "viewCount": post.get("view_count", 0),
+                        "likeCount": post.get("like_count", 0),
+                        "isFeatured": post.get("is_featured", False),
+                        "type": post.get("type", "blog"),
+                    }
+
+                    # Handle datetime fields
+                    created_at = post.get("created_at")
+                    if created_at:
+                        if isinstance(created_at, datetime):
+                            serialized_post["createdAt"] = created_at.isoformat()
+                        else:
+                            serialized_post["createdAt"] = str(created_at)
+                    else:
+                        serialized_post["createdAt"] = ""
+
+                    updated_at = post.get("updated_at")
+                    if updated_at:
+                        if isinstance(updated_at, datetime):
+                            serialized_post["updatedAt"] = updated_at.isoformat()
+                        else:
+                            serialized_post["updatedAt"] = str(updated_at)
+                    else:
+                        serialized_post["updatedAt"] = ""
+
+                    serialized_blogs.append(serialized_post)
+                except Exception as e:
+                    logger.error(f"Error serializing blog post {post.get('_id', 'unknown')}: {str(e)}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    continue
+
+            logger.info(f"Successfully serialized {len(serialized_blogs)} blogs")
+
             return {
                 "success": True,
-                "posts": blog_posts,
-                "total_count": total_count,
+                "blogs": serialized_blogs,
+                "total": total_count,
                 "page": page,
                 "limit": limit,
-                "total_pages": (total_count + limit - 1) // limit
+                "totalPages": (total_count + limit - 1) // limit
             }
             
         except Exception as e:
@@ -208,10 +346,12 @@ class NewsService:
                 {"_id": ObjectId(post_id)},
                 {"$inc": {"view_count": 1}}
             )
-            
+
+            # Return appropriate key based on post type
+            result_key = "blog" if post_type == "blog" else "post"
             return {
                 "success": True,
-                "post": post
+                result_key: post
             }
             
         except Exception as e:
