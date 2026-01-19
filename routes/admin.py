@@ -28,6 +28,30 @@ from pymongo import MongoClient
 db = MongoClient(config.MONGODB_URI)[config.DB_NAME]
 
 
+# Helper function to convert all ObjectIds to strings recursively
+def serialize_mongodb_doc(doc):
+    """
+    Recursively convert all ObjectId instances to strings in a MongoDB document
+    Also handles datetime objects
+    """
+    if doc is None:
+        return None
+
+    if isinstance(doc, ObjectId):
+        return str(doc)
+
+    if isinstance(doc, datetime):
+        return doc.isoformat()
+
+    if isinstance(doc, dict):
+        return {key: serialize_mongodb_doc(value) for key, value in doc.items()}
+
+    if isinstance(doc, list):
+        return [serialize_mongodb_doc(item) for item in doc]
+
+    return doc
+
+
 # ==========================
 # AUDIT LOGGING UTILITIES
 # ==========================
@@ -161,10 +185,6 @@ def get_dashboard_overview():
             {'first_name': 1, 'last_name': 1, 'email': 1, 'created_at': 1, 'subscription.plan': 1}
         ).sort('created_at', DESCENDING).limit(10))
 
-        # Serialize ObjectIds
-        for user in recent_users:
-            user['_id'] = str(user['_id'])
-
         overview = {
             'total_users': total_users,
             'active_premium_users': active_premium_users,
@@ -177,6 +197,9 @@ def get_dashboard_overview():
             'recent_users': recent_users,
             'timestamp': datetime.utcnow().isoformat()
         }
+
+        # Serialize all MongoDB objects (ObjectIds, datetimes)
+        overview = serialize_mongodb_doc(overview)
 
         log_admin_action(admin_id, 'view', 'dashboard_overview', 'overview', metadata={'metrics_count': len(overview)})
 
@@ -247,17 +270,12 @@ def list_users():
         sort_direction = DESCENDING if sort_order == 'desc' else ASCENDING
         users = list(db.users.find(query).sort(sort_by, sort_direction).skip(skip).limit(limit))
 
-        # Serialize and clean up sensitive data
+        # Clean up sensitive data
         for user in users:
-            user['_id'] = str(user['_id'])
             user.pop('password', None)  # Never send password hash
-            # Format dates
-            if 'created_at' in user:
-                user['created_at'] = user['created_at'].isoformat() if isinstance(user['created_at'], datetime) else user['created_at']
-            if 'updated_at' in user:
-                user['updated_at'] = user['updated_at'].isoformat() if isinstance(user['updated_at'], datetime) else user['updated_at']
 
-        response = {
+        # Serialize all MongoDB documents to JSON-safe format
+        response = serialize_mongodb_doc({
             'users': users,
             'pagination': {
                 'page': page,
@@ -265,7 +283,7 @@ def list_users():
                 'total': total,
                 'pages': (total + limit - 1) // limit
             }
-        }
+        })
 
         log_admin_action(admin_id, 'list', 'users', 'all', metadata={'count': len(users), 'filters': query})
 
@@ -291,17 +309,11 @@ def get_user_details(user_id):
         if not user:
             return jsonify({"error": "User not found"}), 404
 
-        # Serialize
-        user['_id'] = str(user['_id'])
+        # Remove password
         user.pop('password', None)
 
         # Get purchase history (transactions)
         transactions = list(db.transactions.find({'user_id': ObjectId(user_id)}).sort('created_at', DESCENDING).limit(50))
-        for txn in transactions:
-            txn['_id'] = str(txn['_id'])
-            txn['user_id'] = str(txn['user_id'])
-            if 'created_at' in txn:
-                txn['created_at'] = txn['created_at'].isoformat() if isinstance(txn['created_at'], datetime) else txn['created_at']
 
         # Get saved backtests count
         backtests_count = db.backtests.count_documents({'user_id': user_id})
@@ -319,11 +331,6 @@ def get_user_details(user_id):
             'created_at': {'$gte': thirty_days_ago}
         }).sort('created_at', DESCENDING).limit(100))
 
-        for log in usage_logs:
-            log['_id'] = str(log['_id'])
-            if 'created_at' in log:
-                log['created_at'] = log['created_at'].isoformat() if isinstance(log['created_at'], datetime) else log['created_at']
-
         # Build activity timeline
         activity_timeline = {
             'backtests': backtests_count,
@@ -332,12 +339,13 @@ def get_user_details(user_id):
             'recent_usage': usage_logs
         }
 
-        response = {
+        # Serialize all MongoDB documents to JSON-safe format
+        response = serialize_mongodb_doc({
             'user': user,
             'transactions': transactions,
             'activity': activity_timeline,
-            'last_fetched': datetime.utcnow().isoformat()
-        }
+            'last_fetched': datetime.utcnow()
+        })
 
         log_admin_action(admin_id, 'view', 'user', user_id)
 
@@ -390,8 +398,10 @@ def update_user(user_id):
 
         # Get updated user
         user_after = db.users.find_one({'_id': ObjectId(user_id)})
-        user_after['_id'] = str(user_after['_id'])
         user_after.pop('password', None)
+
+        # Serialize all MongoDB objects
+        user_after = serialize_mongodb_doc(user_after)
 
         # Log admin action
         log_admin_action(
@@ -519,14 +529,15 @@ def update_user_subscription(user_id):
             metadata={'admin_manual_update': True}
         )
 
-        return jsonify({
+        response = {
             "message": f"User subscription {action}d to {plan} successfully",
-            "subscription": {
-                **new_subscription,
-                'start_date': new_subscription['start_date'].isoformat(),
-                'expiry_date': new_subscription['expiry_date'].isoformat() if new_subscription['expiry_date'] else None
-            }
-        }), 200
+            "subscription": new_subscription
+        }
+
+        # Serialize all MongoDB objects (ObjectIds, datetimes)
+        response = serialize_mongodb_doc(response)
+
+        return jsonify(response), 200
 
     except Exception as e:
         logger.error(f"Error updating user subscription: {e}", exc_info=True)
@@ -772,15 +783,6 @@ def list_transactions():
         # Execute query
         transactions = list(db.transactions.find(query).sort('created_at', DESCENDING).skip(skip).limit(limit))
 
-        # Serialize
-        for txn in transactions:
-            txn['_id'] = str(txn['_id'])
-            txn['user_id'] = str(txn['user_id'])
-            if 'created_at' in txn:
-                txn['created_at'] = txn['created_at'].isoformat() if isinstance(txn['created_at'], datetime) else txn['created_at']
-            if 'completed_at' in txn and txn['completed_at']:
-                txn['completed_at'] = txn['completed_at'].isoformat() if isinstance(txn['completed_at'], datetime) else txn['completed_at']
-
         response = {
             'transactions': transactions,
             'pagination': {
@@ -790,6 +792,9 @@ def list_transactions():
                 'pages': (total + limit - 1) // limit
             }
         }
+
+        # Serialize all MongoDB objects (ObjectIds, datetimes)
+        response = serialize_mongodb_doc(response)
 
         log_admin_action(admin_id, 'list', 'transactions', 'all', metadata={'count': len(transactions), 'filters': query})
 
@@ -813,15 +818,13 @@ def get_transaction_details(transaction_id):
         if not transaction:
             return jsonify({"error": "Transaction not found"}), 404
 
-        # Serialize
-        transaction['_id'] = str(transaction['_id'])
-        transaction['user_id'] = str(transaction['user_id'])
-
         # Get associated user info
         user = db.users.find_one({'_id': ObjectId(transaction['user_id'])}, {'email': 1, 'first_name': 1, 'last_name': 1})
         if user:
-            user['_id'] = str(user['_id'])
             transaction['user_info'] = user
+
+        # Serialize all MongoDB objects (ObjectIds, datetimes)
+        transaction = serialize_mongodb_doc(transaction)
 
         log_admin_action(admin_id, 'view', 'transaction', transaction_id)
 
@@ -1120,12 +1123,6 @@ def get_audit_logs():
         # Execute query
         logs = list(db.audit_logs.find(query).sort('timestamp', DESCENDING).skip(skip).limit(limit))
 
-        # Serialize
-        for log in logs:
-            log['_id'] = str(log['_id'])
-            if 'timestamp' in log:
-                log['timestamp'] = log['timestamp'].isoformat() if isinstance(log['timestamp'], datetime) else log['timestamp']
-
         response = {
             'logs': logs,
             'pagination': {
@@ -1135,6 +1132,9 @@ def get_audit_logs():
                 'pages': (total + limit - 1) // limit
             }
         }
+
+        # Serialize all MongoDB objects (ObjectIds, datetimes)
+        response = serialize_mongodb_doc(response)
 
         return jsonify(response), 200
 
@@ -1179,12 +1179,6 @@ def get_all_feedback():
         # Execute query
         feedback_list = list(db.feedback.find(query).sort('created_at', DESCENDING).skip(skip).limit(limit))
 
-        # Serialize
-        for fb in feedback_list:
-            fb['_id'] = str(fb['_id'])
-            if 'created_at' in fb:
-                fb['created_at'] = fb['created_at'].isoformat() if isinstance(fb['created_at'], datetime) else fb['created_at']
-
         response = {
             'feedback': feedback_list,
             'pagination': {
@@ -1194,6 +1188,9 @@ def get_all_feedback():
                 'pages': (total + limit - 1) // limit
             }
         }
+
+        # Serialize all MongoDB objects (ObjectIds, datetimes)
+        response = serialize_mongodb_doc(response)
 
         log_admin_action(admin_id, 'list', 'feedback', 'all', metadata={'count': len(feedback_list)})
 
@@ -1219,8 +1216,6 @@ def get_system_settings():
 
         # Get plans
         plans = list(db.plans.find({}))
-        for plan in plans:
-            plan['_id'] = str(plan['_id'])
 
         # Get system stats
         stats = {
@@ -1237,6 +1232,9 @@ def get_system_settings():
             'system_stats': stats,
             'timestamp': datetime.utcnow().isoformat()
         }
+
+        # Serialize all MongoDB objects (ObjectIds, datetimes)
+        settings = serialize_mongodb_doc(settings)
 
         log_admin_action(admin_id, 'view', 'system_settings', 'settings')
 

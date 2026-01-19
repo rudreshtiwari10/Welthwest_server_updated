@@ -198,6 +198,33 @@ user_service = UserService()
 subscription_service = SubscriptionService()
 session_service = InMemorySessionService()
 
+# Add additional claims to JWT token (subscription info for side projects)
+@jwt.additional_claims_loader
+def add_claims_to_jwt(identity):
+    """Add user subscription and profile info to JWT token"""
+    try:
+        # Get user data
+        user_data = user_service.get_user_by_id(identity)
+
+        if not user_data:
+            return {}
+
+        # Return claims to be added to the token
+        return {
+            "userId": str(user_data.get('id', identity)),
+            "username": user_data.get('username', ''),
+            "email": user_data.get('email', ''),
+            "role": user_data.get('role', 'user'),
+            "subscription": {
+                "plan": user_data.get('subscription', {}).get('plan', 'FREE'),
+                "is_active": user_data.get('subscription', {}).get('is_active', False),
+                "expiry_date": user_data.get('subscription', {}).get('expiry_date', None)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error adding claims to JWT: {str(e)}")
+        return {}
+
 # Register premium, payment, and subscription blueprints
 app.register_blueprint(premium_bp)
 app.register_blueprint(payment_bp)
