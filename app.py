@@ -30,6 +30,7 @@ from middleware.feature_limit import feature_limit, admin_required
 from database.seed_plans import initialize_premium_system
 from services.google_auth_service import GoogleAuthService
 from services.feedback_service import feedback_service
+from services.notification_service import notification_service
 from services.news_service import news_service
 from services.news_aggregator import NewsAggregator
 from middleware.subscription_middleware import require_subscription_feature, check_market_data_access
@@ -676,20 +677,26 @@ def login():
     
     # Store refresh token
     user_service.store_refresh_token(user_data['id'], refresh_token)
-    
+
+    # Create login notification
+    try:
+        notification_service.notify_login(user_id=str(user_data['id']))
+    except Exception as e:
+        logger.warning(f"Failed to create login notification: {str(e)}")
+
     response_data = {
         "message": "Login successful",
         "user": user_data,
         "access_token": access_token,
         "refresh_token": refresh_token
     }
-    
+
     # Include session info if conversion happened
     if session_id:
         response_data["session_converted"] = conversion_success
         if conversion_success:
             response_data["session_id"] = session_id
-    
+
     return jsonify(response_data), 200
 
 @app.route('/api/auth/refresh', methods=['POST'])
@@ -723,17 +730,28 @@ def refresh():
 
 @app.route('/api/auth/logout', methods=['POST'])
 @validate_json_request
+@jwt_required(optional=True)
 def logout():
     """Logout user"""
     data = request.get_json()
-    
+
     if 'refresh_token' not in data:
         return jsonify({"error": "Refresh token is required"}), 400
-    
+
+    # Get user ID before invalidating token (for notification)
+    user_id = get_jwt_identity()
+
     # Invalidate refresh token
     success = user_service.invalidate_refresh_token(data['refresh_token'])
-    
+
     if success:
+        # Create logout notification if user ID is available
+        if user_id:
+            try:
+                notification_service.notify_logout(user_id=user_id)
+            except Exception as e:
+                logger.warning(f"Failed to create logout notification: {str(e)}")
+
         return jsonify({"message": "Logout successful"}), 200
     else:
         return jsonify({"error": "Invalid refresh token"}), 400
@@ -865,10 +883,129 @@ def reset_password():
     user_service.cleanup_expired_otps()
     
     logger.info(f"Password reset completed for user ID: {user_id}")
+
+    # Create notification for password change
+    try:
+        notification_service.notify_password_change(user_id=user_id, success=True)
+    except Exception as e:
+        logger.error(f"Failed to create password change notification: {str(e)}")
+
     return jsonify({
         "message": message,
         "password_reset": True
     }), 200
+
+# Notification API Endpoints
+@app.route('/api/notifications', methods=['GET'])
+@jwt_required()
+def get_notifications():
+    """Get user notifications with pagination"""
+    try:
+        user_id = get_jwt_identity()
+        page = request.args.get('page', 1, type=int)
+        limit = request.args.get('limit', 50, type=int)
+        unread_only = request.args.get('unread_only', 'false').lower() == 'true'
+
+        result = notification_service.get_user_notifications(
+            user_id=user_id,
+            page=page,
+            limit=limit,
+            unread_only=unread_only
+        )
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching notifications: {str(e)}")
+        return jsonify({"error": "Failed to fetch notifications"}), 500
+
+
+@app.route('/api/notifications/unread-count', methods=['GET'])
+@jwt_required()
+def get_unread_count():
+    """Get count of unread notifications"""
+    try:
+        user_id = get_jwt_identity()
+        count = notification_service.get_unread_count(user_id)
+
+        return jsonify({"count": count}), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching unread count: {str(e)}")
+        return jsonify({"error": "Failed to fetch unread count", "count": 0}), 500
+
+
+@app.route('/api/notifications/<notification_id>/read', methods=['PUT'])
+@jwt_required()
+def mark_notification_as_read(notification_id):
+    """Mark a notification as read"""
+    try:
+        user_id = get_jwt_identity()
+        success = notification_service.mark_as_read(notification_id, user_id)
+
+        if success:
+            return jsonify({"message": "Notification marked as read"}), 200
+        else:
+            return jsonify({"error": "Notification not found"}), 404
+
+    except Exception as e:
+        logger.error(f"Error marking notification as read: {str(e)}")
+        return jsonify({"error": "Failed to mark notification as read"}), 500
+
+
+@app.route('/api/notifications/read-all', methods=['PUT'])
+@jwt_required()
+def mark_all_notifications_as_read():
+    """Mark all notifications as read"""
+    try:
+        user_id = get_jwt_identity()
+        count = notification_service.mark_all_as_read(user_id)
+
+        return jsonify({
+            "message": f"Marked {count} notifications as read",
+            "count": count
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error marking all notifications as read: {str(e)}")
+        return jsonify({"error": "Failed to mark all notifications as read"}), 500
+
+
+@app.route('/api/notifications/<notification_id>', methods=['DELETE'])
+@jwt_required()
+def delete_notification(notification_id):
+    """Delete a notification"""
+    try:
+        user_id = get_jwt_identity()
+        success = notification_service.delete_notification(notification_id, user_id)
+
+        if success:
+            return jsonify({"message": "Notification deleted"}), 200
+        else:
+            return jsonify({"error": "Notification not found"}), 404
+
+    except Exception as e:
+        logger.error(f"Error deleting notification: {str(e)}")
+        return jsonify({"error": "Failed to delete notification"}), 500
+
+
+@app.route('/api/notifications/clear-all', methods=['DELETE'])
+@jwt_required()
+def clear_all_notifications():
+    """Delete all notifications for the user"""
+    try:
+        user_id = get_jwt_identity()
+        count = notification_service.clear_all_notifications(user_id)
+
+        return jsonify({
+            "message": f"Deleted {count} notifications",
+            "count": count
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error clearing all notifications: {str(e)}")
+        return jsonify({"error": "Failed to clear all notifications"}), 500
+
 
 # Feedback API Endpoints
 @app.route('/api/feedback/submit', methods=['POST'])
