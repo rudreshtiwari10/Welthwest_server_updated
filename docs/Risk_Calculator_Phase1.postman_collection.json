@@ -1,0 +1,278 @@
+{
+	"info": {
+		"_postman_id": "risk-calc-phase1-001",
+		"name": "WelthWest - Risk Calculator Phase 1",
+		"description": "Complete API collection for Risk Calculator Phase 1 - Position sizing and cost calculation",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Calculate Position & Costs",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{jwt_token}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"symbol\": \"RELIANCE\",\n  \"trade_type\": \"delivery\",\n  \"buy_price\": 2500,\n  \"stop_loss_price\": 2450,\n  \"target_price\": 2600,\n  \"capital_available\": 100000,\n  \"max_risk_per_trade\": 2,\n  \"max_risk_type\": \"percentage\",\n  \"broker\": \"zerodha\"\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/api/risk-calculator/calculate",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"risk-calculator",
+						"calculate"
+					]
+				},
+				"description": "Main endpoint - calculates position size, risk metrics, and all trading costs"
+			},
+			"response": []
+		},
+		{
+			"name": "Calculate Position - Intraday",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{jwt_token}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"symbol\": \"TCS\",\n  \"trade_type\": \"intraday\",\n  \"buy_price\": 3500,\n  \"stop_loss_price\": 3475,\n  \"target_price\": 3550,\n  \"capital_available\": 50000,\n  \"max_risk_per_trade\": 1000,\n  \"max_risk_type\": \"rupees\",\n  \"broker\": \"zerodha\"\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/api/risk-calculator/calculate",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"risk-calculator",
+						"calculate"
+					]
+				},
+				"description": "Example for intraday trading with fixed rupee risk"
+			},
+			"response": []
+		},
+		{
+			"name": "Calculate Position - F&O",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{jwt_token}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"symbol\": \"NIFTY\",\n  \"trade_type\": \"fno\",\n  \"buy_price\": 21500,\n  \"stop_loss_price\": 21400,\n  \"target_price\": 21700,\n  \"capital_available\": 200000,\n  \"max_risk_per_trade\": 3,\n  \"max_risk_type\": \"percentage\",\n  \"broker\": \"upstox\"\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/api/risk-calculator/calculate",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"risk-calculator",
+						"calculate"
+					]
+				},
+				"description": "Example for F&O trading"
+			},
+			"response": []
+		},
+		{
+			"name": "Calculate Position - No Target",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{jwt_token}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"symbol\": \"INFY\",\n  \"trade_type\": \"delivery\",\n  \"buy_price\": 1500,\n  \"stop_loss_price\": 1475,\n  \"capital_available\": 75000,\n  \"max_risk_per_trade\": 1.5,\n  \"max_risk_type\": \"percentage\",\n  \"broker\": \"zerodha\"\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/api/risk-calculator/calculate",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"risk-calculator",
+						"calculate"
+					]
+				},
+				"description": "Example without target price (optional field)"
+			},
+			"response": []
+		},
+		{
+			"name": "Get Available Brokers",
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{jwt_token}}",
+						"type": "text"
+					}
+				],
+				"url": {
+					"raw": "{{base_url}}/api/risk-calculator/brokers",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"risk-calculator",
+						"brokers"
+					]
+				},
+				"description": "Get list of supported brokers and their cost profiles"
+			},
+			"response": []
+		},
+		{
+			"name": "Validate Trade Parameters",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{jwt_token}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"buy_price\": 2500,\n  \"stop_loss_price\": 2450,\n  \"target_price\": 2600,\n  \"capital_available\": 100000,\n  \"max_risk_per_trade\": 2,\n  \"max_risk_type\": \"percentage\"\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/api/risk-calculator/validate-trade",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"risk-calculator",
+						"validate-trade"
+					]
+				},
+				"description": "Quick validation before full calculation - useful for frontend"
+			},
+			"response": []
+		},
+		{
+			"name": "Get Cost Breakdown",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{jwt_token}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"trade_type\": \"delivery\",\n  \"broker\": \"zerodha\",\n  \"buy_price\": 2500,\n  \"sell_price\": 2600,\n  \"quantity\": 10\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/api/risk-calculator/cost-breakdown",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"risk-calculator",
+						"cost-breakdown"
+					]
+				},
+				"description": "Get detailed cost breakdown for specific quantity"
+			},
+			"response": []
+		},
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/api/risk-calculator/health",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"risk-calculator",
+						"health"
+					]
+				},
+				"description": "Check if Risk Calculator service is operational (no auth required)"
+			},
+			"response": []
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000",
+			"type": "string"
+		},
+		{
+			"key": "jwt_token",
+			"value": "YOUR_JWT_TOKEN_HERE",
+			"type": "string"
+		}
+	]
+}

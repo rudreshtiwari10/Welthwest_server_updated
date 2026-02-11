@@ -180,26 +180,33 @@ def get_historical_data(ticker_symbol, period="1y", interval="1d"):
             df.set_index('date', inplace=True)
         return df
     
-    # Try Upstox API first (Primary)
-    try:
-        if upstox_api.access_token:
-            logger.info(f"Attempting to fetch data from Upstox for {ticker_symbol}")
-            # Convert interval format for Upstox
-            upstox_interval = convert_interval_to_upstox(interval)
-            upstox_data = get_upstox_historical_data(ticker_symbol, period, upstox_interval)
-            
-            if len(upstox_data) > 0:
-                logger.info(f"Successfully fetched data from Upstox for {ticker_symbol}")
-                return upstox_data
+    # Skip Upstox for index symbols (^NSEI, ^NSEBANK, etc.) - they are Yahoo Finance only
+    is_index = ticker_symbol.startswith('^')
+
+    # Try Upstox API first (Primary) - but not for index symbols
+    if not is_index:
+        try:
+            if upstox_api.access_token:
+                logger.info(f"Attempting to fetch data from Upstox for {ticker_symbol}")
+                # Convert interval format for Upstox
+                upstox_interval = convert_interval_to_upstox(interval)
+                upstox_data = get_upstox_historical_data(ticker_symbol, period, upstox_interval)
+
+                if len(upstox_data) > 0:
+                    logger.info(f"Successfully fetched data from Upstox for {ticker_symbol}")
+                    return upstox_data
+                else:
+                    logger.warning(f"No data from Upstox for {ticker_symbol}, falling back to Yahoo Finance")
             else:
-                logger.warning(f"No data from Upstox for {ticker_symbol}, falling back to Yahoo Finance")
-        else:
-            logger.warning("Upstox access token not available, using Yahoo Finance")
-    except Exception as e:
-        logger.error(f"Error fetching from Upstox: {str(e)}, falling back to Yahoo Finance")
-    
-    # Fallback to Yahoo Finance
-    logger.info(f"Using Yahoo Finance as fallback for {ticker_symbol}")
+                logger.warning("Upstox access token not available, using Yahoo Finance")
+        except Exception as e:
+            logger.error(f"Error fetching from Upstox: {str(e)}, falling back to Yahoo Finance")
+
+    # Use Yahoo Finance (direct for indices, fallback for stocks)
+    if is_index:
+        logger.debug(f"Using Yahoo Finance directly for index symbol {ticker_symbol}")
+    else:
+        logger.info(f"Using Yahoo Finance as fallback for {ticker_symbol}")
     return get_historical_data_yfinance(ticker_symbol, period, interval)
 
 def convert_interval_to_upstox(interval):

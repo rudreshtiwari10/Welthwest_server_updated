@@ -12,9 +12,12 @@ Endpoints:
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity, verify_jwt_in_request
 from middleware.feature_limit import feature_limit
+from middleware.performance_monitor import monitor
+from middleware.cache_manager import cache
 from services.mtf_screener_service import get_mtf_screener_service
 import logging
 import numpy as np
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -188,6 +191,69 @@ def get_sector_heatmap(timeframe: str):
         }), 500
 
 
+@mtf_screener_bp.route('/full-data/<timeframe>', methods=['GET'])
+@feature_limit('mtf-screener')
+def get_full_data(timeframe: str):
+    """
+    Get ALL data for a timeframe in one call: longs, shorts, heatmap, and regime.
+
+    Eliminates the need for 3+ separate API calls, preventing redundant work.
+    The frontend should use this single endpoint instead of calling
+    /longs, /shorts, /sector-heatmap, and /regime-strip-short separately.
+
+    Args:
+        timeframe: One of '5m', '15m', '1h', '1d'
+
+    Returns:
+        JSON with top_longs, top_shorts, sectors, regime_strip (with SHORT interpretation)
+    """
+    start_time = time.time()
+
+    try:
+        if timeframe not in VALID_TIMEFRAMES:
+            return jsonify({
+                "status": "error",
+                "message": f"Invalid timeframe. Use one of: {', '.join(VALID_TIMEFRAMES)}"
+            }), 400
+
+        # Check API-level cache
+        cache_key = f"full_data:{timeframe}"
+        cached_result = cache.get(cache_key)
+
+        if cached_result:
+            duration = time.time() - start_time
+            monitor.record('full_data', duration, cache_hit=True, timeframe=timeframe)
+            cached_result['from_cache'] = True
+            cached_result['cache_duration_ms'] = round(duration * 1000, 2)
+            return jsonify(cached_result), 200
+
+        service = get_mtf_screener_service()
+        result = service.get_full_data(timeframe)
+        result = convert_numpy_types(result)
+
+        if result.get('status') != 'success':
+            return jsonify(result), 500
+
+        # Cache result for 5 minutes
+        cache.set(cache_key, result, ttl=300)
+
+        duration = time.time() - start_time
+        monitor.record('full_data', duration, cache_hit=False, timeframe=timeframe)
+        result['processing_duration_ms'] = round(duration * 1000, 2)
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.error(f"Error in full-data endpoint: {str(e)}")
+        duration = time.time() - start_time
+        monitor.record('full_data', duration, cache_hit=False, timeframe=timeframe, error=str(e))
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "timeframe": timeframe
+        }), 500
+
+
 @mtf_screener_bp.route('/all-timeframes', methods=['GET'])
 @feature_limit('mtf-screener')
 def get_all_timeframes():
@@ -222,14 +288,17 @@ def health_check():
     """
     try:
         service = get_mtf_screener_service()
+        info = service.get_stock_universe_info()
 
         return jsonify({
             "status": "healthy",
             "service": "mtf-screener",
             "supported_timeframes": VALID_TIMEFRAMES,
             "stock_universe_size": len(service.stock_universe),
+            "stock_universe_source": info.get('source', 'Unknown'),
+            "stock_universe_last_updated": info.get('last_updated'),
             "cache_ttl_seconds": service.cache_ttl,
-            "features": ["LONG", "SHORT", "dual_scoring"]
+            "features": ["LONG", "SHORT", "dual_scoring", "dynamic_nifty50"]
         }), 200
 
     except Exception as e:
@@ -239,8 +308,199 @@ def health_check():
         }), 500
 
 
+@mtf_screener_bp.route('/performance-stats', methods=['GET'])
+def get_performance_stats():
+    """
+    Get performance statistics for MTF Screener endpoints
+
+    Query Parameters:
+        - endpoint: (optional) Specific endpoint to get stats for
+        - last_n: (optional) Number of recent requests to analyze (default: 100)
+
+    Returns:
+        JSON with performance metrics including:
+        - Average duration
+        - Median duration
+        - P95/P99 latencies
+        - Cache hit rate
+        - Error rate
+    """
+    try:
+        endpoint = request.args.get('endpoint', None)
+        last_n = int(request.args.get('last_n', 100))
+
+        stats = monitor.get_stats(endpoint=endpoint, last_n=last_n)
+
+        # Add cache statistics
+        cache_stats = cache.get_stats()
+
+        return jsonify({
+            "status": "success",
+            "performance": stats,
+            "cache": cache_stats,
+            "timestamp": time.time()
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in performance stats endpoint: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+@mtf_screener_bp.route('/clear-cache', methods=['POST'])
+@feature_limit('mtf-screener')
+def clear_cache():
+    """
+    Clear MTF Screener cache
+
+    Query Parameters:
+        - pattern: (optional) Cache key pattern to clear (e.g., 'screener_result:*')
+                  If not provided, clears all screener-related cache
+
+    Returns:
+        JSON with number of keys cleared
+    """
+    try:
+        pattern = request.args.get('pattern', 'screener_result:*')
+
+        # Clear from cache manager
+        count = cache.clear(pattern)
+
+        # Also clear regime cache if requested
+        if 'regime' in pattern.lower() or pattern == '*':
+            count += cache.clear('regime:*')
+
+        return jsonify({
+            "status": "success",
+            "message": f"Cleared {count} cache entries",
+            "keys_cleared": count,
+            "pattern": pattern
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error clearing cache: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
 # ==========================================
-# SHORT/SELLING SCREENER ENDPOINTS
+# LONG/HIGH-PERFORMANCE SCREENER ENDPOINTS
+# ==========================================
+
+@mtf_screener_bp.route('/longs/<timeframe>', methods=['GET'])
+@feature_limit('mtf-screener')
+def screen_longs(timeframe: str):
+    """
+    Get top HIGH-PERFORMANCE (LONG) opportunities for a specific timeframe
+
+    This endpoint returns stocks with highest LONG scores,
+    focusing on momentum and bullish opportunities.
+
+    SEBI-Compliant Terminology:
+    - "High Performance" instead of "BUY"
+    - "Strong Momentum" instead of "LONG"
+    - Educational/informational only, not recommendations
+
+    Args:
+        timeframe: One of '5m', '15m', '1h', '1d'
+
+    Returns:
+        JSON with top 5 high-performance stocks, sorted by long_score
+    """
+    start_time = time.time()
+    cache_hit = False
+
+    try:
+        # Validate timeframe
+        if timeframe not in VALID_TIMEFRAMES:
+            return jsonify({
+                "status": "error",
+                "message": f"Invalid timeframe. Use one of: {', '.join(VALID_TIMEFRAMES)}"
+            }), 400
+
+        # Check cache first (API-level caching)
+        cache_key = f"longs_results:{timeframe}"
+        cached_result = cache.get(cache_key)
+
+        if cached_result:
+            cache_hit = True
+            duration = time.time() - start_time
+            monitor.record('screen_longs', duration, cache_hit=True, timeframe=timeframe)
+
+            # Add cache metadata
+            cached_result['from_cache'] = True
+            cached_result['cache_duration_ms'] = round(duration * 1000, 2)
+
+            return jsonify(cached_result), 200
+
+        # Not in cache - fetch fresh
+        service = get_mtf_screener_service()
+        result = service.screen_all_stocks(timeframe)
+
+        if result.get('status') != 'success':
+            return jsonify(result), 500
+
+        # Filter and sort by LONG score
+        all_stocks = result.get('top_stocks', [])
+
+        # Re-sort by long_score (descending)
+        longs_sorted = sorted(
+            all_stocks,
+            key=lambda x: x.get('long_score', 0),
+            reverse=True
+        )
+
+        # Filter to stocks with LONG direction and good scores
+        top_longs = [s for s in longs_sorted if s.get('long_score', 0) >= 65 and s.get('direction') in ['LONG', 'HOLD']][:5]
+
+        # Update ranks
+        for i, stock in enumerate(top_longs, 1):
+            stock['long_rank'] = i
+
+        final_result = convert_numpy_types({
+            "status": "success",
+            "timeframe": timeframe,
+            "mode": "HIGH_PERFORMANCE",
+            "description": "Top 5 High-Performance Momentum Stocks (Educational/Informational)",
+            "disclaimer": "Not investment advice. For educational purposes only.",
+            "regime_strip": result.get('regime_strip', {}),
+            "top_longs": top_longs,
+            "total_screened": result.get('total_screened', 0),
+            "longs_found": len(top_longs),
+            "timestamp": result.get('timestamp'),
+            "from_cache": False
+        })
+
+        # Cache result for 5 minutes
+        cache.set(cache_key, final_result, ttl=300)
+
+        # Record performance
+        duration = time.time() - start_time
+        monitor.record('screen_longs', duration, cache_hit=False, timeframe=timeframe)
+
+        # Add performance metadata
+        final_result['processing_duration_ms'] = round(duration * 1000, 2)
+
+        return jsonify(final_result), 200
+
+    except Exception as e:
+        logger.error(f"Error in longs endpoint: {str(e)}")
+        duration = time.time() - start_time
+        monitor.record('screen_longs', duration, cache_hit=False, timeframe=timeframe, error=str(e))
+
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "timeframe": timeframe
+        }), 500
+
+
+# ==========================================
+# SHORT/CORRECTION WATCH SCREENER ENDPOINTS
 # ==========================================
 
 @mtf_screener_bp.route('/shorts/<timeframe>', methods=['GET'])
@@ -258,6 +518,9 @@ def screen_shorts(timeframe: str):
     Returns:
         JSON with top SHORT stocks, sorted by short_score
     """
+    start_time = time.time()
+    cache_hit = False
+
     try:
         # Validate timeframe
         if timeframe not in VALID_TIMEFRAMES:
@@ -266,6 +529,22 @@ def screen_shorts(timeframe: str):
                 "message": f"Invalid timeframe. Use one of: {', '.join(VALID_TIMEFRAMES)}"
             }), 400
 
+        # Check cache first (API-level caching)
+        cache_key = f"shorts_results:{timeframe}"
+        cached_result = cache.get(cache_key)
+
+        if cached_result:
+            cache_hit = True
+            duration = time.time() - start_time
+            monitor.record('screen_shorts', duration, cache_hit=True, timeframe=timeframe)
+
+            # Add cache metadata
+            cached_result['from_cache'] = True
+            cached_result['cache_duration_ms'] = round(duration * 1000, 2)
+
+            return jsonify(cached_result), 200
+
+        # Not in cache - fetch fresh
         service = get_mtf_screener_service()
         result = service.screen_all_stocks(timeframe)
 
@@ -289,7 +568,7 @@ def screen_shorts(timeframe: str):
         for i, stock in enumerate(top_shorts, 1):
             stock['short_rank'] = i
 
-        result = convert_numpy_types({
+        final_result = convert_numpy_types({
             "status": "success",
             "timeframe": timeframe,
             "mode": "SHORTS",
@@ -298,13 +577,27 @@ def screen_shorts(timeframe: str):
             "top_shorts": top_shorts,
             "total_screened": result.get('total_screened', 0),
             "shorts_found": len(top_shorts),
-            "timestamp": result.get('timestamp')
+            "timestamp": result.get('timestamp'),
+            "from_cache": False
         })
 
-        return jsonify(result), 200
+        # Cache result for 5 minutes
+        cache.set(cache_key, final_result, ttl=300)
+
+        # Record performance
+        duration = time.time() - start_time
+        monitor.record('screen_shorts', duration, cache_hit=False, timeframe=timeframe)
+
+        # Add performance metadata
+        final_result['processing_duration_ms'] = round(duration * 1000, 2)
+
+        return jsonify(final_result), 200
 
     except Exception as e:
         logger.error(f"Error in shorts endpoint: {str(e)}")
+        duration = time.time() - start_time
+        monitor.record('screen_shorts', duration, cache_hit=False, timeframe=timeframe, error=str(e))
+
         return jsonify({
             "status": "error",
             "message": str(e),
@@ -565,6 +858,149 @@ def get_macro_section(section_name: str):
             "status": "error",
             "message": str(e),
             "section": section_name
+        }), 500
+
+
+# ==========================================
+# DYNAMIC NIFTY 50 STOCK UNIVERSE ENDPOINTS
+# ==========================================
+
+@mtf_screener_bp.route('/stock-universe', methods=['GET'])
+def get_stock_universe():
+    """
+    Get current stock universe information (NIFTY 50)
+
+    Returns comprehensive information about the current stock universe:
+    - List of stock symbols
+    - Total count
+    - Sector mapping
+    - Sector distribution
+    - Last updated timestamp
+    - Cache expiration time
+    - Data source (NSE API or Fallback)
+
+    No authentication required - public data
+
+    Returns:
+        JSON with complete stock universe details
+    """
+    try:
+        service = get_mtf_screener_service()
+        info = service.get_stock_universe_info()
+        info = convert_numpy_types(info)
+
+        return jsonify({
+            "status": "success",
+            **info
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in stock-universe endpoint: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+@mtf_screener_bp.route('/refresh-stock-universe', methods=['POST'])
+@feature_limit('mtf-screener')
+def refresh_stock_universe():
+    """
+    Refresh NIFTY 50 stock universe from NSE API
+
+    Forces a fresh fetch from NSE India API, bypassing 24-hour cache.
+    Use this endpoint when you suspect the stock list is outdated.
+
+    Requires authentication and feature limits apply.
+
+    Returns:
+        JSON with:
+        - Updated stock list
+        - New count
+        - Sectors
+        - Source of data (NSE API or fallback)
+    """
+    try:
+        service = get_mtf_screener_service()
+        result = service.refresh_stock_universe()
+        result = convert_numpy_types(result)
+
+        return jsonify(result), 200 if result.get('status') == 'success' else 500
+
+    except Exception as e:
+        logger.error(f"Error in refresh-stock-universe endpoint: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+@mtf_screener_bp.route('/nifty50', methods=['GET'])
+def get_nifty50_list():
+    """
+    Get simple NIFTY 50 stock list
+
+    Returns just the list of ticker symbols without additional metadata.
+    Useful for dropdown menus, autocomplete, etc.
+
+    Query Parameters:
+        - format: 'simple' (default) or 'detailed'
+        - refresh: 'true' to force refresh from API
+
+    No authentication required - public data
+
+    Returns:
+        JSON with array of stock symbols
+    """
+    try:
+        format_type = request.args.get('format', 'simple')
+        force_refresh = request.args.get('refresh', 'false').lower() == 'true'
+
+        service = get_mtf_screener_service()
+
+        if force_refresh:
+            service.refresh_stock_universe()
+
+        if format_type == 'detailed':
+            # Return with sectors
+            info = service.get_stock_universe_info()
+            stocks_with_sectors = [
+                {
+                    'ticker': ticker,
+                    'symbol': ticker.replace('.NS', ''),
+                    'sector': info['sectors'].get(ticker, 'Unknown')
+                }
+                for ticker in info['stocks']
+            ]
+
+            result = {
+                "status": "success",
+                "format": "detailed",
+                "stocks": stocks_with_sectors,
+                "total_count": len(stocks_with_sectors),
+                "last_updated": info.get('last_updated'),
+                "source": info.get('source')
+            }
+        else:
+            # Simple list
+            stocks = service.stock_universe
+
+            result = {
+                "status": "success",
+                "format": "simple",
+                "stocks": stocks,
+                "total_count": len(stocks),
+                "description": "NIFTY 50 stock ticker symbols for NSE India"
+            }
+
+        result = convert_numpy_types(result)
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.error(f"Error in nifty50 endpoint: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
         }), 500
 
 

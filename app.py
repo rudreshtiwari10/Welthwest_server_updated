@@ -26,6 +26,19 @@ from routes.admin_support import admin_support_bp
 from routes.admin_monitoring import admin_monitoring_bp
 from routes.support import support_bp
 from routes.mtf_screener_routes import mtf_screener_bp
+from routes.risk_calculator_routes import risk_calculator_bp
+from routes.risk_calculator_phase2_routes import risk_phase2_bp
+from routes.risk_calculator_phase3_routes import risk_phase3_bp
+from routes.risk_calculator_phase4_routes import risk_phase4_bp
+from routes.risk_calculator_phase5_routes import risk_phase5_bp
+from routes.risk_calculator_phase6_routes import risk_phase6_bp
+from routes.risk_calculator_phase7_routes import risk_phase7_bp
+from routes.risk_calculator_phase8_routes import risk_phase8_bp
+from routes.risk_calculator_phase9_routes import risk_phase9_bp
+from routes.pattern_analysis_routes import pattern_analysis_bp
+from routes.risk_calculator_extended_routes import risk_calc_ext_bp
+from routes.trade_simulator_routes import trade_simulator_bp
+from routes.ai_screener_routes import ai_screener_bp
 from middleware.feature_limit import feature_limit, admin_required
 from database.seed_plans import initialize_premium_system
 from services.google_auth_service import GoogleAuthService
@@ -242,6 +255,29 @@ app.register_blueprint(admin_monitoring_bp)
 
 # Register MTF Stock Screener blueprint
 app.register_blueprint(mtf_screener_bp)
+
+# Register Risk Calculator blueprint
+app.register_blueprint(risk_calculator_bp)
+
+# Register Risk Calculator Phase 2 blueprint (Trade Discipline & Guardrails)
+app.register_blueprint(risk_phase2_bp)
+
+# Register Risk Calculator Phase 3-9 blueprints
+app.register_blueprint(risk_phase3_bp)
+app.register_blueprint(risk_phase4_bp)
+app.register_blueprint(risk_phase5_bp)
+app.register_blueprint(risk_phase6_bp)
+app.register_blueprint(risk_phase7_bp)
+app.register_blueprint(risk_phase8_bp)
+app.register_blueprint(risk_phase9_bp)
+
+# Register Pattern Analysis & Trade Simulator blueprints
+app.register_blueprint(pattern_analysis_bp)
+app.register_blueprint(risk_calc_ext_bp)
+app.register_blueprint(trade_simulator_bp)
+
+# Register AI Screener blueprint
+app.register_blueprint(ai_screener_bp)
 
 # Register enhanced Finance AI routes
 register_finance_ai_routes(app)
@@ -4283,6 +4319,41 @@ def get_user_backtests():
             "success": False,
             "error": "Internal server error",
             "message": str(e)
+        }), 500
+
+@app.route('/api/user/backtests/<backtest_id>', methods=['DELETE'])
+@jwt_required()
+def delete_backtest(backtest_id):
+    """Delete a saved backtest strategy"""
+    try:
+        user_id = get_jwt_identity()
+
+        # Validate backtest_id format
+        if not ObjectId.is_valid(backtest_id):
+            return jsonify({
+                "success": False,
+                "error": "Invalid backtest ID"
+            }), 400
+
+        # Delete backtest (ensure it belongs to the user)
+        result = user_service.delete_backtest_result(user_id, backtest_id)
+
+        if result:
+            return jsonify({
+                "success": True,
+                "message": "Backtest deleted successfully"
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Backtest not found or already deleted"
+            }), 404
+
+    except Exception as e:
+        logger.error(f"Error deleting backtest: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Internal server error"
         }), 500
 
 @app.route('/api/user/ai-analyses', methods=['GET'])

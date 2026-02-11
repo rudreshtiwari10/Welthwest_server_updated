@@ -23,10 +23,19 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from services.stock_service import get_historical_data
 import warnings
+import pickle
+import os
+from pathlib import Path
+
 warnings.filterwarnings('ignore')
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Model persistence path
+MODEL_CACHE_DIR = Path("cache/hmm_models")
+MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_FILE_PATH = MODEL_CACHE_DIR / "nifty_regime_model.pkl"
 
 
 class MTFRegimeDetector:
@@ -114,8 +123,18 @@ class MTFRegimeDetector:
         self.scaler = StandardScaler()
         self.is_trained = False
         self.training_ticker = None
+        self.model_trained_date = None
 
-        self._initialize_hmm()
+        # In-memory regime cache to avoid redundant yfinance downloads
+        self._regime_cache = {}  # {cache_key: (result, timestamp)}
+        self._regime_cache_ttl = 300  # 5 minutes
+
+        # Try to load existing model from disk
+        if self.load_model():
+            logger.info("✅ Loaded pre-trained HMM model from disk")
+        else:
+            self._initialize_hmm()
+            logger.info("🔧 Initialized new HMM model (not trained yet)")
 
     def _initialize_hmm(self):
         """Initialize the Hidden Markov Model"""
@@ -244,6 +263,9 @@ class MTFRegimeDetector:
 
             logger.info(f"HMM training completed. Model score: {model_score:.4f}")
 
+            # Save model to disk for fast loading next time
+            self.save_model()
+
             return {
                 "status": "success",
                 "model_score": float(model_score),
@@ -292,6 +314,92 @@ class MTFRegimeDetector:
         except Exception as e:
             logger.warning(f"State calibration warning: {str(e)}")
 
+    def save_model(self) -> bool:
+        """
+        Save trained HMM model to disk for fast loading on restart
+
+        Returns:
+            bool: True if save successful, False otherwise
+        """
+        try:
+            if not self.is_trained:
+                logger.warning("Cannot save model - not trained yet")
+                return False
+
+            model_state = {
+                'hmm_model': self.hmm_model,
+                'scaler': self.scaler,
+                'is_trained': self.is_trained,
+                'training_ticker': self.training_ticker,
+                'model_trained_date': datetime.now().isoformat(),
+                'n_components': self.n_components,
+                'covariance_type': self.covariance_type,
+                'n_iter': self.n_iter,
+                'random_state': self.random_state
+            }
+
+            with open(MODEL_FILE_PATH, 'wb') as f:
+                pickle.dump(model_state, f)
+
+            logger.info(f"💾 Saved trained HMM model to {MODEL_FILE_PATH}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error saving model: {str(e)}")
+            return False
+
+    def load_model(self) -> bool:
+        """
+        Load trained HMM model from disk
+
+        Returns:
+            bool: True if load successful, False otherwise
+        """
+        try:
+            if not MODEL_FILE_PATH.exists():
+                logger.debug("No saved model found on disk")
+                return False
+
+            # Check if model is older than 7 days (re-train if stale)
+            model_age_days = (datetime.now().timestamp() - MODEL_FILE_PATH.stat().st_mtime) / 86400
+            if model_age_days > 7:
+                logger.info(f"Saved model is {model_age_days:.1f} days old - will re-train")
+                return False
+
+            with open(MODEL_FILE_PATH, 'rb') as f:
+                model_state = pickle.load(f)
+
+            # Restore model state
+            self.hmm_model = model_state['hmm_model']
+            self.scaler = model_state['scaler']
+            self.is_trained = model_state['is_trained']
+            self.training_ticker = model_state['training_ticker']
+            self.model_trained_date = model_state.get('model_trained_date')
+            self.n_components = model_state['n_components']
+            self.covariance_type = model_state['covariance_type']
+            self.n_iter = model_state['n_iter']
+            self.random_state = model_state['random_state']
+
+            logger.info(f"📂 Loaded HMM model from disk (trained on {self.model_trained_date[:10]})")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error loading model: {str(e)}")
+            return False
+
+    def _get_cached_prediction(self, cache_key: str) -> Optional[Dict]:
+        """Get cached regime prediction if still valid"""
+        if cache_key in self._regime_cache:
+            result, timestamp = self._regime_cache[cache_key]
+            if (datetime.now() - timestamp).total_seconds() < self._regime_cache_ttl:
+                logger.debug(f"Regime cache hit for: {cache_key}")
+                return result
+        return None
+
+    def _set_cached_prediction(self, cache_key: str, result: Dict):
+        """Cache a regime prediction"""
+        self._regime_cache[cache_key] = (result, datetime.now())
+
     def predict_regime(self, ticker: str, period: str = "3mo") -> Dict:
         """
         Predict current market regime for a ticker
@@ -304,6 +412,12 @@ class MTFRegimeDetector:
             Dictionary with regime prediction
         """
         try:
+            # Check in-memory cache first
+            cache_key = f"regime_{ticker}_{period}"
+            cached = self._get_cached_prediction(cache_key)
+            if cached:
+                return cached
+
             # Auto-train if not trained
             if not self.is_trained:
                 logger.info("Model not trained, training on NIFTY 50...")
@@ -311,8 +425,12 @@ class MTFRegimeDetector:
                 if train_result.get("status") != "success":
                     return {"status": "error", "message": "Failed to train model"}
 
-            # Get data
-            df = get_historical_data(ticker, period=period)
+            # Get data - use yfinance directly for index symbols to skip Upstox fallback
+            if ticker.startswith('^'):
+                import yfinance as yf
+                df = yf.download(ticker, period=period, interval="1d", progress=False)
+            else:
+                df = get_historical_data(ticker, period=period)
 
             if df is None or df.empty:
                 return {"status": "error", "message": f"No data available for {ticker}"}
@@ -345,7 +463,7 @@ class MTFRegimeDetector:
             # Forecast next state
             next_probs = self.hmm_model.transmat_[current_regime]
 
-            return {
+            prediction = {
                 "status": "success",
                 "regime_id": current_regime,
                 "regime_name": regime_info['name'],
@@ -365,6 +483,10 @@ class MTFRegimeDetector:
                 },
                 "timestamp": datetime.now().isoformat()
             }
+
+            # Cache the result
+            self._set_cached_prediction(cache_key, prediction)
+            return prediction
 
         except Exception as e:
             logger.error(f"Error predicting regime for {ticker}: {str(e)}")

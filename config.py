@@ -165,37 +165,42 @@ class Config:
         }
 
         # Premium Plan Limits (per-feature, per-day)
-        # Feature keys: welth-market-regime, welth-ai-assistant, backtest-beta, mtf-screener
+        # Feature keys: welth-market-regime, welth-ai-assistant, backtest-beta, mtf-screener, risk-calculator
         self.PLAN_LIMITS = {
             'FREE': {
                 'welth-market-regime': int(os.getenv('PLAN_FREE__MARKET_REGIME', 10)),
                 'welth-ai-assistant': int(os.getenv('PLAN_FREE__AI_ASSISTANT', 15)),
                 'backtest-beta': int(os.getenv('PLAN_FREE__BACKTEST', 5)),
-                'mtf-screener': int(os.getenv('PLAN_FREE__MTF_SCREENER', 5))
+                'mtf-screener': int(os.getenv('PLAN_FREE__MTF_SCREENER', 5)),
+                'risk-calculator': int(os.getenv('PLAN_FREE__RISK_CALCULATOR', 20))
             },
             'STARTER': {
                 'welth-market-regime': int(os.getenv('PLAN_STARTER__MARKET_REGIME', 20)),
                 'welth-ai-assistant': int(os.getenv('PLAN_STARTER__AI_ASSISTANT', 25)),
                 'backtest-beta': int(os.getenv('PLAN_STARTER__BACKTEST', 15)),
-                'mtf-screener': int(os.getenv('PLAN_STARTER__MTF_SCREENER', 15))
+                'mtf-screener': int(os.getenv('PLAN_STARTER__MTF_SCREENER', 15)),
+                'risk-calculator': int(os.getenv('PLAN_STARTER__RISK_CALCULATOR', 50))
             },
             'PRO': {
                 'welth-market-regime': int(os.getenv('PLAN_PRO__MARKET_REGIME', 30)),
                 'welth-ai-assistant': int(os.getenv('PLAN_PRO__AI_ASSISTANT', 35)),
                 'backtest-beta': int(os.getenv('PLAN_PRO__BACKTEST', 25)),
-                'mtf-screener': int(os.getenv('PLAN_PRO__MTF_SCREENER', 30))
+                'mtf-screener': int(os.getenv('PLAN_PRO__MTF_SCREENER', 30)),
+                'risk-calculator': int(os.getenv('PLAN_PRO__RISK_CALCULATOR', 100))
             },
             'ADVANCED': {
                 'welth-market-regime': int(os.getenv('PLAN_ADVANCED__MARKET_REGIME', 40)),
                 'welth-ai-assistant': int(os.getenv('PLAN_ADVANCED__AI_ASSISTANT', 45)),
                 'backtest-beta': int(os.getenv('PLAN_ADVANCED__BACKTEST', 40)),
-                'mtf-screener': int(os.getenv('PLAN_ADVANCED__MTF_SCREENER', 50))
+                'mtf-screener': int(os.getenv('PLAN_ADVANCED__MTF_SCREENER', 50)),
+                'risk-calculator': int(os.getenv('PLAN_ADVANCED__RISK_CALCULATOR', 200))
             },
             'ENTERPRISE': {
                 'welth-market-regime': int(os.getenv('PLAN_ENTERPRISE__MARKET_REGIME', 50)),
                 'welth-ai-assistant': int(os.getenv('PLAN_ENTERPRISE__AI_ASSISTANT', 55)),
                 'backtest-beta': int(os.getenv('PLAN_ENTERPRISE__BACKTEST', 45)),
-                'mtf-screener': int(os.getenv('PLAN_ENTERPRISE__MTF_SCREENER', 1010))
+                'mtf-screener': int(os.getenv('PLAN_ENTERPRISE__MTF_SCREENER', 1010)),
+                'risk-calculator': int(os.getenv('PLAN_ENTERPRISE__RISK_CALCULATOR', 500))
             }
         }
 
@@ -204,7 +209,8 @@ class Config:
             'welth-market-regime': int(os.getenv('ANON_MARKET_REGIME_LIMIT', 0)),
             'welth-ai-assistant': int(os.getenv('ANON_AI_ASSISTANT_LIMIT', 0)),
             'backtest-beta': int(os.getenv('ANON_BACKTEST_LIMIT', 0)),
-            'mtf-screener': int(os.getenv('ANON_MTF_SCREENER_LIMIT', 0))
+            'mtf-screener': int(os.getenv('ANON_MTF_SCREENER_LIMIT', 0)),
+            'risk-calculator': int(os.getenv('ANON_RISK_CALCULATOR_LIMIT', 3))
         }
 
         # Usage Counter Configuration

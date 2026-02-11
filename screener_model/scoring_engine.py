@@ -79,8 +79,11 @@ class ScoringEngine:
     # Eligibility threshold
     ELIGIBILITY_THRESHOLD = 75
 
-    # SHORT eligibility threshold (slightly lower since shorts are more selective)
-    SHORT_ELIGIBILITY_THRESHOLD = 65
+    # SHORT eligibility threshold (lowered to 50 for SHORT-focused screening)
+    SHORT_ELIGIBILITY_THRESHOLD = 50
+
+    # LONG eligibility threshold (for high-performance stocks)
+    LONG_ELIGIBILITY_THRESHOLD = 65
 
     # Sector diversity limits
     MAX_PER_SECTOR = 2
@@ -688,55 +691,217 @@ class ScoringEngine:
                 'error': str(e)
             }
 
-    def calculate_dual_score(self, stock_data: Dict) -> Dict[str, Any]:
+    def calculate_long_score(self, stock_data: Dict) -> Dict[str, Any]:
         """
-        Calculate both LONG and SHORT scores, determine best direction
+        Calculate LONG/BUY score (High-Performance Momentum Stocks)
+
+        Scoring Components:
+        - Trend Strength (30pts): Strong uptrend, price > moving averages
+        - Momentum (25pts): RSI bullish, MACD positive, increasing volume
+        - Breakout Patterns (20pts): Bullish patterns, new highs
+        - Volume Confirmation (15pts): High volume on up days
+        - Risk-Reward (10pts): Good entry with defined stop-loss
 
         Args:
             stock_data: Dictionary containing all analysis data
 
         Returns:
-            Complete dual scoring result with direction recommendation
+            LONG scoring result with breakdown
         """
         try:
-            # Calculate LONG score (existing logic)
-            long_result = self.calculate_total_score(stock_data)
-            long_score = long_result.get('total_score', 50)
+            score = 0
+            breakdown = {}
 
-            # Calculate SHORT score (new logic)
+            # Get data
+            trend_data = stock_data.get('trend_data', {})
+            momentum_data = stock_data.get('momentum_data', {})
+            volume_data = stock_data.get('volume_data', {})
+            pattern_data = stock_data.get('pattern_data', {})
+            df = stock_data.get('df')
+            regime_name = stock_data.get('regime_data', {}).get('regime_name', 'Unknown')
+
+            # 1. Trend Strength (30 points)
+            trend_score = 0
+            if trend_data:
+                overall_trend = trend_data.get('overall_trend', 'neutral')
+                if overall_trend == 'bullish':
+                    trend_score += 30
+                elif overall_trend == 'neutral':
+                    trend_score += 15
+            breakdown['trend'] = {'score': trend_score, 'max': 30, 'status': 'bullish' if trend_score >= 20 else 'neutral'}
+            score += trend_score
+
+            # 2. Momentum (25 points)
+            momentum_score = 0
+            rsi_value = None
+            if momentum_data:
+                rsi = momentum_data.get('rsi')
+
+                # Extract RSI value - could be number or dict with 'value' key
+                if isinstance(rsi, dict):
+                    rsi_value = rsi.get('value')
+                elif isinstance(rsi, (int, float)):
+                    rsi_value = rsi
+
+                macd_signal = momentum_data.get('macd_signal', 'neutral')
+
+                # RSI in bullish zone (40-70)
+                if rsi_value is not None and isinstance(rsi_value, (int, float)):
+                    if 40 <= rsi_value <= 70:
+                        momentum_score += 12
+
+                # MACD bullish
+                if macd_signal == 'bullish':
+                    momentum_score += 13
+            breakdown['momentum'] = {'score': momentum_score, 'max': 25, 'rsi': rsi_value}
+            score += momentum_score
+
+            # 3. Breakout Patterns (20 points)
+            pattern_score = 0
+            if pattern_data:
+                best_pattern = pattern_data.get('best_pattern', {})
+                if best_pattern:
+                    pattern_type = best_pattern.get('type', '')
+                    # Bullish patterns
+                    if any(bullish in pattern_type.lower() for bullish in ['bull', 'hammer', 'morning', 'piercing', 'engulf']):
+                        pattern_score += 20
+                    elif pattern_type != 'none':
+                        pattern_score += 10
+            breakdown['patterns'] = {'score': pattern_score, 'max': 20}
+            score += pattern_score
+
+            # 4. Volume Confirmation (15 points)
+            volume_score = 0
+            if df is not None and len(df) > 0:
+                try:
+                    # Check if volume increased on up days
+                    df['price_change'] = df['Close'].diff()
+                    df['volume_change'] = df['Volume'].diff()
+
+                    # Last 5 days correlation
+                    recent = df.tail(5)
+                    if len(recent) > 3:
+                        # Volume spike on up days is bullish
+                        current_volume = df['Volume'].iloc[-1]
+                        avg_volume = df['Volume'].rolling(20).mean().iloc[-1]
+
+                        if current_volume > avg_volume * 1.2:
+                            volume_score += 15
+                        elif current_volume > avg_volume:
+                            volume_score += 8
+                except:
+                    pass
+            breakdown['volume'] = {'score': volume_score, 'max': 15}
+            score += volume_score
+
+            # 5. Risk-Reward (10 points)
+            rr_score = 0
+            trade_setup = stock_data.get('trade_setup', {})
+            if trade_setup:
+                rr_ratio = trade_setup.get('rr_ratio', 0)
+                if rr_ratio >= 2.0:
+                    rr_score += 10
+                elif rr_ratio >= 1.5:
+                    rr_score += 5
+            breakdown['risk_reward'] = {'score': rr_score, 'max': 10, 'rr_ratio': rr_ratio if 'rr_ratio' in locals() else 0}
+            score += rr_score
+
+            # Check eligibility
+            is_eligible = score >= self.LONG_ELIGIBILITY_THRESHOLD
+
+            # Determine strength
+            if score >= 80:
+                strength = 'STRONG'
+            elif score >= 65:
+                strength = 'MODERATE'
+            elif score >= 50:
+                strength = 'WEAK'
+            else:
+                strength = 'NONE'
+
+            return {
+                'long_score': score,
+                'eligible': is_eligible,
+                'threshold': self.LONG_ELIGIBILITY_THRESHOLD,
+                'strength': strength,
+                'breakdown': breakdown,
+                'trade_setup': trade_setup,
+                'regime_multiplier': self.REGIME_MULTIPLIERS.get(regime_name, {}).get('LONG', 1.0)
+            }
+
+        except Exception as e:
+            logger.error(f"Error calculating LONG score: {str(e)}")
+            return {
+                'long_score': 30,
+                'eligible': False,
+                'error': str(e)
+            }
+
+    def calculate_dual_score(self, stock_data: Dict) -> Dict[str, Any]:
+        """
+        Calculate BOTH LONG and SHORT scores (Dual-Directional Screener)
+
+        Args:
+            stock_data: Dictionary containing all analysis data
+
+        Returns:
+            Dual scoring result with direction recommendation
+        """
+        try:
+            # Calculate BOTH scores
+            long_result = self.calculate_long_score(stock_data)
             short_result = self.calculate_short_score(stock_data)
+
+            long_score = long_result.get('long_score', 30)
             short_score = short_result.get('short_score', 30)
 
             # Get regime info for multipliers
             regime_data = stock_data.get('regime_data', {})
-            regime_name = regime_data.get('regime_name', regime_data.get('current_regime', 'Unknown'))
+            regime_name = regime_data.get('regime_name', 'Unknown')
 
-            # Apply regime multipliers
+            # Apply regime multipliers to both scores
             multipliers = self.REGIME_MULTIPLIERS.get(regime_name, {'LONG': 1.0, 'SHORT': 1.0})
             adjusted_long = int(min(100, long_score * multipliers['LONG']))
             adjusted_short = int(min(100, short_score * multipliers['SHORT']))
 
-            # ========== FIX #7: TIGHTENED DIRECTION SELECTION ==========
-            # Require:
-            # 1. Winner exceeds loser by 20% margin (not 10%)
-            # 2. Winner must meet minimum score threshold
-            # 3. Both conditions must be met for direction assignment
-
-            long_exceeds_short = adjusted_long > adjusted_short * self.DIRECTION_MARGIN
-            short_exceeds_long = adjusted_short > adjusted_long * self.DIRECTION_MARGIN
+            # Determine direction based on stronger signal
             long_meets_min = adjusted_long >= self.MIN_SCORE_FOR_DIRECTION
             short_meets_min = adjusted_short >= self.MIN_SCORE_FOR_DIRECTION
 
-            if short_exceeds_long and short_meets_min:
-                direction = 'SHORT'
-                final_score = adjusted_short
-                eligible = short_result.get('eligible', False)
-            elif long_exceeds_short and long_meets_min:
+            # Calculate margin (20% difference required to declare direction)
+            score_difference = abs(adjusted_long - adjusted_short)
+            margin_threshold = 20
+
+            if long_meets_min and adjusted_long > adjusted_short + margin_threshold:
+                # LONG is significantly stronger
                 direction = 'LONG'
                 final_score = adjusted_long
                 eligible = long_result.get('eligible', False)
+            elif short_meets_min and adjusted_short > adjusted_long + margin_threshold:
+                # SHORT is significantly stronger
+                direction = 'SHORT'
+                final_score = adjusted_short
+                eligible = short_result.get('eligible', False)
+            elif long_meets_min and short_meets_min:
+                # Both strong, pick higher score
+                if adjusted_long > adjusted_short:
+                    direction = 'LONG'
+                    final_score = adjusted_long
+                    eligible = long_result.get('eligible', False)
+                else:
+                    direction = 'SHORT'
+                    final_score = adjusted_short
+                    eligible = short_result.get('eligible', False)
+            elif long_meets_min:
+                direction = 'LONG'
+                final_score = adjusted_long
+                eligible = long_result.get('eligible', False)
+            elif short_meets_min:
+                direction = 'SHORT'
+                final_score = adjusted_short
+                eligible = short_result.get('eligible', False)
             else:
-                # Neither meets both conditions - HOLD
+                # Neither meets minimum - HOLD
                 direction = 'HOLD'
                 final_score = max(adjusted_long, adjusted_short)
                 eligible = False
@@ -748,7 +913,7 @@ class ScoringEngine:
             elif final_score >= 75:
                 category = 'B'
                 category_name = 'Good'
-            elif final_score >= 65:
+            elif final_score >= 60:  # Updated threshold
                 category = 'C'
                 category_name = 'Average'
             elif final_score >= 50:
@@ -773,16 +938,19 @@ class ScoringEngine:
                 'regime_multipliers': multipliers,
                 'long_breakdown': long_result.get('breakdown', {}),
                 'short_breakdown': short_result.get('breakdown', {}),
+                'long_trade_setup': long_result.get('trade_setup', {}),
                 'short_trade_setup': short_result.get('trade_setup', {}),
+                'long_strength': long_result.get('strength', 'NONE'),
                 'short_strength': short_result.get('strength', 'NONE'),
+                'score_difference': score_difference,
                 'timestamp': datetime.now().isoformat()
             }
 
         except Exception as e:
             logger.error(f"Error calculating dual score: {str(e)}")
             return {
-                'total_score': 50,
-                'long_score': 50,
+                'total_score': 30,
+                'long_score': 30,
                 'short_score': 30,
                 'direction': 'HOLD',
                 'eligible': False,

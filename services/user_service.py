@@ -367,7 +367,26 @@ class UserService:
             logger.error(f"Error saving backtest result: {str(e)}")
             print(f"Error saving backtest result: {str(e)}")
             return False
-    
+
+    def delete_backtest_result(self, user_id: str, backtest_id: str) -> bool:
+        """Delete a backtest result from user's history"""
+        try:
+            result = self.db.backtests.delete_one({
+                "_id": ObjectId(backtest_id),
+                "user_id": user_id  # Security: ensure user owns this backtest
+            })
+
+            if result.deleted_count > 0:
+                logger.info(f"Deleted backtest {backtest_id} for user {user_id}")
+                return True
+            else:
+                logger.warning(f"Backtest {backtest_id} not found for user {user_id}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error deleting backtest: {str(e)}")
+            return False
+
     def save_ai_analysis_result(self, user_id: str, analysis_data: Dict[str, Any]) -> bool:
         """Save AI analysis result to user's history"""
         try:

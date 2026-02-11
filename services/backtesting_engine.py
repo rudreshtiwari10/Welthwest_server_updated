@@ -199,7 +199,64 @@ class IndianStockStrategyBuilder:
                 close=df['Close'],
                 volume=df['Volume']
             ).on_balance_volume()
-        
+
+        # Supertrend
+        if 'Supertrend' in indicators:
+            from services.technical_analysis import TechnicalAnalysis
+            tech_analysis = TechnicalAnalysis()
+            st_params = indicators['Supertrend']
+            st_data = tech_analysis._calculate_supertrend(
+                df,
+                period=st_params.get('period', 10),
+                multiplier=st_params.get('multiplier', 3)
+            )
+            df['Supertrend'] = st_data['supertrend']
+            df['ST_Direction'] = st_data['direction']
+            df['ST_Upper'] = st_data['upper_band']
+            df['ST_Lower'] = st_data['lower_band']
+
+        # Ichimoku Cloud
+        if 'Ichimoku' in indicators:
+            from services.technical_analysis import TechnicalAnalysis
+            tech_analysis = TechnicalAnalysis()
+            ich_params = indicators['Ichimoku']
+            ich_data = tech_analysis._calculate_ichimoku(
+                df,
+                period1=ich_params.get('period1', 9),
+                period2=ich_params.get('period2', 26),
+                period3=ich_params.get('period3', 52)
+            )
+            df['Ichimoku_Tenkan'] = ich_data['tenkan']
+            df['Ichimoku_Kijun'] = ich_data['kijun']
+            df['Ichimoku_SenkouA'] = ich_data['senkou_a']
+            df['Ichimoku_SenkouB'] = ich_data['senkou_b']
+            df['Ichimoku_Chikou'] = ich_data['chikou']
+
+        # MFI (Money Flow Index)
+        if 'MFI' in indicators:
+            from services.technical_analysis import TechnicalAnalysis
+            tech_analysis = TechnicalAnalysis()
+            mfi_params = indicators['MFI']
+            df['MFI'] = tech_analysis._calculate_mfi(
+                df,
+                period=mfi_params.get('period', 14)
+            )
+
+        # Keltner Channels
+        if 'Keltner' in indicators:
+            from services.technical_analysis import TechnicalAnalysis
+            tech_analysis = TechnicalAnalysis()
+            kc_params = indicators['Keltner']
+            kc_data = tech_analysis._calculate_keltner_channels(
+                df,
+                ema_period=kc_params.get('ema_period', 20),
+                atr_period=kc_params.get('atr_period', 14),
+                atr_mult=kc_params.get('atr_mult', 2)
+            )
+            df['KC_Upper'] = kc_data['upper']
+            df['KC_Middle'] = kc_data['middle']
+            df['KC_Lower'] = kc_data['lower']
+
         return df
     
     def generate_voting_signals(self, df, indicators, voting_threshold=0.6):
@@ -283,11 +340,75 @@ class IndianStockStrategyBuilder:
             wr_params = indicators['Williams_R']
             oversold = wr_params.get('oversold', -80)
             overbought = wr_params.get('overbought', -20)
-            
+
             df['Buy_Votes'] += (df['Williams_R'] < oversold).astype(int)
             df['Sell_Votes'] += (df['Williams_R'] > overbought).astype(int)
             df['Total_Indicators'] += 1
-        
+
+        # EMA signals
+        if 'EMA' in indicators:
+            ema_params = indicators['EMA']
+            periods = ema_params.get('periods', [12, 26])
+            if len(periods) >= 2:
+                short_ema = f'EMA_{min(periods)}'
+                long_ema = f'EMA_{max(periods)}'
+                df['Buy_Votes'] += ((df[short_ema] > df[long_ema]) &
+                                   (df[short_ema].shift(1) <= df[long_ema].shift(1))).astype(int)
+                df['Sell_Votes'] += ((df[short_ema] < df[long_ema]) &
+                                    (df[short_ema].shift(1) >= df[long_ema].shift(1))).astype(int)
+                df['Total_Indicators'] += 1
+
+        # Supertrend signals
+        if 'Supertrend' in indicators:
+            df['Buy_Votes'] += ((df['ST_Direction'] == 1) &
+                               (df['ST_Direction'].shift(1) != 1)).astype(int)
+            df['Sell_Votes'] += ((df['ST_Direction'] == -1) &
+                                (df['ST_Direction'].shift(1) != -1)).astype(int)
+            df['Total_Indicators'] += 1
+
+        # Ichimoku signals
+        if 'Ichimoku' in indicators:
+            # Bullish: Price > Cloud AND Tenkan > Kijun
+            # Bearish: Price < Cloud AND Tenkan < Kijun
+            cloud_top = df[['Ichimoku_SenkouA', 'Ichimoku_SenkouB']].max(axis=1)
+            cloud_bottom = df[['Ichimoku_SenkouA', 'Ichimoku_SenkouB']].min(axis=1)
+
+            bullish_ichimoku = (df['Close'] > cloud_top) & (df['Ichimoku_Tenkan'] > df['Ichimoku_Kijun'])
+            bearish_ichimoku = (df['Close'] < cloud_bottom) & (df['Ichimoku_Tenkan'] < df['Ichimoku_Kijun'])
+
+            df['Buy_Votes'] += bullish_ichimoku.astype(int)
+            df['Sell_Votes'] += bearish_ichimoku.astype(int)
+            df['Total_Indicators'] += 1
+
+        # CCI signals
+        if 'CCI' in indicators:
+            # CCI > 100 = Buy (breakout), CCI < -100 = Sell (breakdown)
+            df['Buy_Votes'] += ((df['CCI'] > 100) & (df['CCI'].shift(1) <= 100)).astype(int)
+            df['Sell_Votes'] += ((df['CCI'] < -100) & (df['CCI'].shift(1) >= -100)).astype(int)
+            df['Total_Indicators'] += 1
+
+        # MFI signals
+        if 'MFI' in indicators:
+            mfi_params = indicators['MFI']
+            oversold = mfi_params.get('oversold', 20)
+            overbought = mfi_params.get('overbought', 80)
+
+            df['Buy_Votes'] += ((df['MFI'] < oversold) |
+                               ((df['MFI'] >= oversold) & (df['MFI'].shift(1) < oversold))).astype(int)
+            df['Sell_Votes'] += ((df['MFI'] > overbought) |
+                                ((df['MFI'] <= overbought) & (df['MFI'].shift(1) > overbought))).astype(int)
+            df['Total_Indicators'] += 1
+
+        # Keltner Channels signals
+        if 'Keltner' in indicators:
+            # Price crosses above upper channel = Buy (breakout)
+            # Price crosses below lower channel = Sell (breakdown)
+            df['Buy_Votes'] += ((df['Close'] > df['KC_Upper']) &
+                               (df['Close'].shift(1) <= df['KC_Upper'].shift(1))).astype(int)
+            df['Sell_Votes'] += ((df['Close'] < df['KC_Lower']) &
+                                (df['Close'].shift(1) >= df['KC_Lower'].shift(1))).astype(int)
+            df['Total_Indicators'] += 1
+
         # Calculate voting percentages
         df['Buy_Percentage'] = df['Buy_Votes'] / df['Total_Indicators']
         df['Sell_Percentage'] = df['Sell_Votes'] / df['Total_Indicators']

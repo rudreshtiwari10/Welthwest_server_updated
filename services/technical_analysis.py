@@ -289,9 +289,215 @@ class TechnicalAnalysis:
                         "strength": strength
                     }
 
+                elif indicator.lower() == "supertrend":
+                    period = params.get("supertrend_period", 10) if params else 10
+                    multiplier = params.get("supertrend_multiplier", 3) if params else 3
+                    st_data = self._calculate_supertrend(df, period, multiplier)
+                    current_price = float(df['Close'].iloc[-1])
+                    prev_direction = int(st_data["direction"][-2]) if len(st_data["direction"]) >= 2 else 0
+                    curr_direction = int(st_data["direction"][-1])
+
+                    # Supertrend Signal Logic:
+                    # Direction changes from -1 to 1 = Buy signal
+                    # Direction changes from 1 to -1 = Sell signal
+                    signal = "neutral"
+                    if prev_direction != curr_direction:
+                        signal = "buy" if curr_direction == 1 else "sell"
+                    elif curr_direction == 1 and current_price > st_data["supertrend"][-1]:
+                        signal = "buy"
+                    elif curr_direction == -1 and current_price < st_data["supertrend"][-1]:
+                        signal = "sell"
+
+                    results["supertrend"] = {
+                        "dates": dates,
+                        "supertrend": [float(x) for x in st_data["supertrend"]],
+                        "direction": [int(x) for x in st_data["direction"]],
+                        "upper_band": [float(x) for x in st_data["upper_band"]],
+                        "lower_band": [float(x) for x in st_data["lower_band"]],
+                        "current": {
+                            "supertrend": float(st_data["supertrend"][-1]),
+                            "direction": int(st_data["direction"][-1]),
+                            "price": current_price
+                        },
+                        "signal": signal
+                    }
+
+                elif indicator.lower() == "ichimoku":
+                    period1 = params.get("ichimoku_period1", 9) if params else 9
+                    period2 = params.get("ichimoku_period2", 26) if params else 26
+                    period3 = params.get("ichimoku_period3", 52) if params else 52
+                    ich_data = self._calculate_ichimoku(df, period1, period2, period3)
+                    current_price = float(df['Close'].iloc[-1])
+
+                    # Ichimoku Signal Logic:
+                    # Buy: Price > Cloud AND Tenkan > Kijun AND Chikou > Price
+                    # Sell: Price < Cloud AND Tenkan < Kijun AND Chikou < Price
+                    signal = "neutral"
+                    cloud_top = max(ich_data["senkou_a"][-1], ich_data["senkou_b"][-1])
+                    cloud_bottom = min(ich_data["senkou_a"][-1], ich_data["senkou_b"][-1])
+
+                    bullish_conditions = 0
+                    bearish_conditions = 0
+
+                    if current_price > cloud_top:
+                        bullish_conditions += 1
+                    elif current_price < cloud_bottom:
+                        bearish_conditions += 1
+
+                    if ich_data["tenkan"][-1] > ich_data["kijun"][-1]:
+                        bullish_conditions += 1
+                    elif ich_data["tenkan"][-1] < ich_data["kijun"][-1]:
+                        bearish_conditions += 1
+
+                    if ich_data["chikou"][-1] > current_price:
+                        bullish_conditions += 1
+                    elif ich_data["chikou"][-1] < current_price:
+                        bearish_conditions += 1
+
+                    if bullish_conditions >= 2:
+                        signal = "buy"
+                    elif bearish_conditions >= 2:
+                        signal = "sell"
+
+                    results["ichimoku"] = {
+                        "dates": dates,
+                        "tenkan": [float(x) for x in ich_data["tenkan"]],
+                        "kijun": [float(x) for x in ich_data["kijun"]],
+                        "senkou_a": [float(x) for x in ich_data["senkou_a"]],
+                        "senkou_b": [float(x) for x in ich_data["senkou_b"]],
+                        "chikou": [float(x) for x in ich_data["chikou"]],
+                        "current": {
+                            "tenkan": float(ich_data["tenkan"][-1]),
+                            "kijun": float(ich_data["kijun"][-1]),
+                            "senkou_a": float(ich_data["senkou_a"][-1]),
+                            "senkou_b": float(ich_data["senkou_b"][-1]),
+                            "chikou": float(ich_data["chikou"][-1]),
+                            "price": current_price
+                        },
+                        "signal": signal
+                    }
+
+                elif indicator.lower() == "cci":
+                    period = params.get("cci_period", 20) if params else 20
+                    cci_values = self._calculate_cci(df, period)
+                    curr_cci = float(cci_values[-1])
+                    prev_cci = float(cci_values[-2]) if len(cci_values) >= 2 else 0
+
+                    # CCI Signal Logic:
+                    # CCI crosses above +100 = Buy (breakout)
+                    # CCI crosses below -100 = Sell (breakdown)
+                    # CCI crosses above 0 = Bullish momentum
+                    # CCI crosses below 0 = Bearish momentum
+                    signal = "neutral"
+                    if prev_cci <= 100 and curr_cci > 100:
+                        signal = "buy"
+                    elif prev_cci >= -100 and curr_cci < -100:
+                        signal = "sell"
+                    elif prev_cci < 0 and curr_cci >= 0:
+                        signal = "buy"
+                    elif prev_cci > 0 and curr_cci <= 0:
+                        signal = "sell"
+
+                    results["cci"] = {
+                        "dates": dates,
+                        "values": [float(x) for x in cci_values],
+                        "current": curr_cci,
+                        "signal": signal
+                    }
+
+                elif indicator.lower() == "mfi":
+                    period = params.get("mfi_period", 14) if params else 14
+                    mfi_values = self._calculate_mfi(df, period)
+                    curr_mfi = float(mfi_values[-1])
+                    prev_mfi = float(mfi_values[-2]) if len(mfi_values) >= 2 else 50
+
+                    # MFI Signal Logic:
+                    # MFI crosses above 20 (from oversold) = Buy
+                    # MFI crosses below 80 (from overbought) = Sell
+                    # MFI < 20 = Oversold condition
+                    # MFI > 80 = Overbought condition
+                    signal = "neutral"
+                    if prev_mfi < 20 and curr_mfi >= 20:
+                        signal = "buy"
+                    elif prev_mfi > 80 and curr_mfi <= 80:
+                        signal = "sell"
+                    elif curr_mfi < 20:
+                        signal = "buy"  # Oversold
+                    elif curr_mfi > 80:
+                        signal = "sell"  # Overbought
+
+                    results["mfi"] = {
+                        "dates": dates,
+                        "values": [float(x) for x in mfi_values],
+                        "current": curr_mfi,
+                        "signal": signal
+                    }
+
+                elif indicator.lower() == "keltner":
+                    ema_period = params.get("keltner_ema_period", 20) if params else 20
+                    atr_period = params.get("keltner_atr_period", 14) if params else 14
+                    atr_mult = params.get("keltner_atr_mult", 2) if params else 2
+                    kc_data = self._calculate_keltner_channels(df, ema_period, atr_period, atr_mult)
+                    current_price = float(df['Close'].iloc[-1])
+                    prev_price = float(df['Close'].iloc[-2])
+
+                    # Keltner Channels Signal Logic:
+                    # Price crosses above upper channel = Buy (breakout)
+                    # Price crosses below lower channel = Sell (breakdown)
+                    # Price returns to middle from upper = Sell signal
+                    # Price returns to middle from lower = Buy signal
+                    signal = "neutral"
+                    upper = float(kc_data["upper"][-1])
+                    lower = float(kc_data["lower"][-1])
+                    prev_upper = float(kc_data["upper"][-2])
+                    prev_lower = float(kc_data["lower"][-2])
+
+                    if prev_price <= prev_upper and current_price > upper:
+                        signal = "buy"
+                    elif prev_price >= prev_lower and current_price < lower:
+                        signal = "sell"
+
+                    results["keltner"] = {
+                        "dates": dates,
+                        "upper": [float(x) for x in kc_data["upper"]],
+                        "middle": [float(x) for x in kc_data["middle"]],
+                        "lower": [float(x) for x in kc_data["lower"]],
+                        "current": {
+                            "upper": upper,
+                            "middle": float(kc_data["middle"][-1]),
+                            "lower": lower,
+                            "price": current_price
+                        },
+                        "signal": signal
+                    }
+
+                elif indicator.lower() == "williams_r" or indicator.lower() == "williamsr":
+                    period = params.get("williams_period", 14) if params else 14
+                    wr_values = self._calculate_williams_r(df, period)
+                    curr_wr = float(wr_values[-1])
+                    prev_wr = float(wr_values[-2]) if len(wr_values) >= 2 else -50
+
+                    # Williams %R Signal Logic:
+                    # WR crosses above -80 (from oversold) = Buy
+                    # WR crosses below -20 (from overbought) = Sell
+                    # WR < -80 = Oversold
+                    # WR > -20 = Overbought
+                    signal = "neutral"
+                    if prev_wr < -80 and curr_wr >= -80:
+                        signal = "buy"
+                    elif prev_wr > -20 and curr_wr <= -20:
+                        signal = "sell"
+
+                    results["williams_r"] = {
+                        "dates": dates,
+                        "values": [float(x) for x in wr_values],
+                        "current": curr_wr,
+                        "signal": signal
+                    }
+
             except Exception as e:
                 results[indicator] = {"error": str(e)}
-                
+
         return results
     
     def screen_stocks(self, criteria: Dict[str, Any], tickers: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -1092,9 +1298,9 @@ class TechnicalAnalysis:
         period = min(50, len(df))
         high = df['High'].rolling(window=period).max().iloc[-1]
         low = df['Low'].rolling(window=period).min().iloc[-1]
-        
+
         diff = high - low
-        
+
         levels = {
             "0.0": float(high),
             "23.6": float(high - 0.236 * diff),
@@ -1104,13 +1310,316 @@ class TechnicalAnalysis:
             "78.6": float(high - 0.786 * diff),
             "100.0": float(low)
         }
-        
+
         return {
             "high": float(high),
             "low": float(low),
             "levels": levels
         }
-    
+
+    def _calculate_supertrend(self, df: pd.DataFrame, period: int = 10, multiplier: float = 3) -> Dict[str, np.ndarray]:
+        """
+        Calculate Supertrend Indicator
+        Trend-following indicator with dynamic stop-loss bands
+        """
+        try:
+            logger.info(f"Calculating Supertrend with period={period}, multiplier={multiplier}")
+
+            if df.empty or not all(col in df.columns for col in ['High', 'Low', 'Close']):
+                logger.error("Invalid input data for Supertrend calculation")
+                zeros = np.zeros(len(df))
+                return {'supertrend': zeros, 'direction': zeros, 'upper_band': zeros, 'lower_band': zeros}
+
+            # Calculate ATR
+            atr = self._calculate_atr(df, period)
+
+            # Calculate basic bands
+            hl2 = (df['High'] + df['Low']) / 2
+            basic_ub = hl2 + (multiplier * atr)
+            basic_lb = hl2 - (multiplier * atr)
+
+            # Initialize final bands
+            final_ub = pd.Series(index=df.index, dtype=float)
+            final_lb = pd.Series(index=df.index, dtype=float)
+            supertrend = pd.Series(index=df.index, dtype=float)
+            direction = pd.Series(index=df.index, dtype=int)
+
+            for i in range(len(df)):
+                if i == 0:
+                    final_ub.iloc[i] = basic_ub.iloc[i]
+                    final_lb.iloc[i] = basic_lb.iloc[i]
+                else:
+                    # Upper band
+                    if basic_ub.iloc[i] < final_ub.iloc[i-1] or df['Close'].iloc[i-1] > final_ub.iloc[i-1]:
+                        final_ub.iloc[i] = basic_ub.iloc[i]
+                    else:
+                        final_ub.iloc[i] = final_ub.iloc[i-1]
+
+                    # Lower band
+                    if basic_lb.iloc[i] > final_lb.iloc[i-1] or df['Close'].iloc[i-1] < final_lb.iloc[i-1]:
+                        final_lb.iloc[i] = basic_lb.iloc[i]
+                    else:
+                        final_lb.iloc[i] = final_lb.iloc[i-1]
+
+                # Determine supertrend and direction
+                if i == 0 or direction.iloc[i-1] == 1:
+                    if df['Close'].iloc[i] <= final_ub.iloc[i]:
+                        supertrend.iloc[i] = final_ub.iloc[i]
+                        direction.iloc[i] = -1
+                    else:
+                        supertrend.iloc[i] = final_lb.iloc[i]
+                        direction.iloc[i] = 1
+                else:
+                    if df['Close'].iloc[i] >= final_lb.iloc[i]:
+                        supertrend.iloc[i] = final_lb.iloc[i]
+                        direction.iloc[i] = 1
+                    else:
+                        supertrend.iloc[i] = final_ub.iloc[i]
+                        direction.iloc[i] = -1
+
+            logger.info(f"Supertrend calculated successfully")
+
+            return {
+                'supertrend': supertrend.values,
+                'direction': direction.values,
+                'upper_band': final_ub.values,
+                'lower_band': final_lb.values
+            }
+        except Exception as e:
+            logger.error(f"Error calculating Supertrend: {str(e)}")
+            zeros = np.zeros(len(df))
+            return {'supertrend': zeros, 'direction': zeros, 'upper_band': zeros, 'lower_band': zeros}
+
+    def _calculate_ichimoku(self, df: pd.DataFrame, period1: int = 9, period2: int = 26, period3: int = 52) -> Dict[str, np.ndarray]:
+        """
+        Calculate Ichimoku Cloud
+        Comprehensive indicator showing trend, support/resistance, and momentum
+        """
+        try:
+            logger.info(f"Calculating Ichimoku Cloud with periods {period1}, {period2}, {period3}")
+
+            if df.empty or not all(col in df.columns for col in ['High', 'Low', 'Close']):
+                logger.error("Invalid input data for Ichimoku calculation")
+                zeros = np.zeros(len(df))
+                return {
+                    'tenkan': zeros, 'kijun': zeros,
+                    'senkou_a': zeros, 'senkou_b': zeros, 'chikou': zeros
+                }
+
+            # Tenkan-sen (Conversion Line) = (9-period high + 9-period low) / 2
+            tenkan_high = df['High'].rolling(window=period1, min_periods=1).max()
+            tenkan_low = df['Low'].rolling(window=period1, min_periods=1).min()
+            tenkan = (tenkan_high + tenkan_low) / 2
+
+            # Kijun-sen (Base Line) = (26-period high + 26-period low) / 2
+            kijun_high = df['High'].rolling(window=period2, min_periods=1).max()
+            kijun_low = df['Low'].rolling(window=period2, min_periods=1).min()
+            kijun = (kijun_high + kijun_low) / 2
+
+            # Senkou Span A = (Tenkan + Kijun) / 2, plotted 26 periods ahead
+            senkou_a = ((tenkan + kijun) / 2).shift(period2)
+
+            # Senkou Span B = (52-period high + 52-period low) / 2, plotted 26 periods ahead
+            senkou_b_high = df['High'].rolling(window=period3, min_periods=1).max()
+            senkou_b_low = df['Low'].rolling(window=period3, min_periods=1).min()
+            senkou_b = ((senkou_b_high + senkou_b_low) / 2).shift(period2)
+
+            # Chikou Span = Close plotted 26 periods in the past
+            chikou = df['Close'].shift(-period2)
+
+            # Fill NaN values
+            tenkan = tenkan.fillna(method='bfill').fillna(df['Close'])
+            kijun = kijun.fillna(method='bfill').fillna(df['Close'])
+            senkou_a = senkou_a.fillna(method='bfill').fillna(df['Close'])
+            senkou_b = senkou_b.fillna(method='bfill').fillna(df['Close'])
+            chikou = chikou.fillna(method='ffill').fillna(df['Close'])
+
+            logger.info(f"Ichimoku Cloud calculated successfully")
+
+            return {
+                'tenkan': tenkan.values,
+                'kijun': kijun.values,
+                'senkou_a': senkou_a.values,
+                'senkou_b': senkou_b.values,
+                'chikou': chikou.values
+            }
+        except Exception as e:
+            logger.error(f"Error calculating Ichimoku: {str(e)}")
+            close_values = df['Close'].values if not df.empty else np.zeros(1)
+            return {
+                'tenkan': close_values, 'kijun': close_values,
+                'senkou_a': close_values, 'senkou_b': close_values, 'chikou': close_values
+            }
+
+    def _calculate_cci(self, df: pd.DataFrame, period: int = 20) -> np.ndarray:
+        """
+        Calculate Commodity Channel Index (CCI)
+        Momentum indicator for identifying trend changes and breakouts
+        """
+        try:
+            logger.info(f"Calculating CCI with period={period}")
+
+            if df.empty or not all(col in df.columns for col in ['High', 'Low', 'Close']):
+                logger.error("Invalid input data for CCI calculation")
+                return np.zeros(len(df))
+
+            # Calculate Typical Price
+            typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+
+            # Calculate SMA of Typical Price
+            sma_tp = typical_price.rolling(window=period, min_periods=1).mean()
+
+            # Calculate Mean Deviation
+            mean_dev = typical_price.rolling(window=period, min_periods=1).apply(
+                lambda x: np.abs(x - x.mean()).mean(), raw=True
+            )
+
+            # Prevent division by zero
+            mean_dev = mean_dev.replace(0, 1e-10)
+
+            # Calculate CCI
+            cci = (typical_price - sma_tp) / (0.015 * mean_dev)
+
+            # Fill NaN values with 0
+            cci = cci.fillna(0)
+
+            logger.info(f"CCI calculated successfully. Range: {cci.min():.2f} - {cci.max():.2f}")
+
+            return cci.values
+        except Exception as e:
+            logger.error(f"Error calculating CCI: {str(e)}")
+            return np.zeros(len(df))
+
+    def _calculate_mfi(self, df: pd.DataFrame, period: int = 14) -> np.ndarray:
+        """
+        Calculate Money Flow Index (MFI)
+        Volume-weighted RSI, identifies overbought/oversold with volume confirmation
+        """
+        try:
+            logger.info(f"Calculating MFI with period={period}")
+
+            if df.empty or not all(col in df.columns for col in ['High', 'Low', 'Close', 'Volume']):
+                logger.error("Invalid input data for MFI calculation")
+                return np.full(len(df), 50.0)  # Neutral value
+
+            # Calculate Typical Price
+            typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+
+            # Calculate Raw Money Flow
+            raw_money_flow = typical_price * df['Volume']
+
+            # Identify positive and negative money flow
+            positive_mf = pd.Series(0.0, index=df.index)
+            negative_mf = pd.Series(0.0, index=df.index)
+
+            for i in range(1, len(df)):
+                if typical_price.iloc[i] > typical_price.iloc[i-1]:
+                    positive_mf.iloc[i] = raw_money_flow.iloc[i]
+                elif typical_price.iloc[i] < typical_price.iloc[i-1]:
+                    negative_mf.iloc[i] = raw_money_flow.iloc[i]
+
+            # Calculate positive and negative money flow sums
+            positive_mf_sum = positive_mf.rolling(window=period, min_periods=1).sum()
+            negative_mf_sum = negative_mf.rolling(window=period, min_periods=1).sum()
+
+            # Prevent division by zero
+            negative_mf_sum = negative_mf_sum.replace(0, 1e-10)
+
+            # Calculate Money Flow Ratio
+            mfr = positive_mf_sum / negative_mf_sum
+
+            # Calculate MFI
+            mfi = 100 - (100 / (1 + mfr))
+
+            # Fill NaN values with neutral value (50)
+            mfi = mfi.fillna(50)
+
+            # Clip to valid range [0, 100]
+            mfi = np.clip(mfi.values, 0, 100)
+
+            logger.info(f"MFI calculated successfully. Range: {mfi.min():.2f} - {mfi.max():.2f}")
+
+            return mfi
+        except Exception as e:
+            logger.error(f"Error calculating MFI: {str(e)}")
+            return np.full(len(df), 50.0)
+
+    def _calculate_keltner_channels(self, df: pd.DataFrame, ema_period: int = 20, atr_period: int = 14, atr_mult: float = 2) -> Dict[str, np.ndarray]:
+        """
+        Calculate Keltner Channels
+        Volatility-based channels using EMA and ATR
+        """
+        try:
+            logger.info(f"Calculating Keltner Channels with ema_period={ema_period}, atr_period={atr_period}, atr_mult={atr_mult}")
+
+            if df.empty or 'Close' not in df.columns:
+                logger.error("Invalid input data for Keltner Channels calculation")
+                zeros = np.zeros(len(df))
+                return {'upper': zeros, 'middle': zeros, 'lower': zeros}
+
+            # Calculate middle line (EMA)
+            ema = self._calculate_ema(df, ema_period)
+
+            # Calculate ATR
+            atr = self._calculate_atr(df, atr_period)
+
+            # Calculate upper and lower channels
+            upper = ema + (atr * atr_mult)
+            lower = ema - (atr * atr_mult)
+
+            logger.info(f"Keltner Channels calculated successfully")
+
+            return {
+                'upper': upper,
+                'middle': ema,
+                'lower': lower
+            }
+        except Exception as e:
+            logger.error(f"Error calculating Keltner Channels: {str(e)}")
+            close_mean = df['Close'].mean() if not df.empty else 100.0
+            size = len(df) if not df.empty else 1
+            return {
+                'upper': np.full(size, close_mean),
+                'middle': np.full(size, close_mean),
+                'lower': np.full(size, close_mean)
+            }
+
+    def _calculate_williams_r(self, df: pd.DataFrame, period: int = 14) -> np.ndarray:
+        """
+        Calculate Williams %R
+        Momentum indicator showing overbought/oversold levels
+        """
+        try:
+            logger.info(f"Calculating Williams %R with period={period}")
+
+            if df.empty or not all(col in df.columns for col in ['High', 'Low', 'Close']):
+                logger.error("Invalid input data for Williams %R calculation")
+                return np.full(len(df), -50.0)  # Neutral value
+
+            # Calculate highest high and lowest low over period
+            highest_high = df['High'].rolling(window=period, min_periods=1).max()
+            lowest_low = df['Low'].rolling(window=period, min_periods=1).min()
+
+            # Prevent division by zero
+            range_hl = highest_high - lowest_low
+            range_hl = range_hl.replace(0, 1e-10)
+
+            # Calculate Williams %R
+            williams_r = -100 * ((highest_high - df['Close']) / range_hl)
+
+            # Fill NaN values with neutral value (-50)
+            williams_r = williams_r.fillna(-50)
+
+            # Clip to valid range [-100, 0]
+            williams_r = np.clip(williams_r.values, -100, 0)
+
+            logger.info(f"Williams %R calculated successfully. Range: {williams_r.min():.2f} - {williams_r.max():.2f}")
+
+            return williams_r
+        except Exception as e:
+            logger.error(f"Error calculating Williams %R: {str(e)}")
+            return np.full(len(df), -50.0)
+
     def _get_data_with_indicators(
         self,
         ticker: str,
@@ -1183,6 +1692,79 @@ class TechnicalAnalysis:
                                   f"Upper: {df['BB_Upper'].head()}\n" + \
                                   f"Middle: {df['BB_Middle'].head()}\n" + \
                                   f"Lower: {df['BB_Lower'].head()}")
+
+                    elif indicator_type == 'supertrend':
+                        period = params.get('period', 10)
+                        multiplier = params.get('multiplier', 3)
+                        st_data = self._calculate_supertrend(df, period, multiplier)
+                        df['Supertrend'] = st_data['supertrend']
+                        df['ST_Direction'] = st_data['direction']
+                        df['ST_Upper'] = st_data['upper_band']
+                        df['ST_Lower'] = st_data['lower_band']
+                        logger.info("Supertrend calculation completed. Sample values:\n" + \
+                                  f"Supertrend: {df['Supertrend'].head()}\n" + \
+                                  f"Direction: {df['ST_Direction'].head()}")
+
+                    elif indicator_type == 'ichimoku':
+                        period1 = params.get('period1', 9)
+                        period2 = params.get('period2', 26)
+                        period3 = params.get('period3', 52)
+                        ich_data = self._calculate_ichimoku(df, period1, period2, period3)
+                        df['Ichimoku_Tenkan'] = ich_data['tenkan']
+                        df['Ichimoku_Kijun'] = ich_data['kijun']
+                        df['Ichimoku_SenkouA'] = ich_data['senkou_a']
+                        df['Ichimoku_SenkouB'] = ich_data['senkou_b']
+                        df['Ichimoku_Chikou'] = ich_data['chikou']
+                        logger.info("Ichimoku Cloud calculation completed. Sample values:\n" + \
+                                  f"Tenkan: {df['Ichimoku_Tenkan'].head()}\n" + \
+                                  f"Kijun: {df['Ichimoku_Kijun'].head()}")
+
+                    elif indicator_type == 'cci':
+                        period = params.get('period', 20)
+                        cci_values = self._calculate_cci(df, period)
+                        df[f'CCI_{period}'] = cci_values
+                        logger.info(f"CCI_{period} calculation completed. Sample values:\n{df[f'CCI_{period}'].head()}")
+
+                    elif indicator_type == 'mfi':
+                        period = params.get('period', 14)
+                        mfi_values = self._calculate_mfi(df, period)
+                        df[f'MFI_{period}'] = mfi_values
+                        logger.info(f"MFI_{period} calculation completed. Sample values:\n{df[f'MFI_{period}'].head()}")
+
+                    elif indicator_type == 'keltner':
+                        ema_period = params.get('ema_period', 20)
+                        atr_period = params.get('atr_period', 14)
+                        atr_mult = params.get('atr_mult', 2)
+                        kc_data = self._calculate_keltner_channels(df, ema_period, atr_period, atr_mult)
+                        df['KC_Upper'] = kc_data['upper']
+                        df['KC_Middle'] = kc_data['middle']
+                        df['KC_Lower'] = kc_data['lower']
+                        logger.info("Keltner Channels calculation completed. Sample values:\n" + \
+                                  f"Upper: {df['KC_Upper'].head()}\n" + \
+                                  f"Middle: {df['KC_Middle'].head()}\n" + \
+                                  f"Lower: {df['KC_Lower'].head()}")
+
+                    elif indicator_type == 'williams_r' or indicator_type == 'williamsr':
+                        period = params.get('period', 14)
+                        wr_values = self._calculate_williams_r(df, period)
+                        df[f'Williams_R_{period}'] = wr_values
+                        logger.info(f"Williams_R_{period} calculation completed. Sample values:\n{df[f'Williams_R_{period}'].head()}")
+
+                    elif indicator_type == 'atr':
+                        period = params.get('period', 14)
+                        atr_values = self._calculate_atr(df, period)
+                        df[f'ATR_{period}'] = atr_values
+                        logger.info(f"ATR_{period} calculation completed. Sample values:\n{df[f'ATR_{period}'].head()}")
+
+                    elif indicator_type == 'stochastic':
+                        k_period = params.get('k_period', 14)
+                        d_period = params.get('d_period', 3)
+                        stoch_data = self._calculate_stochastic(df, k_period, d_period)
+                        df['Stoch_K'] = stoch_data['k']
+                        df['Stoch_D'] = stoch_data['d']
+                        logger.info("Stochastic calculation completed. Sample values:\n" + \
+                                  f"K: {df['Stoch_K'].head()}\n" + \
+                                  f"D: {df['Stoch_D'].head()}")
 
                 except Exception as e:
                     logger.error(f"Error calculating {indicator_type}: {str(e)}")
