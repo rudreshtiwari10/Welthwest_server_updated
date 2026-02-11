@@ -175,10 +175,20 @@ def get_blogs():
 
 @news_blog_bp.route('/api/blogs/<slug>', methods=['GET'])
 def get_blog_by_slug(slug):
-    """Get blog by slug and increment view count"""
+    """Get blog by slug or _id and increment view count"""
     try:
         blog_model = get_blog_model()
+
+        # First, try to find by slug
         blog = blog_model.get_by_slug(slug)
+
+        # If not found by slug, try to find by _id (in case slug is actually an ObjectId)
+        if not blog:
+            try:
+                from bson import ObjectId
+                blog = blog_model.get_by_id(slug)
+            except:
+                pass  # If it's not a valid ObjectId, just continue to 404
 
         if not blog:
             return jsonify({

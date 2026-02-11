@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from services.payment_cashfree import get_cashfree_service
 from services.subscription_service import SubscriptionService
+from services.notification_service import notification_service
 from pymongo import MongoClient
 from bson import ObjectId
 from datetime import datetime
@@ -294,6 +295,17 @@ def cashfree_webhook():
 
             if success:
                 logger.info(f"Subscription applied successfully for user {user_id}: {plan} ({duration})")
+
+                # Create success notification
+                try:
+                    notification_service.notify_payment_success(
+                        user_id=user_id,
+                        amount=transaction.get('amount', 0),
+                        plan_name=plan,
+                        transaction_id=transaction_id
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to create payment success notification: {str(e)}")
             else:
                 logger.error(f"Failed to apply subscription: {message}")
 
@@ -313,6 +325,19 @@ def cashfree_webhook():
             )
 
             logger.warning(f"Payment failed for order {order_id}")
+
+            # Create failure notification
+            try:
+                user_id = str(transaction['user_id'])
+                notification_service.notify_payment_failed(
+                    user_id=user_id,
+                    amount=transaction.get('amount', 0),
+                    plan_name=transaction.get('plan_id', 'Unknown'),
+                    reason=processed_data.get('payment_status', 'Payment processing failed')
+                )
+            except Exception as e:
+                logger.error(f"Failed to create payment failure notification: {str(e)}")
+
             return jsonify({"status": "payment_failed"}), 200
 
     except Exception as e:
