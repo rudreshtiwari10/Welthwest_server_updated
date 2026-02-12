@@ -5201,5 +5201,6 @@ if __name__ == '__main__':
     app.run(
         host='0.0.0.0',
         port=port,
-        debug=config.DEBUG if hasattr(config, 'DEBUG') else False
+        debug=config.DEBUG if hasattr(config, 'DEBUG') else False,
+        threaded=True
     )

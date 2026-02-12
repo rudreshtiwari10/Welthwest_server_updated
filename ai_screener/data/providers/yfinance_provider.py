@@ -211,7 +211,7 @@ class YFinanceIndiaProvider:
                         interval=interval,
                         auto_adjust=True,
                         group_by="ticker",
-                        threads=True,
+                        threads=False,
                     )
                 else:
                     df = yf.download(
@@ -220,7 +220,7 @@ class YFinanceIndiaProvider:
                         end=end_date,
                         auto_adjust=True,
                         group_by="ticker",
-                        threads=True,
+                        threads=False,
                     )
                 if df.empty:
                     continue
