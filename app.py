@@ -5193,14 +5193,27 @@ def admin_reset_usage():
 if __name__ == '__main__':
     # Get configuration
     config = get_config()
-    
+
     # Get port from environment or use default
     port = int(os.environ.get('PORT', 5000))
-    
-    # Run the app
-    app.run(
-        host='0.0.0.0',
-        port=port,
-        debug=config.DEBUG if hasattr(config, 'DEBUG') else False,
-        threaded=True
-    )
+
+    # Use waitress on Windows to avoid WinError 10038 socket crashes
+    # during long-running requests (e.g. AI screener yfinance downloads).
+    # Falls back to Flask dev server on non-Windows or if waitress is missing.
+    _use_waitress = os.name == 'nt'
+    if _use_waitress:
+        try:
+            from waitress import serve
+            print(f" * Serving Flask app with Waitress on http://0.0.0.0:{port}")
+            serve(app, host='0.0.0.0', port=port, threads=8, channel_timeout=300)
+        except ImportError:
+            print(" * waitress not installed, falling back to Flask dev server")
+            _use_waitress = False
+
+    if not _use_waitress:
+        app.run(
+            host='0.0.0.0',
+            port=port,
+            debug=config.DEBUG if hasattr(config, 'DEBUG') else False,
+            threaded=True
+        )
