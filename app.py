@@ -2516,65 +2516,6 @@ def top_gainers_losers():
         logger.error(f"Error in top gainers/losers endpoint: {str(e)}")
         return jsonify({"error": str(e), "message": "Failed to fetch top gainers and losers data"}), 500
 
-@app.route('/api/stock/fundamentals', methods=['GET'])
-def stock_fundamentals():
-    """
-    Get comprehensive fundamental analysis data for Indian stocks
-    Including balance sheet, financial ratios, and key metrics
-    
-    Parameters:
-    - ticker: Stock ticker symbol (e.g., RELIANCE, TCS)
-    
-    Returns:
-    - Valuation ratios (P/E, P/B, P/S, EV/EBITDA)
-    - Profitability ratios (ROE, ROA, ROIC, margins)
-    - Financial health ratios (current ratio, quick ratio, debt/equity)
-    - Balance sheet summary (assets, liabilities, equity in crores)
-    - Market performance metrics (52-week high/low, dividend yield, beta)
-    - Key financial metrics (revenue, net income, EPS, etc.)
-    """
-    ticker = request.args.get('ticker', type=str)
-    
-    if not ticker:
-        return jsonify({"error": "Ticker symbol is required"}), 400
-    
-    ticker = ticker.upper()
-    
-    # Validate the ticker
-    if not validate_ticker(ticker):
-        return jsonify({
-            "error": f"Invalid ticker symbol: {ticker}",
-            "message": "Please provide a valid Indian stock ticker symbol"
-        }), 400
-    
-    try:
-        logger.info(f"Fetching fundamentals data for {ticker}")
-        fundamentals_data = get_stock_fundamentals(ticker)
-        
-        # Check if there was an error in fetching data
-        if 'error' in fundamentals_data:
-            logger.warning(f"Error in fundamentals data for {ticker}: {fundamentals_data['error']}")
-            return jsonify({
-                "ticker": ticker,
-                "message": f"Limited data available for {ticker}",
-                "data": fundamentals_data
-            }), 200
-        
-        logger.info(f"Successfully fetched fundamentals for {ticker}")
-        return jsonify({
-            "ticker": ticker,
-            "data": fundamentals_data,
-            "status": "success",
-            "message": f"Fundamental analysis data for {ticker}"
-        })
-        
-    except Exception as e:
-        logger.error(f"Error in stock fundamentals endpoint for {ticker}: {str(e)}")
-        return jsonify({
-            "error": str(e),
-            "ticker": ticker,
-            "message": "Failed to fetch fundamental analysis data"
-        }), 500
 
 # AI Chat endpoint
 @app.route('/api/market/chat', methods=['POST'])
