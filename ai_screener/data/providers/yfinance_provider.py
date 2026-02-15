@@ -226,17 +226,13 @@ class YFinanceIndiaProvider:
                     continue
 
                 if len(batch_yf) == 1:
+                    # Single symbol: yf.download with group_by="ticker" may
+                    # return MultiIndex columns in newer yfinance versions,
+                    # so fall back to fetch_price_data which uses ticker.history().
                     symbol = batch_raw[0]
-                    result = df.reset_index()
-                    result = result.rename(columns={
-                        "Date": "timestamp", "Datetime": "timestamp",
-                        "Open": "open", "High": "high",
-                        "Low": "low", "Close": "close", "Volume": "volume",
-                    })
-                    if "timestamp" in result.columns:
-                        result["timestamp"] = pd.to_datetime(result["timestamp"]).dt.tz_localize(None)
-                        cols = [c for c in ["timestamp", "open", "high", "low", "close", "volume"] if c in result.columns]
-                        all_data[symbol] = result[cols]
+                    single_df = self.fetch_price_data(symbol, start_date, end_date, interval=interval)
+                    if not single_df.empty:
+                        all_data[symbol] = single_df
                 else:
                     for j, yf_sym in enumerate(batch_yf):
                         symbol = batch_raw[j]
