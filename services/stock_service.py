@@ -799,44 +799,54 @@ def warm_market_indices_cache():
         logger.error(f"Error warming market indices cache: {str(e)}")
         return False
 
-def get_market_indices():
+def _apply_limit(data, limit):
+    """Slice a dict to only the first N keys."""
+    if limit and limit > 0 and isinstance(data, dict) and len(data) > limit:
+        limited_keys = list(data.keys())[:limit]
+        return {k: data[k] for k in limited_keys}
+    return data
+
+def get_market_indices(limit=None):
     """
     Get major Indian market indices data with smart caching and circuit breaker
     Primary: Upstox API, Fallback: Yahoo Finance
-    
+
+    Args:
+        limit: Optional int to return only the first N indices (reduces API calls)
+
     Returns:
     dict: Market indices data
     """
-    cache_key = "market_indices"
-    
+    cache_key = f"market_indices_{limit}" if limit else "market_indices"
+
     # Smart cache TTL based on market hours
     if is_market_hours():
         cache_ttl = 300  # 5 minutes during market hours (more frequent updates)
     else:
         cache_ttl = 1800  # 30 minutes outside market hours (less frequent updates)
-    
+
     # Try to get from cache first
     cached_data = get_cached_data(cache_key)
     if cached_data:
         logger.info("Returning cached market indices data")
         return cached_data
-    
+
+    result = None
+
     # Circuit breaker: Check if Upstox has failed recently
     upstox_failure_key = "upstox_market_indices_failure"
     upstox_failure_data = get_cached_data(upstox_failure_key)
-    
+
     # Try Upstox API first (Primary) - unless it failed recently
     if not upstox_failure_data:
         try:
             if upstox_api.access_token:
                 logger.info("Attempting to fetch market indices from Upstox")
                 upstox_indices = get_upstox_market_indices()
-                
+
                 if upstox_indices and len(upstox_indices) > 0:
                     logger.info("Successfully fetched market indices from Upstox")
-                    # Cache the result
-                    set_cached_data(cache_key, upstox_indices, cache_ttl)
-                    return upstox_indices
+                    result = upstox_indices
                 else:
                     logger.warning("No market indices data from Upstox, falling back to Yahoo Finance")
             else:
@@ -847,18 +857,29 @@ def get_market_indices():
             set_cached_data(upstox_failure_key, {"failed_at": datetime.now().isoformat()}, 900)
     else:
         logger.info("Skipping Upstox due to recent failures, using Yahoo Finance")
-    
-    # Fallback to Yahoo Finance - optimized version
-    logger.info("Using Yahoo Finance for market indices")
-    return get_market_indices_yfinance_optimized()
 
-def get_market_indices_yfinance_optimized():
+    # Fallback to Yahoo Finance - optimized version
+    if result is None:
+        logger.info("Using Yahoo Finance for market indices")
+        result = get_market_indices_yfinance_optimized(limit=limit)
+
+    # Always apply limit as final safeguard (covers all code paths & fallbacks)
+    result = _apply_limit(result, limit)
+
+    # Cache the limited result
+    set_cached_data(cache_key, result, cache_ttl)
+    return result
+
+def get_market_indices_yfinance_optimized(limit=None):
     """
     Get market indices data using Yahoo Finance with optimized bulk data fetching
     No unnecessary delays, optimized period, and better error handling
+
+    Args:
+        limit: Optional int to fetch only the first N indices (saves API calls)
     """
     # Define the indices to fetch - expanded list for better horizontal scrolling
-    indices = [
+    all_indices = [
         "^NSEI",      # NIFTY 50
         "^BSESN",     # BSE SENSEX
         "^NSEBANK",   # NIFTY BANK
@@ -870,6 +891,8 @@ def get_market_indices_yfinance_optimized():
         "^CNXREALTY", # NIFTY REALTY
         "^CNXENERGY"  # NIFTY ENERGY
     ]
+
+    indices = all_indices[:limit] if limit and limit > 0 else all_indices
 
     # Define index names mapping
     index_names = {
@@ -911,7 +934,7 @@ def get_market_indices_yfinance_optimized():
             is_empty_bulk = True
         if is_empty_bulk:
             logger.warning("Bulk indices download returned empty; using optimized individual fallback")
-            return get_market_indices_individual_optimized()
+            return get_market_indices_individual_optimized(limit=limit)
 
         # Process the bulk data for each index
         for index_symbol in indices:
@@ -1063,21 +1086,17 @@ def get_market_indices_individual_fallback():
     # Log metadata but don't include it in the response
     fetch_time_seconds = round(time.time() - start_time, 2)
     logger.info(f"Successfully fetched market indices data in {fetch_time_seconds} seconds (individual fallback)")
-    logger.info(f"Source: Yahoo Finance (Individual Fallback), Indices count: {len(indices)}")
-    
-    # Cache before returning
-    cache_key = "market_indices"
-    set_cached_data(cache_key, result, 300)  # 5 minutes cache
+    logger.info(f"Source: Yahoo Finance (Individual Fallback), Indices count: {len(result)}")
     return result
 
-def get_market_indices_individual_optimized():
+def get_market_indices_individual_optimized(limit=None):
     """
     Optimized fallback method to get market indices data using individual API calls
     No unnecessary delays and improved data accuracy
     """
     logger.warning("Using optimized individual API calls as fallback for market indices")
     # Define the indices to fetch - expanded list for better horizontal scrolling
-    indices = [
+    all_indices = [
         "^NSEI",      # NIFTY 50
         "^BSESN",     # BSE SENSEX
         "^NSEBANK",   # NIFTY BANK
@@ -1089,6 +1108,7 @@ def get_market_indices_individual_optimized():
         "^CNXREALTY", # NIFTY REALTY
         "^CNXENERGY"  # NIFTY ENERGY
     ]
+    indices = all_indices[:limit] if limit and limit > 0 else all_indices
 
     # Define index names mapping
     index_names = {
@@ -1184,11 +1204,7 @@ def get_market_indices_individual_optimized():
     # Log metadata but don't include it in the response
     fetch_time_seconds = round(time.time() - start_time, 2)
     logger.info(f"Successfully fetched market indices data in {fetch_time_seconds} seconds (individual optimized fallback)")
-    logger.info(f"Source: Yahoo Finance (Individual Optimized Fallback), Indices count: {len(indices)}")
-    
-    # Cache before returning
-    cache_key = "market_indices"
-    set_cached_data(cache_key, result, 1800)  # 30 minutes cache
+    logger.info(f"Source: Yahoo Finance (Individual Optimized Fallback), Indices count: {len(result)}")
     return result
 
 def validate_ticker(ticker_symbol):

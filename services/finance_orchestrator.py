@@ -32,7 +32,12 @@ from services.indicators_service import get_indicators, get_signal_summary
 from services.chart_service import generate_chart, chart_service
 from services.screener_service import screen_stocks, run_screen, get_available_screens
 from services.simple_backtest_service import run_backtest
-from services.rag_service import get_context_for_query, rag_service
+# RAG service disabled - PDF document analysis not currently used
+# from services.rag_service import get_context_for_query, rag_service
+class _DisabledRAG:
+    def is_available(self): return False
+rag_service = _DisabledRAG()
+def get_context_for_query(*a, **kw): return None
 from services.stock_service import get_live_data
 import yfinance as yf
 

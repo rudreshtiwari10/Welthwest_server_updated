@@ -8,7 +8,6 @@ from services.stock_service import (
     get_historical_data, get_live_data, validate_ticker,
     get_ohlc_data, get_market_indices, get_top_gainers_losers, get_stock_fundamentals
 )
-from services.upstox_service import upstox_api
 from services.utils import normalize_data, calculate_statistics
 from services.user_service import UserService
 from services.ai_service import AIModelService
@@ -25,19 +24,6 @@ from routes.admin_content import admin_content_bp
 from routes.admin_support import admin_support_bp
 from routes.admin_monitoring import admin_monitoring_bp
 from routes.support import support_bp
-from routes.mtf_screener_routes import mtf_screener_bp
-from routes.risk_calculator_routes import risk_calculator_bp
-from routes.risk_calculator_phase2_routes import risk_phase2_bp
-from routes.risk_calculator_phase3_routes import risk_phase3_bp
-from routes.risk_calculator_phase4_routes import risk_phase4_bp
-from routes.risk_calculator_phase5_routes import risk_phase5_bp
-from routes.risk_calculator_phase6_routes import risk_phase6_bp
-from routes.risk_calculator_phase7_routes import risk_phase7_bp
-from routes.risk_calculator_phase8_routes import risk_phase8_bp
-from routes.risk_calculator_phase9_routes import risk_phase9_bp
-from routes.pattern_analysis_routes import pattern_analysis_bp
-from routes.risk_calculator_extended_routes import risk_calc_ext_bp
-from routes.trade_simulator_routes import trade_simulator_bp
 from routes.ai_screener_routes import ai_screener_bp
 from middleware.feature_limit import feature_limit, admin_required
 from database.seed_plans import initialize_premium_system
@@ -57,20 +43,13 @@ from typing import Dict, Any, Optional, List
 from config import get_config
 from datetime import timedelta
 from services.technical_analysis import TechnicalAnalysis
-from services.portfolio_service import PortfolioService
 from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 import json
 from functools import wraps
 import re
-from services.backtesting_service import BacktestingService
-from services.market_regime_service import market_regime_service, MarketRegimeService
-from hmm_model import hmm_service
-from lstm_model import lstm_service, lstm_hmm_forecast_service
 from services.session_service import InMemorySessionService
 from bson import ObjectId
 from datetime import datetime
-import atexit
-from services.scheduler_service import keep_alive_scheduler
 import time
 from services.cache_service import get_cached_data
 from services.stock_service import warm_market_indices_cache
@@ -254,28 +233,6 @@ app.register_blueprint(admin_content_bp)
 app.register_blueprint(admin_support_bp)
 app.register_blueprint(admin_monitoring_bp)
 
-# Register MTF Stock Screener blueprint
-app.register_blueprint(mtf_screener_bp)
-
-# Register Risk Calculator blueprint
-app.register_blueprint(risk_calculator_bp)
-
-# Register Risk Calculator Phase 2 blueprint (Trade Discipline & Guardrails)
-app.register_blueprint(risk_phase2_bp)
-
-# Register Risk Calculator Phase 3-9 blueprints
-app.register_blueprint(risk_phase3_bp)
-app.register_blueprint(risk_phase4_bp)
-app.register_blueprint(risk_phase5_bp)
-app.register_blueprint(risk_phase6_bp)
-app.register_blueprint(risk_phase7_bp)
-app.register_blueprint(risk_phase8_bp)
-app.register_blueprint(risk_phase9_bp)
-
-# Register Pattern Analysis & Trade Simulator blueprints
-app.register_blueprint(pattern_analysis_bp)
-app.register_blueprint(risk_calc_ext_bp)
-app.register_blueprint(trade_simulator_bp)
 
 # Register AI Screener blueprint
 app.register_blueprint(ai_screener_bp)
@@ -283,10 +240,20 @@ app.register_blueprint(ai_screener_bp)
 # Register enhanced Finance AI routes
 register_finance_ai_routes(app)
 
-# Initialize premium system (seed plans, create indexes)
-with app.app_context():
-    logger.info("Initializing premium system...")
-    initialize_premium_system()
+# Defer premium system initialization to first request (thread-safe)
+import threading
+_premium_init_lock = threading.Lock()
+_premium_initialized = False
+
+@app.before_request
+def _init_premium_once():
+    global _premium_initialized
+    if not _premium_initialized:
+        with _premium_init_lock:
+            if not _premium_initialized:
+                logger.info("Initializing premium system on first request...")
+                initialize_premium_system()
+                _premium_initialized = True
 
 # After request handler to set anonymous session cookie
 @app.after_request
@@ -308,11 +275,7 @@ def set_anon_session_cookie(response):
 
 # Initialize services
 technical_analysis = TechnicalAnalysis()
-portfolio_service = PortfolioService()
 ai_service = AIModelService()  # Initialize AI service
-
-# Initialize backtesting service
-backtesting_service = BacktestingService()
 
 # Warm market indices cache on startup
 def warm_cache_on_startup():
@@ -371,7 +334,6 @@ def health_check():
                 "status": "operational"
             },
             "services": {
-                "upstox": "available" if upstox_api.access_token else "unavailable",
                 "yfinance": "available",
                 "cache": "operational"
             }
@@ -387,23 +349,6 @@ def health_check():
             "timestamp": datetime.now().isoformat()
         }), 500
 
-# Start keep-alive scheduler at import time if enabled (compatible with Flask >=2.3)
-def _maybe_start_keep_alive_scheduler():
-    if os.environ.get("ENABLE_KEEP_ALIVE_SCHEDULER", "true").lower() in ("1", "true", "yes"):
-        try:
-            interval_str = os.environ.get("KEEP_ALIVE_INTERVAL_MIN", "10")
-            interval_min = max(1, int(interval_str))
-        except ValueError:
-            interval_min = 10
-        keep_alive_scheduler.start(minutes=interval_min)
-
-_maybe_start_keep_alive_scheduler()
-
-
-# Ensure scheduler stops cleanly on shutdown
-@atexit.register
-def _shutdown_scheduler():
-    keep_alive_scheduler.stop()
 
 # Authentication routes
 @app.route('/api/auth/register', methods=['POST'])
@@ -1567,109 +1512,6 @@ def nextgen_chat():
             "model_used": "error"
         }), 500
 
-# Anonymous Backtesting endpoint with session tracking
-@app.route('/api/backtest/run', methods=['POST'])
-@validate_json_request
-@feature_limit('backtest-beta')
-def backtest_run():
-    """Run backtest with automatic anonymous trial limiting"""
-    try:
-        data = request.get_json()
-
-        # Use global backtesting service instance
-        global backtesting_service
-
-        # Run the backtest
-        result = backtesting_service.comprehensive_backtest(
-            ticker=data.get('stock_symbol'),
-            selected_indicators=data.get('selected_indicators', {}),
-            voting_threshold=data.get('voting_threshold', 0.6),
-            period=data.get('period', '1y'),
-            timeframe=data.get('timeframe', '1d'),
-            initial_capital=data.get('initial_capital', 100000),
-            position_size_pct=data.get('position_size_pct', 0.1),
-            risk_reward_ratio=data.get('risk_reward_ratio', 2.0),
-            max_drawdown_pct=data.get('max_drawdown_pct', 0.05),
-            monte_carlo_simulations=data.get('monte_carlo_simulations', 1000),
-            confidence_level=data.get('confidence_level', 0.95)
-        )
-
-        # Get usage info if available (set by decorator)
-        usage_info = getattr(g, '_anon_feature_usage', None)
-
-        return jsonify({
-            "success": True,
-            "data": result,
-            "usage": usage_info
-        }), 200
-
-    except Exception as e:
-        import traceback
-        error_trace = traceback.format_exc()
-        logger.error(f"Error in backtest endpoint: {str(e)}\n{error_trace}")
-        return jsonify({
-            "error": "An unexpected error occurred during backtesting",
-            "details": str(e),
-            "type": type(e).__name__
-        }), 500
-
-# AI Analysis endpoint with anonymous trial support
-@app.route('/api/ai-analysis/run', methods=['POST'])
-@validate_json_request
-@anon_or_auth_feature_limit('ai-market-analysis')
-def ai_analysis_run():
-    """Run AI analysis with automatic anonymous trial limiting"""
-    try:
-        data = request.get_json()
-
-        # Get parameters
-        ticker = data.get('ticker')
-        period = data.get('period', '1y')
-
-        if not ticker:
-            return jsonify({"error": "Ticker is required"}), 400
-
-        # Run AI analysis components
-        prediction_result = None
-        analysis_result = None
-        recommendations_result = None
-        hmm_analysis_result = None
-
-        try:
-            # Get prediction using HMM service (same as authenticated endpoint)
-            prediction_result = hmm_service.predict_regime(ticker)
-
-            # Get HMM-specific analysis (transition matrix, regime persistence)
-            try:
-                hmm_analysis_result = hmm_service.analyze_regime_persistence(ticker, period)
-                analysis_result = hmm_analysis_result
-            except Exception as hmm_error:
-                logger.warning(f"HMM analysis failed: {str(hmm_error)}")
-                analysis_result = None
-
-            # Get recommendations from market regime service
-            recommendations_result = market_regime_service.get_regime_recommendations(ticker)
-
-        except Exception as ai_error:
-            logger.warning(f"Some AI analysis components failed: {str(ai_error)}")
-
-        # Get usage info if available (set by decorator)
-        usage_info = getattr(g, '_anon_feature_usage', None)
-
-        return jsonify({
-            "success": True,
-            "prediction": prediction_result,
-            "analysis": analysis_result,
-            "recommendations": recommendations_result,
-            "usage": usage_info
-        }), 200
-
-    except Exception as e:
-        logger.error(f"Error in AI analysis endpoint: {str(e)}", exc_info=True)
-        return jsonify({
-            "error": "An unexpected error occurred during AI analysis",
-            "details": str(e)
-        }), 500
 
 # Get current anonymous usage for all features
 @app.route('/api/usage/anonymous', methods=['GET'])
@@ -1746,96 +1588,6 @@ def get_anonymous_usage():
     except Exception as e:
         logger.error(f"Error getting anonymous usage: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
-# Upstox API Authentication routes
-@app.route('/api/upstox/login-url', methods=['GET'])
-@jwt_required()
-def get_upstox_login_url():
-    """Get Upstox OAuth login URL"""
-    try:
-        login_url = upstox_api.get_login_url()
-        return jsonify({"login_url": login_url}), 200
-    except Exception as e:
-        logger.error(f"Error generating Upstox login URL: {str(e)}")
-        return jsonify({"error": "Failed to generate login URL"}), 500
-
-@app.route('/api/upstox/callback', methods=['GET'])
-def upstox_callback():
-    """Handle Upstox OAuth callback"""
-    try:
-        authorization_code = request.args.get('code')
-        if not authorization_code:
-            return jsonify({"error": "Authorization code not provided"}), 400
-        
-        # Exchange authorization code for access token
-        access_token = upstox_api.get_access_token(authorization_code)
-        
-        if access_token:
-            return jsonify({
-                "message": "Upstox authentication successful",
-                "access_token": access_token
-            }), 200
-        else:
-            return jsonify({"error": "Failed to get access token"}), 400
-            
-    except Exception as e:
-        logger.error(f"Error in Upstox callback: {str(e)}")
-        return jsonify({"error": "Authentication failed"}), 500
-
-@app.route('/api/upstox/set-token', methods=['POST'])
-@jwt_required()
-@validate_json_request
-def set_upstox_token():
-    """Set Upstox access token manually"""
-    try:
-        data = request.get_json()
-        access_token = data.get('access_token')
-        
-        if not access_token:
-            return jsonify({"error": "Access token is required"}), 400
-        
-        upstox_api.set_access_token(access_token)
-        return jsonify({"message": "Upstox token set successfully"}), 200
-        
-    except Exception as e:
-        logger.error(f"Error setting Upstox token: {str(e)}")
-        return jsonify({"error": "Failed to set token"}), 500
-
-@app.route('/api/upstox/status', methods=['GET'])
-@jwt_required()
-def get_upstox_status():
-    """Get Upstox API connection status"""
-    try:
-        has_token = upstox_api.access_token is not None
-        return jsonify({
-            "connected": has_token,
-            "message": "Upstox API is connected" if has_token else "Upstox API not connected"
-        }), 200
-    except Exception as e:
-        logger.error(f"Error checking Upstox status: {str(e)}")
-        return jsonify({"error": "Failed to check status"}), 500
-
-@app.route('/api/upstox/save-credentials', methods=['POST'])
-@jwt_required()
-def save_upstox_credentials():
-    """Save Upstox credentials for automated login"""
-    try:
-        data = request.get_json()
-        username = data.get('username')
-        password = data.get('password')
-        pin = data.get('pin')
-        
-        if not all([username, password, pin]):
-            return jsonify({'error': 'Missing required credentials'}), 400
-            
-        if upstox_api.save_credentials(username, password, pin):
-            return jsonify({'message': 'Credentials saved successfully'}), 200
-        else:
-            return jsonify({'error': 'Failed to save credentials'}), 500
-            
-    except Exception as e:
-        logger.error(f"Error saving Upstox credentials: {str(e)}")
-        return jsonify({'error': str(e)}), 500
 
 # AI Chat Service Implementation
 class AIModelService:
@@ -2316,19 +2068,23 @@ def get_statistics():
 
 @app.route('/api/market-indices', methods=['GET'])
 def market_indices():
-    """Get market indices data with performance monitoring"""
+    """Get market indices data with performance monitoring.
+    Optional query param: ?limit=N to return only the first N indices.
+    """
     start_time = time.time()
-    
+
     try:
-        logger.info("Market indices request started")
-        indices_data = get_market_indices()
-        
+        # Optional limit param (e.g. homepage only needs 4 indices)
+        limit = request.args.get('limit', type=int)
+        logger.info(f"Market indices request started (limit={limit})")
+        indices_data = get_market_indices(limit=limit)
+
         # Calculate response time
         response_time = round(time.time() - start_time, 3)
-        
+
         # Log performance metrics
         logger.info(f"Market indices request completed in {response_time} seconds")
-        
+
         # Add performance metadata to response
         response_data = {
             "indices": indices_data,
@@ -2784,158 +2540,6 @@ def get_patterns():
             
         patterns = technical_analysis.identify_patterns(ticker)
         return jsonify(patterns)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# Portfolio Management Endpoints
-@app.route('/api/portfolio/performance', methods=['GET'])
-@jwt_required()
-def get_portfolio_performance():
-    """Get portfolio performance metrics"""
-    try:
-        user_id = get_jwt_identity()
-        user_data = user_service.get_user_by_id(user_id)
-        
-        if not user_data:
-            return jsonify({"error": "User not found"}), 404
-            
-        if 'portfolio' not in user_data or not user_data['portfolio']:
-            return jsonify({"error": "No portfolio found"}), 404
-            
-        performance = portfolio_service.calculate_portfolio_performance(user_data['portfolio'])
-        return jsonify(performance)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/portfolio/add', methods=['POST'])
-@jwt_required()
-@validate_json_request
-def add_to_portfolio():
-    """Add stock to portfolio"""
-    try:
-        user_id = get_jwt_identity()
-        data = request.get_json()
-        
-        required_fields = ['ticker', 'quantity', 'buy_price']
-        if not all(field in data for field in required_fields):
-            return jsonify({"error": "Missing required fields"}), 400
-            
-        # Validate ticker
-        if not validate_ticker(data['ticker']):
-            return jsonify({"error": "Invalid ticker symbol"}), 400
-            
-        # Validate numeric fields
-        try:
-            data['quantity'] = int(data['quantity'])
-            data['buy_price'] = float(data['buy_price'])
-        except ValueError:
-            return jsonify({"error": "Invalid quantity or buy price"}), 400
-            
-        # Add to portfolio
-        success = user_service.add_to_portfolio(user_id, data)
-        if not success:
-            return jsonify({"error": "Failed to add to portfolio"}), 400
-            
-        return jsonify({"message": "Successfully added to portfolio"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/risk-calculator', methods=['POST'])
-@jwt_required()
-@validate_json_request
-def calculate_risk():
-    """Calculate position size and risk metrics"""
-    try:
-        data = request.get_json()
-        required_fields = ['ticker', 'risk_per_trade', 'account_size', 'stop_loss_pct']
-        
-        if not all(field in data for field in required_fields):
-            return jsonify({"error": "Missing required fields"}), 400
-            
-        # Validate numeric fields
-        try:
-            risk_per_trade = float(data['risk_per_trade'])
-            account_size = float(data['account_size'])
-            stop_loss_pct = float(data['stop_loss_pct'])
-        except ValueError:
-            return jsonify({"error": "Invalid numeric values"}), 400
-            
-        # Validate ranges
-        if not (0 < risk_per_trade <= 100 and account_size > 0 and 0 < stop_loss_pct <= 100):
-            return jsonify({"error": "Invalid parameter ranges"}), 400
-            
-        risk_metrics = portfolio_service.calculate_position_size(
-            data['ticker'],
-            risk_per_trade,
-            account_size,
-            stop_loss_pct
-        )
-        
-        return jsonify(risk_metrics)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/correlation', methods=['GET'])
-@jwt_required()
-def get_correlation():
-    """Get correlation matrix for multiple stocks"""
-    try:
-        tickers = request.args.get('tickers', '').split(',')
-        if not tickers or len(tickers) < 2:
-            return jsonify({"error": "At least two tickers are required"}), 400
-            
-        # Validate tickers
-        invalid_tickers = [ticker for ticker in tickers if not validate_ticker(ticker)]
-        if invalid_tickers:
-            return jsonify({"error": f"Invalid ticker symbols: {', '.join(invalid_tickers)}"}), 400
-            
-        correlation = portfolio_service.calculate_correlation_matrix(tickers)
-        return jsonify(correlation)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# Market Intelligence Endpoints
-@app.route('/api/market-breadth', methods=['GET'])
-@jwt_required()
-def get_market_breadth():
-    """Get market breadth indicators"""
-    try:
-        # Get Nifty 500 stocks for market breadth calculation
-        nifty500_stocks = technical_analysis._get_default_stock_list()  # Implement this to return Nifty 500 stocks
-        
-        advances = 0
-        declines = 0
-        new_highs = 0
-        new_lows = 0
-        
-        for ticker in nifty500_stocks[:50]:  # Limit to 50 stocks for performance
-            try:
-                df = get_historical_data(ticker, period="5d", interval="1d")
-                if not df.empty:
-                    # Count advances/declines
-                    if df['Close'].iloc[-1] > df['Close'].iloc[-2]:
-                        advances += 1
-                    else:
-                        declines += 1
-                        
-                    # Check for new highs/lows (52-week)
-                    year_data = get_historical_data(ticker, period="1y")
-                    if not year_data.empty:
-                        if df['Close'].iloc[-1] >= year_data['High'].max():
-                            new_highs += 1
-                        if df['Close'].iloc[-1] <= year_data['Low'].min():
-                            new_lows += 1
-            except Exception:
-                continue
-        
-        return jsonify({
-            "advance_decline_ratio": advances / declines if declines > 0 else float('inf'),
-            "advances": advances,
-            "declines": declines,
-            "new_highs": new_highs,
-            "new_lows": new_lows,
-            "total_stocks_analyzed": len(nifty500_stocks[:50])
-        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -3750,520 +3354,6 @@ def send_subscription_upgrade_email():
             "message": str(e)
         }), 500
 
-# Market Regime Classification endpoints
-@app.route('/api/market-regime/train', methods=['POST'])
-@jwt_required()
-@validate_json_request
-def train_market_regime_model():
-    """Train the market regime classifier"""
-    try:
-        # Check if user is admin
-        user_id = get_jwt_identity()
-        user = user_service.get_user_by_id(user_id)
-        if not user or user.get('role') != 'admin':
-            return jsonify({"error": "Unauthorized access"}), 403
-        
-        data = request.get_json()
-        ticker = data.get('ticker', 'RELIANCE.NS')
-        period = data.get('period', '2y')
-        retrain = data.get('retrain', False)
-        
-        result = market_regime_service.train_model(ticker, period, retrain)
-        
-        if result["status"] == "success":
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error in train_market_regime_model: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/market-regime/predict', methods=['GET', 'POST'])
-@feature_limit('welth-market-regime')
-def predict_market_regime():
-    """Predict market regime for a ticker"""
-    try:
-        # Handle both GET and POST requests
-        if request.method == 'GET':
-            ticker = request.args.get('ticker', 'RELIANCE.NS')
-            use_rf = request.args.get('use_rf', 'true').lower() == 'true'
-            use_hmm = request.args.get('use_hmm', 'true').lower() == 'true'
-        else:  # POST
-            data = request.get_json() or {}
-            ticker = data.get('ticker', 'RELIANCE.NS')
-            use_rf = data.get('useRandomForest', True)
-            use_hmm = data.get('useHmm', True)
-        
-        if not ticker:
-            return jsonify({"error": "Ticker parameter is required"}), 400
-        
-        # Validation: at least one method must be enabled
-        if not use_rf and not use_hmm:
-            return jsonify({"error": "At least one analysis method must be enabled (Random Forest or HMM)"}), 400
-        
-        # Create a temporary service instance with the desired configuration
-        temp_service = MarketRegimeService(use_rf=use_rf, use_hmm=use_hmm)
-        
-        # If the global service is trained, copy the trained model
-        if market_regime_service.classifier.is_trained:
-            temp_service.classifier.model = market_regime_service.classifier.model
-            temp_service.classifier.scaler = market_regime_service.classifier.scaler
-            temp_service.classifier.feature_names = market_regime_service.classifier.feature_names
-            temp_service.classifier.is_trained = market_regime_service.classifier.is_trained
-            
-            # Copy HMM model if needed
-            if use_hmm and market_regime_service.classifier.hmm_trained:
-                temp_service.classifier.hmm_model = market_regime_service.classifier.hmm_model
-                temp_service.classifier.hmm_scaler = market_regime_service.classifier.hmm_scaler
-                temp_service.classifier.hmm_trained = market_regime_service.classifier.hmm_trained
-        
-        result = temp_service.predict_regime(ticker)
-        
-        if result["status"] == "success":
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error in predict_market_regime: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/market-regime/analysis', methods=['GET'])
-@feature_limit('welth-market-regime')
-def get_market_regime_analysis():
-    """Get comprehensive market regime analysis"""
-    try:
-        ticker = request.args.get('ticker', 'RELIANCE.NS')
-        
-        if not ticker:
-            return jsonify({"error": "Ticker parameter is required"}), 400
-        
-        result = market_regime_service.get_regime_analysis(ticker)
-        
-        if result["status"] == "success":
-            # Save AI analysis result for the user if authenticated
-            try:
-                from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
-                verify_jwt_in_request(optional=True)
-                user_id = get_jwt_identity()
-                if user_id:
-                    analysis_data = {
-                        'type': 'market_regime_analysis',
-                        'ticker': ticker,
-                        'result': result,
-                        'timestamp': pd.Timestamp.now().isoformat()
-                    }
-                    user_service.save_ai_analysis_result(user_id, analysis_data)
-                    logger.info(f"Market regime analysis result saved for user {user_id}")
-            except Exception as e:
-                logger.warning(f"Failed to save market regime analysis result: {str(e)}")
-            
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error in get_market_regime_analysis: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/market-regime/recommendations', methods=['GET'])
-@feature_limit('welth-market-regime')
-def get_market_regime_recommendations():
-    """Get trading recommendations based on market regime"""
-    try:
-        ticker = request.args.get('ticker', 'RELIANCE.NS')
-        
-        if not ticker:
-            return jsonify({"error": "Ticker parameter is required"}), 400
-        
-        result = market_regime_service.get_regime_recommendations(ticker)
-        
-        if result["status"] == "success":
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error in get_market_regime_recommendations: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/market-regime/multiple', methods=['POST'])
-@jwt_required()
-@validate_json_request
-@check_market_data_access
-def get_multiple_market_regimes():
-    """Get market regime predictions for multiple tickers"""
-    try:
-        data = request.get_json()
-        tickers = data.get('tickers', ['RELIANCE.NS'])
-        
-        if not tickers or not isinstance(tickers, list):
-            return jsonify({"error": "tickers must be a list"}), 400
-        
-        result = market_regime_service.get_multiple_regime_predictions(tickers)
-        
-        if result["status"] == "success":
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error in get_multiple_market_regimes: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/market-regime/model-info', methods=['GET'])
-@jwt_required()
-def get_market_regime_model_info():
-    """Get information about the market regime model"""
-    try:
-        result = market_regime_service.get_model_info()
-        return jsonify(result), 200
-        
-    except Exception as e:
-        logger.error(f"Error in get_market_regime_model_info: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/market-regime/evaluate', methods=['GET'])
-@jwt_required()
-def evaluate_market_regime_model():
-    """Evaluate market regime model performance"""
-    try:
-        # Check if user is admin
-        user_id = get_jwt_identity()
-        user = user_service.get_user_by_id(user_id)
-        if not user or user.get('role') != 'admin':
-            return jsonify({"error": "Unauthorized access"}), 403
-        
-        ticker = request.args.get('ticker', 'RELIANCE.NS')
-        
-        result = market_regime_service.evaluate_model_performance(ticker)
-        
-        if result["status"] == "success":
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error in evaluate_market_regime_model: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/market-regime/definitions', methods=['GET'])
-@feature_limit('welth-market-regime')
-def get_market_regime_definitions():
-    """Get market regime definitions"""
-    try:
-        definitions = market_regime_service.classifier.get_regime_definitions()
-        return jsonify({
-            "status": "success",
-            "definitions": definitions
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Error in get_market_regime_definitions: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-# HMM Model Endpoints
-@app.route('/api/hmm_model/train', methods=['POST'])
-@jwt_required()
-@validate_json_request
-def train_hmm_model():
-    """Train the HMM model"""
-    try:
-        # Check if user is admin
-        user_id = get_jwt_identity()
-        user = user_service.get_user_by_id(user_id)
-        if not user or user.get('role') != 'admin':
-            return jsonify({"error": "Unauthorized access"}), 403
-        
-        data = request.get_json()
-        ticker = data.get('ticker', 'RELIANCE.NS')
-        period = data.get('period', '2y')
-        retrain = data.get('retrain', False)
-        
-        if not ticker:
-            return jsonify({"error": "Ticker parameter is required"}), 400
-        
-        result = hmm_service.train_model(ticker, period, retrain)
-        
-        if result["status"] == "success":
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error in train_hmm_model: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/hmm_model/predict', methods=['GET', 'POST'])
-def predict_hmm_regime():
-    """Predict market regime using HMM"""
-    try:
-        # Handle both GET and POST requests
-        if request.method == 'GET':
-            ticker = request.args.get('ticker', 'RELIANCE.NS')
-        else:  # POST
-            data = request.get_json() or {}
-            ticker = data.get('ticker', 'RELIANCE.NS')
-        
-        if not ticker:
-            return jsonify({"error": "Ticker parameter is required"}), 400
-        
-        result = hmm_service.predict_regime(ticker)
-        
-        if result["status"] == "success":
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error in predict_hmm_regime: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/hmm_model/analysis', methods=['GET'])
-def get_hmm_regime_analysis():
-    """Get HMM regime persistence analysis"""
-    try:
-        ticker = request.args.get('ticker', 'RELIANCE.NS')
-        period = request.args.get('period', '6mo')
-        
-        if not ticker:
-            return jsonify({"error": "Ticker parameter is required"}), 400
-        
-        result = hmm_service.analyze_regime_persistence(ticker, period)
-        
-        if result["status"] == "success":
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error in get_hmm_regime_analysis: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/hmm_model/multiple', methods=['POST'])
-@jwt_required()
-@validate_json_request
-@check_market_data_access
-def get_multiple_hmm_regimes():
-    """Get HMM regime predictions for multiple tickers"""
-    try:
-        data = request.get_json()
-        tickers = data.get('tickers', ['RELIANCE.NS'])
-        
-        if not tickers or not isinstance(tickers, list):
-            return jsonify({"error": "tickers must be a list"}), 400
-        
-        result = hmm_service.get_multiple_regime_predictions(tickers)
-        
-        if result["status"] == "success":
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error in get_multiple_hmm_regimes: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/hmm_model/model-info', methods=['GET'])
-@jwt_required()
-def get_hmm_model_info():
-    """Get information about the HMM model"""
-    try:
-        result = hmm_service.get_model_info()
-        return jsonify(result), 200
-        
-    except Exception as e:
-        logger.error(f"Error in get_hmm_model_info: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/hmm_model/evaluate', methods=['GET'])
-@jwt_required()
-def evaluate_hmm_model():
-    """Evaluate HMM model performance"""
-    try:
-        # Check if user is admin
-        user_id = get_jwt_identity()
-        user = user_service.get_user_by_id(user_id)
-        if not user or user.get('role') != 'admin':
-            return jsonify({"error": "Unauthorized access"}), 403
-        
-        ticker = request.args.get('ticker', 'RELIANCE.NS')
-        test_period = request.args.get('test_period', '6mo')
-        
-        if not ticker:
-            return jsonify({"error": "Ticker parameter is required"}), 400
-        
-        result = hmm_service.evaluate_model(ticker, test_period)
-        
-        if result["status"] == "success":
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Error in evaluate_hmm_model: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-# LSTM Model Endpoints
-@app.route('/api/lstm_model/train', methods=['POST'])
-@jwt_required()
-@validate_json_request
-def train_lstm_model():
-    """Train the LSTM model"""
-    try:
-        # Check if user is admin
-        user_id = get_jwt_identity()
-        user = user_service.get_user_by_id(user_id)
-        if not user or user.get('role') != 'admin':
-            return jsonify({"error": "Unauthorized access"}), 403
-
-        data = request.get_json()
-        ticker = data.get('ticker', 'RELIANCE.NS')
-        period = data.get('period', '2y')
-        epochs = data.get('epochs', 50)
-        batch_size = data.get('batch_size', 32)
-        retrain = data.get('retrain', False)
-
-        if not ticker:
-            return jsonify({"error": "Ticker parameter is required"}), 400
-
-        result = lstm_service.train_model(ticker, period, epochs, batch_size, retrain)
-
-        if result["status"] == "success":
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-
-    except Exception as e:
-        logger.error(f"Error in train_lstm_model: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/lstm_model/predict', methods=['GET', 'POST'])
-def predict_lstm_prices():
-    """Predict future prices using LSTM"""
-    try:
-        # Handle both GET and POST requests
-        if request.method == 'GET':
-            ticker = request.args.get('ticker', 'RELIANCE.NS')
-        else:  # POST
-            data = request.get_json() or {}
-            ticker = data.get('ticker', 'RELIANCE.NS')
-
-        if not ticker:
-            return jsonify({"error": "Ticker parameter is required"}), 400
-
-        result = lstm_service.predict_prices(ticker)
-
-        if result["status"] == "success":
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-
-    except Exception as e:
-        logger.error(f"Error in predict_lstm_prices: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/lstm_model/evaluate', methods=['GET'])
-@jwt_required()
-def evaluate_lstm_model():
-    """Evaluate LSTM model performance"""
-    try:
-        # Check if user is admin
-        user_id = get_jwt_identity()
-        user = user_service.get_user_by_id(user_id)
-        if not user or user.get('role') != 'admin':
-            return jsonify({"error": "Unauthorized access"}), 403
-
-        ticker = request.args.get('ticker', 'RELIANCE.NS')
-        test_period = request.args.get('test_period', '3mo')
-
-        if not ticker:
-            return jsonify({"error": "Ticker parameter is required"}), 400
-
-        result = lstm_service.evaluate_model(ticker, test_period)
-
-        if result["status"] == "success":
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-
-    except Exception as e:
-        logger.error(f"Error in evaluate_lstm_model: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/lstm_model/model-info', methods=['GET'])
-@jwt_required()
-def get_lstm_model_info():
-    """Get information about the LSTM model"""
-    try:
-        result = lstm_service.get_model_info()
-        return jsonify(result), 200
-
-    except Exception as e:
-        logger.error(f"Error in get_lstm_model_info: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-# LSTM + HMM Combined Forecast Endpoints
-@app.route('/api/ai_forecast/full_trade_forecast', methods=['GET', 'POST'])
-@feature_limit('welth-market-regime')
-def get_full_trade_forecast():
-    """Get comprehensive trade forecast using LSTM + HMM (supports anonymous access with limits)"""
-    try:
-        # Handle both GET and POST requests
-        if request.method == 'GET':
-            ticker = request.args.get('ticker', 'RELIANCE.NS')
-        else:  # POST
-            # Validate JSON for POST requests only
-            if not request.is_json:
-                return jsonify({"error": "POST request must be JSON"}), 400
-            data = request.get_json() or {}
-            ticker = data.get('ticker', 'RELIANCE.NS')
-
-        if not ticker:
-            return jsonify({"error": "Ticker parameter is required"}), 400
-
-        result = lstm_hmm_forecast_service.get_full_trade_forecast(ticker)
-
-        # Get usage info if available (set by decorator for anonymous users)
-        usage_info = getattr(g, '_anon_feature_usage', None)
-
-        if result["status"] == "success":
-            response_data = result
-            # Add usage information for anonymous users
-            if usage_info:
-                response_data['usage'] = usage_info
-            return jsonify(response_data), 200
-        else:
-            return jsonify(result), 400
-
-    except Exception as e:
-        logger.error(f"Error in get_full_trade_forecast: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
-
-@app.route('/api/ai_forecast/multiple', methods=['POST'])
-@jwt_required()
-@validate_json_request
-@check_market_data_access
-def get_multiple_ai_forecasts():
-    """Get LSTM+HMM forecasts for multiple tickers"""
-    try:
-        data = request.get_json()
-        tickers = data.get('tickers', ['RELIANCE.NS'])
-
-        if not tickers or not isinstance(tickers, list):
-            return jsonify({"error": "tickers must be a list"}), 400
-
-        result = lstm_hmm_forecast_service.get_multiple_forecasts(tickers)
-
-        if result["status"] == "success":
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 400
-
-    except Exception as e:
-        logger.error(f"Error in get_multiple_ai_forecasts: {str(e)}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
 # User Data Persistence Endpoints
 @app.route('/api/user/save-backtest', methods=['POST'])
