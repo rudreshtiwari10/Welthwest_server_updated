@@ -248,5 +248,12 @@ class FeedbackService:
             logger.error(f"Failed to update feedback status {submission_id}: {str(e)}")
             return False
 
-# Global feedback service instance
-feedback_service = FeedbackService()
+# Lazy feedback service instance
+_feedback_service = None
+
+def get_feedback_service():
+    """Lazily initialize FeedbackService on first use"""
+    global _feedback_service
+    if _feedback_service is None:
+        _feedback_service = FeedbackService()
+    return _feedback_service

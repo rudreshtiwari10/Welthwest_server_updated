@@ -12,20 +12,15 @@ import os
 import json
 import requests
 import logging
-import yfinance as yf
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 import re
-from services.ai_service import AIModelService
+# yfinance and AIModelService imported lazily inside methods to avoid slow startup
 import asyncio
 
-# Optional imports with fallback
-try:
-    from transformers import pipeline
-    HAS_TRANSFORMERS = True
-except ImportError:
-    HAS_TRANSFORMERS = False
-    pipeline = None
+# transformers imported lazily inside __init__ to avoid 5s+ startup delay
+HAS_TRANSFORMERS = None  # Will be set on first use
+_pipeline_func = None  # Will be set on first use
 
 try:
     import aiohttp
@@ -92,8 +87,8 @@ class NextGenAIOrchestrator:
         self.newsapi_key = os.environ.get('NEWSAPI_KEY', '')
         self.huggingface_token = os.environ.get('HUGGINGFACE_TOKEN', '')
 
-        # Initialize base AI service
-        self.base_ai_service = AIModelService()
+        # Initialize base AI service lazily
+        self._base_ai_service = None
 
         # Track model availability
         self.available_models = {
@@ -104,16 +99,32 @@ class NextGenAIOrchestrator:
             "yfinance": True
         }
 
-        # Initialize FinBERT for sentiment analysis (if available)
+        # FinBERT initialized lazily on first sentiment analysis call
         self.finbert_pipeline = None
+        self._finbert_loaded = False
+
+    @property
+    def base_ai_service(self):
+        """Lazily initialize AIModelService on first use"""
+        if self._base_ai_service is None:
+            from services.ai_service import AIModelService
+            self._base_ai_service = AIModelService()
+        return self._base_ai_service
+
+    def _ensure_finbert(self):
+        """Load FinBERT pipeline on first use"""
+        if self._finbert_loaded:
+            return
+        self._finbert_loaded = True
         try:
-            if self.huggingface_token and HAS_TRANSFORMERS:
+            if self.huggingface_token:
+                from transformers import pipeline
                 self.finbert_pipeline = pipeline(
                     "sentiment-analysis",
                     model="ProsusAI/finbert",
                     use_auth_token=self.huggingface_token
                 )
-        except Exception as e:
+        except (ImportError, Exception) as e:
             logger.warning(f"Failed to load FinBERT: {e}")
 
     def detect_analysis_intent(self, query: str) -> dict:
@@ -340,6 +351,7 @@ class NextGenAIOrchestrator:
 
         for symbol in symbols:
             try:
+                import yfinance as yf
                 ticker = yf.Ticker(symbol)
                 info = ticker.info
 
@@ -440,6 +452,7 @@ class NextGenAIOrchestrator:
     
     def analyze_sentiment(self, text: str) -> Dict[str, Any]:
         """Analyze sentiment using FinBERT"""
+        self._ensure_finbert()
         if not self.finbert_pipeline:
             return {'sentiment': 'neutral', 'confidence': 0.5}
         
@@ -882,4 +895,11 @@ class NextGenAIOrchestrator:
             }
 
 # Initialize the orchestrator
-nextgen_orchestrator = NextGenAIOrchestrator()
+_nextgen_orchestrator = None
+
+def get_nextgen_orchestrator():
+    """Lazily initialize NextGenAIOrchestrator on first use"""
+    global _nextgen_orchestrator
+    if _nextgen_orchestrator is None:
+        _nextgen_orchestrator = NextGenAIOrchestrator()
+    return _nextgen_orchestrator

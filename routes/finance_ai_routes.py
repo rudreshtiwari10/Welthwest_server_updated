@@ -20,19 +20,18 @@ from werkzeug.utils import secure_filename
 # Import middleware
 from middleware.anon_limit import anon_or_auth_feature_limit
 
-# Import services
-from services.finance_orchestrator import process_finance_query
-from services.indicators_service import get_indicators, get_signal_summary
-from services.screener_service import screen_stocks, run_screen, get_available_screens
-from services.simple_backtest_service import run_backtest
+# Heavy service imports deferred into route functions to avoid slow startup
+# services.finance_orchestrator, indicators_service, screener_service,
+# simple_backtest_service, chart_service all import yfinance/pandas/numpy
+# and are only needed when the user accesses these specific features.
+
 # RAG service disabled - PDF document analysis not currently used
-# from services.rag_service import ingest_pdf, search_documents, rag_service
 class _DisabledRAG:
     def is_available(self): return False
 rag_service = _DisabledRAG()
 def ingest_pdf(*a, **kw): return None
 def search_documents(*a, **kw): return []
-from services.chart_service import generate_chart
+from datetime import datetime
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -102,6 +101,7 @@ def enhanced_query():
             return jsonify({'error': 'Query is required'}), 400
 
         # Process query through orchestrator with conversation context
+        from services.finance_orchestrator import process_finance_query
         result = process_finance_query(query, conversation_history)
 
         # Add usage info for anonymous users (set by middleware)
@@ -147,12 +147,14 @@ def get_stock_indicators(symbol):
         period = request.args.get('period', '6mo')
 
         # Get indicators
+        from services.indicators_service import get_indicators
         result = get_indicators(symbol, period)
 
         if 'error' in result:
             return jsonify(result), 404
 
         # Generate chart
+        from services.chart_service import generate_chart
         chart_base64 = generate_chart(
             result['raw_data'],
             chart_type='comprehensive',
@@ -208,6 +210,7 @@ def run_screener():
             universe = data.get('universe', 'NIFTY50')
             top_n = data.get('top_n', 10)
 
+            from services.screener_service import run_screen, screen_stocks, get_available_screens
             result = run_screen(screen_name, universe, top_n)
         else:
             # Custom rules
@@ -215,6 +218,7 @@ def run_screener():
             universe = data.get('universe', 'NIFTY50')
             top_n = data.get('top_n', 10)
 
+            from services.screener_service import screen_stocks
             results = screen_stocks(universe, rules, top_n)
             result = {
                 'universe': universe,
@@ -246,6 +250,7 @@ def list_available_screens():
     }
     """
     try:
+        from services.screener_service import get_available_screens
         screens = get_available_screens()
         return jsonify(screens), 200
 
@@ -299,6 +304,7 @@ def run_strategy_backtest():
             }), 400
 
         # Run backtest
+        from services.simple_backtest_service import run_backtest
         result = run_backtest(
             strategy=strategy,
             symbol=symbol,
@@ -465,7 +471,7 @@ def service_status():
             'backtest': 'active',
             'rag': 'active' if rag_service.is_available() else 'unavailable',
             'charts': 'active',
-            'timestamp': pd.Timestamp.now().isoformat()
+            'timestamp': datetime.now().isoformat()
         }
 
         if not rag_service.is_available():

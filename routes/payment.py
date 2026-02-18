@@ -18,15 +18,35 @@ logger = logging.getLogger(__name__)
 # Create blueprint
 payment_bp = Blueprint('payment', __name__, url_prefix='/api/payment')
 
-# Initialize services
-cashfree_service = get_cashfree_service()
-subscription_service = SubscriptionService()
-config = get_config()
+# Services initialized on first request to avoid slow startup
+_subscription_service = None
+_config = None
+_db = None
 
-# Initialize MongoDB
-db = MongoClient(config.MONGODB_URI)[config.DB_NAME]
-transactions_collection = db.transactions
-webhook_events_collection = db.webhook_events
+def _get_subscription_service():
+    global _subscription_service
+    if _subscription_service is None:
+        _subscription_service = SubscriptionService()
+    return _subscription_service
+
+def _get_config():
+    global _config
+    if _config is None:
+        _config = get_config()
+    return _config
+
+def _get_db():
+    global _db
+    if _db is None:
+        c = _get_config()
+        _db = MongoClient(c.MONGODB_URI)[c.DB_NAME]
+    return _db
+
+def _get_transactions():
+    return _get_db().transactions
+
+def _get_webhook_events():
+    return _get_db().webhook_events
 
 
 @payment_bp.route('/create-order', methods=['POST'])
@@ -62,7 +82,7 @@ def create_order():
         duration = data['duration'].lower()
 
         # Validate plan
-        if plan not in config.PLAN_PRICES:
+        if plan not in _get_config().PLAN_PRICES:
             return jsonify({
                 "success": False,
                 "error": "Invalid plan"
@@ -76,14 +96,14 @@ def create_order():
             }), 400
 
         # Check if payment gateway is enabled
-        if not config.IS_PAYMENT_GATEWAY_ENABLED:
+        if not _get_config().IS_PAYMENT_GATEWAY_ENABLED:
             return jsonify({
                 "success": False,
                 "error": "Payment gateway is currently disabled. Please contact support for manual purchase."
             }), 403
 
         # Get user details
-        user = db.users.find_one({"_id": ObjectId(user_id)})
+        user = _get_db().users.find_one({"_id": ObjectId(user_id)})
         if not user:
             return jsonify({
                 "success": False,
@@ -91,7 +111,7 @@ def create_order():
             }), 404
 
         # Get price
-        amount = config.PLAN_PRICES[plan][duration]
+        amount = _get_config().PLAN_PRICES[plan][duration]
 
         if amount == 0:
             return jsonify({
@@ -126,25 +146,25 @@ def create_order():
             "updated_at": datetime.utcnow()
         }
 
-        result = transactions_collection.insert_one(transaction)
+        result = _get_transactions().insert_one(transaction)
         transaction_id = str(result.inserted_id)
 
         # Create Cashfree order
-        success, order_data = cashfree_service.create_order(
+        success, order_data = get_cashfree_service().create_order(
             order_id=order_id,
             amount=amount,
             customer_id=user_id,
             customer_email=customer_email,
             customer_phone=customer_phone,
             customer_name=customer_name,
-            return_url=f"{config.FRONTEND_URL}/payment-success",
+            return_url=f"{_get_config().FRONTEND_URL}/payment-success",
             plan_name=plan,
             plan_duration=duration
         )
 
         if success:
             # Update transaction with Cashfree details
-            transactions_collection.update_one(
+            _get_transactions().update_one(
                 {"_id": ObjectId(transaction_id)},
                 {
                     "$set": {
@@ -170,7 +190,7 @@ def create_order():
             }), 200
         else:
             # Update transaction as failed
-            transactions_collection.update_one(
+            _get_transactions().update_one(
                 {"_id": ObjectId(transaction_id)},
                 {
                     "$set": {
@@ -217,11 +237,11 @@ def cashfree_webhook():
         logger.info(f"Webhook received: signature={signature}, timestamp={timestamp}")
 
         # Verify signature
-        if not cashfree_service.verify_webhook_signature(payload, signature, timestamp):
+        if not get_cashfree_service().verify_webhook_signature(payload, signature, timestamp):
             logger.warning("Webhook signature verification failed")
 
             # Log failed webhook
-            webhook_events_collection.insert_one({
+            _get_webhook_events().insert_one({
                 "payload": request.json,
                 "headers": dict(request.headers),
                 "verification_status": "FAILED",
@@ -234,7 +254,7 @@ def cashfree_webhook():
         webhook_data = request.json
 
         # Log successful webhook
-        webhook_events_collection.insert_one({
+        _get_webhook_events().insert_one({
             "payload": webhook_data,
             "headers": dict(request.headers),
             "verification_status": "SUCCESS",
@@ -242,7 +262,7 @@ def cashfree_webhook():
         })
 
         # Process payment
-        processed_data = cashfree_service.process_webhook_payment(webhook_data)
+        processed_data = get_cashfree_service().process_webhook_payment(webhook_data)
         order_id = processed_data.get('order_id')
 
         if not order_id:
@@ -250,7 +270,7 @@ def cashfree_webhook():
             return jsonify({"error": "Invalid webhook data"}), 400
 
         # Find transaction
-        transaction = transactions_collection.find_one({"gateway_order_id": order_id})
+        transaction = _get_transactions().find_one({"gateway_order_id": order_id})
 
         if not transaction:
             logger.error(f"Transaction not found for order {order_id}")
@@ -262,9 +282,9 @@ def cashfree_webhook():
             return jsonify({"status": "already_processed"}), 200
 
         # Check if payment is successful
-        if cashfree_service.is_payment_success(webhook_data):
+        if get_cashfree_service().is_payment_success(webhook_data):
             # Update transaction
-            transactions_collection.update_one(
+            _get_transactions().update_one(
                 {"_id": transaction["_id"]},
                 {
                     "$set": {
@@ -286,7 +306,7 @@ def cashfree_webhook():
             duration = transaction['plan_duration']
             transaction_id = str(transaction['_id'])
 
-            success, message = subscription_service.apply_premium_subscription(
+            success, message = _get_subscription_service().apply_premium_subscription(
                 user_id=user_id,
                 plan_name=plan,
                 plan_duration=duration,
@@ -312,7 +332,7 @@ def cashfree_webhook():
             return jsonify({"status": "success"}), 200
         else:
             # Payment failed
-            transactions_collection.update_one(
+            _get_transactions().update_one(
                 {"_id": transaction["_id"]},
                 {
                     "$set": {
@@ -363,7 +383,7 @@ def get_order_status(order_id):
         user_id = get_jwt_identity()
 
         # Find transaction
-        transaction = transactions_collection.find_one({
+        transaction = _get_transactions().find_one({
             "gateway_order_id": order_id,
             "user_id": ObjectId(user_id)
         })
@@ -375,11 +395,11 @@ def get_order_status(order_id):
             }), 404
 
         # Get status from Cashfree if pending
-        if transaction.get('status') == 'PENDING' and config.IS_PAYMENT_GATEWAY_ENABLED:
-            success, order_data = cashfree_service.get_order_status(order_id)
+        if transaction.get('status') == 'PENDING' and _get_config().IS_PAYMENT_GATEWAY_ENABLED:
+            success, order_data = get_cashfree_service().get_order_status(order_id)
             if success:
                 # Update transaction with latest status
-                transactions_collection.update_one(
+                _get_transactions().update_one(
                     {"_id": transaction["_id"]},
                     {
                         "$set": {
@@ -390,7 +410,7 @@ def get_order_status(order_id):
                 )
 
         # Refresh transaction
-        transaction = transactions_collection.find_one({"_id": transaction["_id"]})
+        transaction = _get_transactions().find_one({"_id": transaction["_id"]})
 
         return jsonify({
             "success": True,
@@ -428,7 +448,7 @@ def get_transaction_history():
         user_id = get_jwt_identity()
 
         # Get all transactions for user
-        transactions = list(transactions_collection.find(
+        transactions = list(_get_transactions().find(
             {"user_id": ObjectId(user_id)}
         ).sort("created_at", -1).limit(50))
 

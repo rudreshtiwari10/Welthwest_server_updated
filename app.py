@@ -11,7 +11,7 @@ from services.stock_service import (
 from services.utils import normalize_data, calculate_statistics
 from services.user_service import UserService
 from services.ai_service import AIModelService
-from services.nextgen_ai_service import nextgen_orchestrator
+# nextgen_ai_service imported lazily to avoid 5s+ transformers/torch load at startup
 from services.subscription_service import SubscriptionService
 from services.email_service import email_service
 from routes.premium import premium_bp
@@ -28,7 +28,7 @@ from routes.ai_screener_routes import ai_screener_bp
 from middleware.feature_limit import feature_limit, admin_required
 from database.seed_plans import initialize_premium_system
 from services.google_auth_service import GoogleAuthService
-from services.feedback_service import feedback_service
+from services.feedback_service import get_feedback_service
 from services.notification_service import notification_service
 from services.news_service import news_service
 from services.news_aggregator import NewsAggregator
@@ -187,8 +187,21 @@ def create_app():
 
 app = create_app()
 jwt = JWTManager(app)
-user_service = UserService()
-subscription_service = SubscriptionService()
+# Services initialized on first request to avoid slow startup (saves ~3-4s)
+_user_service = None
+_subscription_service = None
+
+def _get_user_service():
+    global _user_service
+    if _user_service is None:
+        _user_service = UserService()
+    return _user_service
+
+def _get_subscription_service():
+    global _subscription_service
+    if _subscription_service is None:
+        _subscription_service = SubscriptionService()
+    return _subscription_service
 session_service = InMemorySessionService()
 
 # Add additional claims to JWT token (subscription info for side projects)
@@ -197,7 +210,7 @@ def add_claims_to_jwt(identity):
     """Add user subscription and profile info to JWT token"""
     try:
         # Get user data
-        user_data = user_service.get_user_by_id(identity)
+        user_data = _get_user_service().get_user_by_id(identity)
 
         if not user_data:
             return {}
@@ -273,9 +286,23 @@ def set_anon_session_cookie(response):
         )
     return response
 
-# Initialize services
-technical_analysis = TechnicalAnalysis()
-ai_service = AIModelService()  # Initialize AI service
+# Lazy service getters - initialized on first use, not at startup
+_technical_analysis = None
+_ai_service = None
+
+def get_technical_analysis():
+    """Lazily initialize TechnicalAnalysis on first use"""
+    global _technical_analysis
+    if _technical_analysis is None:
+        _technical_analysis = TechnicalAnalysis()
+    return _technical_analysis
+
+def get_ai_service():
+    """Lazily initialize AIModelService on first use"""
+    global _ai_service
+    if _ai_service is None:
+        _ai_service = AIModelService()
+    return _ai_service
 
 # Warm market indices cache on startup
 def warm_cache_on_startup():
@@ -374,11 +401,11 @@ def send_registration_otp():
     last_name = data.get('last_name', '').strip()
 
     # Check if email already exists
-    if user_service.users.find_one({"email": email}):
+    if _get_user_service().users.find_one({"email": email}):
         return jsonify({"error": "Email already exists"}), 400
 
     # Generate and send OTP with user's name
-    success, message, otp = user_service.create_registration_otp(email, first_name, last_name)
+    success, message, otp = _get_user_service().create_registration_otp(email, first_name, last_name)
 
     if not success:
         return jsonify({"error": message}), 400
@@ -419,7 +446,7 @@ def verify_registration_otp():
     otp = data['otp'].strip()
     
     # Check OTP (without marking as used)
-    success, message = user_service.check_registration_otp(email, otp)
+    success, message = _get_user_service().check_registration_otp(email, otp)
     if not success:
         return jsonify({"error": message}), 400
     
@@ -446,16 +473,16 @@ def complete_registration():
     password = data['password']
 
     # Check if email is verified
-    if not user_service.is_email_verified(email):
+    if not _get_user_service().is_email_verified(email):
         return jsonify({"error": "Email not verified. Please verify your email first."}), 400
 
     # Retrieve first_name and last_name from OTP record
-    otp_data = user_service.get_registration_otp_data(email)
+    otp_data = _get_user_service().get_registration_otp_data(email)
     first_name = otp_data.get("first_name", "") if otp_data else ""
     last_name = otp_data.get("last_name", "") if otp_data else ""
 
     # Register user with name
-    success, message, user_data = user_service.register_user(
+    success, message, user_data = _get_user_service().register_user(
         email=email,
         username=username,
         password=password,
@@ -467,16 +494,16 @@ def complete_registration():
         return jsonify({"error": message}), 400
     
     # Initialize subscription
-    if not subscription_service.initialize_subscription(user_data['id']):
+    if not _get_subscription_service().initialize_subscription(user_data['id']):
         # If subscription initialization fails, delete the user and return error
-        user_service.users.delete_one({"_id": ObjectId(user_data['id'])})
+        _get_user_service().users.delete_one({"_id": ObjectId(user_data['id'])})
         return jsonify({"error": "Failed to initialize user subscription"}), 500
     
     # Get the initialized subscription
-    subscription = subscription_service.get_subscription_details(user_data['id'])
+    subscription = _get_subscription_service().get_subscription_details(user_data['id'])
     if not subscription:
         # This shouldn't happen, but if it does, clean up and return error
-        user_service.users.delete_one({"_id": ObjectId(user_data['id'])})
+        _get_user_service().users.delete_one({"_id": ObjectId(user_data['id'])})
         return jsonify({"error": "Failed to retrieve user subscription"}), 500
     
     # Generate tokens
@@ -484,11 +511,11 @@ def complete_registration():
     refresh_token = create_refresh_token(identity=str(user_data['id']))
     
     # Store refresh token
-    user_service.store_refresh_token(user_data['id'], refresh_token)
+    _get_user_service().store_refresh_token(user_data['id'], refresh_token)
     
     # Clean up email verification record (no longer needed)
     try:
-        user_service.verified_emails.delete_many({"email": email})
+        _get_user_service().verified_emails.delete_many({"email": email})
         logger.info(f"Cleaned up email verification for {email}")
     except Exception as e:
         logger.error(f"Failed to cleanup email verification for {email}: {str(e)}")
@@ -560,7 +587,7 @@ def google_auth():
         # Initialize subscription for new Google users
         if is_new_user:
             try:
-                if not subscription_service.initialize_subscription(user['id']):
+                if not _get_subscription_service().initialize_subscription(user['id']):
                     logger.error(f"Failed to initialize subscription for Google user: {user.get('email', 'unknown')}")
                     # Note: Not deleting user here as they're already authenticated via Google
                 else:
@@ -607,7 +634,7 @@ def google_auth():
         logger.info("JWT tokens created successfully for Google user")
         
         # Store refresh token
-        user_service.store_refresh_token(user['id'], refresh_token)  # Changed from '_id' to 'id'
+        _get_user_service().store_refresh_token(user['id'], refresh_token)  # Changed from '_id' to 'id'
         
         return jsonify({
             "access_token": access_token,
@@ -636,7 +663,7 @@ def login():
         return jsonify({"error": "Username/email and password are required"}), 400
     
     # Authenticate user
-    success, message, user_data = user_service.login_user(
+    success, message, user_data = _get_user_service().login_user(
         username_or_email=data['username_or_email'],
         password=data['password']
     )
@@ -657,7 +684,7 @@ def login():
     refresh_token = create_refresh_token(identity=str(user_data['id']))
     
     # Store refresh token
-    user_service.store_refresh_token(user_data['id'], refresh_token)
+    _get_user_service().store_refresh_token(user_data['id'], refresh_token)
 
     # Create login notification
     try:
@@ -690,13 +717,13 @@ def refresh():
         return jsonify({"error": "Refresh token is required"}), 400
     
     # Validate refresh token
-    user_id = user_service.validate_refresh_token(data['refresh_token'])
+    user_id = _get_user_service().validate_refresh_token(data['refresh_token'])
     
     if not user_id:
         return jsonify({"error": "Invalid or expired refresh token"}), 401
     
     # Get user data
-    user_data = user_service.get_user_by_id(user_id)
+    user_data = _get_user_service().get_user_by_id(user_id)
     
     if not user_data:
         return jsonify({"error": "User not found"}), 404
@@ -723,7 +750,7 @@ def logout():
     user_id = get_jwt_identity()
 
     # Invalidate refresh token
-    success = user_service.invalidate_refresh_token(data['refresh_token'])
+    success = _get_user_service().invalidate_refresh_token(data['refresh_token'])
 
     if success:
         # Create logout notification if user ID is available
@@ -742,7 +769,7 @@ def logout():
 def get_current_user():
     """Get current user data"""
     user_id = get_jwt_identity()
-    user_data = user_service.get_user_by_id(user_id)
+    user_data = _get_user_service().get_user_by_id(user_id)
     
     if not user_data:
         return jsonify({"error": "User not found"}), 404
@@ -757,7 +784,7 @@ def update_profile():
     user_id = get_jwt_identity()
     data = request.get_json()
     
-    success, message, user_data = user_service.update_user_profile(user_id, data)
+    success, message, user_data = _get_user_service().update_user_profile(user_id, data)
     
     if not success:
         return jsonify({"error": message}), 400
@@ -779,13 +806,13 @@ def forgot_password():
         return jsonify({"error": "Username or email is required"}), 400
     
     # Create OTP for password reset
-    success, message, otp = user_service.create_password_reset_otp(username_or_email)
+    success, message, otp = _get_user_service().create_password_reset_otp(username_or_email)
     
     if not success:
         return jsonify({"error": message}), 400
     
     # Get user details for email
-    user = user_service.users.find_one({
+    user = _get_user_service().users.find_one({
         "$or": [
             {"username": username_or_email},
             {"email": username_or_email}
@@ -827,7 +854,7 @@ def verify_reset_otp():
         return jsonify({"error": "Username/email and OTP are required"}), 400
     
     # Verify OTP
-    success, message, user_id = user_service.verify_password_reset_otp(username_or_email, otp)
+    success, message, user_id = _get_user_service().verify_password_reset_otp(username_or_email, otp)
     
     if not success:
         return jsonify({"error": message}), 400
@@ -855,13 +882,13 @@ def reset_password():
         return jsonify({"error": "Password must be at least 6 characters long"}), 400
     
     # Reset password with verification
-    success, message = user_service.reset_password_with_verification(user_id, new_password, otp)
+    success, message = _get_user_service().reset_password_with_verification(user_id, new_password, otp)
     
     if not success:
         return jsonify({"error": message}), 400
     
     # Clean up expired OTPs
-    user_service.cleanup_expired_otps()
+    _get_user_service().cleanup_expired_otps()
     
     logger.info(f"Password reset completed for user ID: {user_id}")
 
@@ -1020,7 +1047,7 @@ def submit_feedback():
             return jsonify({"error": "At least one feedback response is required"}), 400
         
         # Submit feedback
-        result = feedback_service.submit_feedback(data)
+        result = get_feedback_service().submit_feedback(data)
         
         if result['success']:
             # Send notification emails
@@ -1058,7 +1085,7 @@ def get_feedback_list():
     try:
         # Get current user
         current_user = get_jwt_identity()
-        user_data = user_service.get_user_by_email(current_user)
+        user_data = _get_user_service().get_user_by_email(current_user)
         
         # Check if user is admin (you might want to add admin role check here)
         if not user_data or user_data.get('role') != 'admin':
@@ -1071,7 +1098,7 @@ def get_feedback_list():
         skip = int(request.args.get('skip', 0))
         
         # Get feedback submissions
-        submissions = feedback_service.get_feedback_submissions(
+        submissions = get_feedback_service().get_feedback_submissions(
             form_type=form_type,
             user_email=user_email,
             limit=limit,
@@ -1096,14 +1123,14 @@ def get_feedback_by_id(submission_id):
     try:
         # Get current user
         current_user = get_jwt_identity()
-        user_data = user_service.get_user_by_email(current_user)
+        user_data = _get_user_service().get_user_by_email(current_user)
         
         # Check if user is admin
         if not user_data or user_data.get('role') != 'admin':
             return jsonify({"error": "Admin access required"}), 403
         
         # Get feedback submission
-        submission = feedback_service.get_feedback_by_id(submission_id)
+        submission = get_feedback_service().get_feedback_by_id(submission_id)
         
         if not submission:
             return jsonify({"error": "Feedback submission not found"}), 404
@@ -1123,7 +1150,7 @@ def get_feedback_statistics():
     try:
         # Get current user
         current_user = get_jwt_identity()
-        user_data = user_service.get_user_by_email(current_user)
+        user_data = _get_user_service().get_user_by_email(current_user)
         
         # Check if user is admin
         if not user_data or user_data.get('role') != 'admin':
@@ -1131,7 +1158,7 @@ def get_feedback_statistics():
         
         # Get statistics
         form_type = request.args.get('form_type')
-        stats = feedback_service.get_feedback_statistics(form_type=form_type)
+        stats = get_feedback_service().get_feedback_statistics(form_type=form_type)
         
         return jsonify(stats), 200
         
@@ -1338,7 +1365,7 @@ def chat_with_ai():
                 model = 'llama'
 
         # Process the chat query
-        ai_response = ai_service.process_chat_query(message, model)
+        ai_response = get_ai_service().process_chat_query(message, model)
 
         # Convert any numpy/pandas types to native Python types for JSON serialization
         def convert_to_serializable(obj):
@@ -1444,8 +1471,9 @@ def nextgen_chat():
         asyncio.set_event_loop(loop)
 
         try:
+            from services.nextgen_ai_service import get_nextgen_orchestrator
             ai_response = loop.run_until_complete(
-                nextgen_orchestrator.process_query(message, conversation_history)
+                get_nextgen_orchestrator().process_query(message, conversation_history)
             )
         finally:
             loop.close()
@@ -1861,8 +1889,7 @@ class AIModelService:
         
         return response
 
-# Initialize the AI model service
-ai_service = AIModelService()
+# AI service is lazily initialized via get_ai_service()
 
 @app.route('/api/historical', methods=['GET'])
 def historical_data():
@@ -2316,7 +2343,7 @@ def market_chat():
             }), 503
         
         # Process the chat query
-        response = ai_service.process_chat_query(query, model, user_id)
+        response = get_ai_service().process_chat_query(query, model, user_id)
         
         # Check if the response indicates an error
         if not response.get('success', True):
@@ -2336,7 +2363,7 @@ def market_chat():
                 'model': model,
                 'timestamp': pd.Timestamp.now().isoformat()
             }
-            result = user_service.save_chat_history(user_id_from_jwt, chat_data)
+            result = _get_user_service().save_chat_history(user_id_from_jwt, chat_data)
             if result.get("success"):
                 logger.info(f"Chat history saved for user {user_id_from_jwt}: {result.get('message')}")
             else:
@@ -2383,7 +2410,7 @@ def get_indicators():
                 except ValueError:
                     params[key] = value
                     
-        results = technical_analysis.calculate_indicators(ticker, indicators, params)
+        results = get_technical_analysis().calculate_indicators(ticker, indicators, params)
         return jsonify(results)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2410,7 +2437,7 @@ def screen_stocks():
         except Exception as e:
             return jsonify({"error": f"Invalid criteria format: {str(e)}"}), 400
             
-        results = technical_analysis.screen_stocks(criteria)
+        results = get_technical_analysis().screen_stocks(criteria)
         return jsonify(results)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2460,7 +2487,7 @@ def get_trading_signals():
         if not ticker:
             return jsonify({"error": "Ticker symbol is required"}), 400
             
-        signals = technical_analysis.get_trading_signals(ticker)
+        signals = get_technical_analysis().get_trading_signals(ticker)
         return jsonify(signals)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2478,10 +2505,10 @@ def get_comprehensive_technical_analysis():
         all_indicators = ['rsi', 'macd', 'bollinger', 'sma', 'ema', 'stochastic', 'atr', 'obv', 'vwap', 'pivot', 'fibonacci']
         
         # Get indicator data
-        indicator_data = technical_analysis.calculate_indicators(ticker, all_indicators)
+        indicator_data = get_technical_analysis().calculate_indicators(ticker, all_indicators)
         
         # Get trading signals
-        signals = technical_analysis.get_trading_signals(ticker)
+        signals = get_technical_analysis().get_trading_signals(ticker)
         
         # Combine everything
         result = {
@@ -2506,7 +2533,7 @@ def get_comprehensive_technical_analysis():
                 'result': result,
                 'timestamp': pd.Timestamp.now().isoformat()
             }
-            user_service.save_ai_analysis_result(user_id, analysis_data)
+            _get_user_service().save_ai_analysis_result(user_id, analysis_data)
             logger.info(f"Technical analysis result saved for user {user_id}")
         except Exception as e:
             logger.warning(f"Failed to save technical analysis result: {str(e)}")
@@ -2524,7 +2551,7 @@ def get_support_resistance():
         if not ticker:
             return jsonify({"error": "Ticker symbol is required"}), 400
             
-        levels = technical_analysis.get_support_resistance(ticker)
+        levels = get_technical_analysis().get_support_resistance(ticker)
         return jsonify(levels)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2538,7 +2565,7 @@ def get_patterns():
         if not ticker:
             return jsonify({"error": "Ticker symbol is required"}), 400
             
-        patterns = technical_analysis.identify_patterns(ticker)
+        patterns = get_technical_analysis().identify_patterns(ticker)
         return jsonify(patterns)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2597,10 +2624,10 @@ def generate_backtesting_signals():
                 params = indicator['parameters']
                 
                 if indicator_type == 'rsi':
-                    values = technical_analysis._calculate_rsi(df, params.get('period', 14))
+                    values = get_technical_analysis()._calculate_rsi(df, params.get('period', 14))
                     indicator_results[indicator_type] = values
                 elif indicator_type == 'macd':
-                    macd_data = technical_analysis._calculate_macd(
+                    macd_data = get_technical_analysis()._calculate_macd(
                         df,
                         params.get('fastperiod', 12),
                         params.get('slowperiod', 26),
@@ -2608,7 +2635,7 @@ def generate_backtesting_signals():
                     )
                     indicator_results[indicator_type] = macd_data
                 elif indicator_type == 'bollinger':
-                    bb_data = technical_analysis._calculate_bollinger_bands(df, params.get('period', 20))
+                    bb_data = get_technical_analysis()._calculate_bollinger_bands(df, params.get('period', 20))
                     indicator_results[indicator_type] = bb_data
                 else:
                     return jsonify({"error": f"Unsupported indicator type: {indicator_type}"}), 400
@@ -2868,13 +2895,13 @@ def get_subscription():
     user_id = get_jwt_identity()
     
     # Try to get subscription details
-    subscription = subscription_service.get_subscription_details(user_id)
+    subscription = _get_subscription_service().get_subscription_details(user_id)
     
     # If subscription not found, try to fix it
     if not subscription:
-        fixed = subscription_service.fix_missing_subscription(user_id)
+        fixed = _get_subscription_service().fix_missing_subscription(user_id)
         if fixed:
-            subscription = subscription_service.get_subscription_details(user_id)
+            subscription = _get_subscription_service().get_subscription_details(user_id)
     
     if not subscription:
         return jsonify({"error": "Could not retrieve or create subscription"}), 500
@@ -2893,7 +2920,7 @@ def upgrade_subscription():
         return jsonify({"error": "New tier is required"}), 400
         
     new_tier = data['tier']
-    success, message = subscription_service.upgrade_subscription(user_id, new_tier)
+    success, message = _get_subscription_service().upgrade_subscription(user_id, new_tier)
     
     if not success:
         return jsonify({"error": message}), 400
@@ -2913,7 +2940,7 @@ def cancel_subscription():
         reason = data.get('reason', 'User requested cancellation')
         
         # Cancel subscription
-        success, message = subscription_service.cancel_subscription(user_id, reason)
+        success, message = _get_subscription_service().cancel_subscription(user_id, reason)
         
         if not success:
             return jsonify({
@@ -2931,7 +2958,7 @@ def cancel_subscription():
             
             if user_data:
                 # Get cancellation info
-                cancellation_info = subscription_service.get_cancellation_info(user_id)
+                cancellation_info = _get_subscription_service().get_cancellation_info(user_id)
                 
                 if cancellation_info:
                     # Send cancellation email
@@ -2972,7 +2999,7 @@ def get_cancellation_info():
     try:
         user_id = get_jwt_identity()
         
-        cancellation_info = subscription_service.get_cancellation_info(user_id)
+        cancellation_info = _get_subscription_service().get_cancellation_info(user_id)
         
         if cancellation_info:
             return jsonify({
@@ -2998,7 +3025,7 @@ def get_cancellation_info():
 def get_usage_metrics():
     """Get user's usage metrics"""
     user_id = get_jwt_identity()
-    metrics = subscription_service.get_usage_metrics(user_id)
+    metrics = _get_subscription_service().get_usage_metrics(user_id)
     
     if not metrics:
         return jsonify({"error": "Usage metrics not found"}), 404
@@ -3027,7 +3054,7 @@ def increment_usage():
             }), 400
         
         # Increment usage
-        success, message = subscription_service.increment_usage(user_id, feature)
+        success, message = _get_subscription_service().increment_usage(user_id, feature)
         
         if not success:
             return jsonify({
@@ -3036,7 +3063,7 @@ def increment_usage():
             }), 500
         
         # Get updated usage metrics
-        metrics = subscription_service.get_usage_metrics(user_id)
+        metrics = _get_subscription_service().get_usage_metrics(user_id)
         
         return jsonify({
             "success": True,
@@ -3058,11 +3085,11 @@ def get_subscription_tiers():
     """Get all subscription tiers"""
     # Check if user is admin
     user_id = get_jwt_identity()
-    user = user_service.get_user_by_id(user_id)
+    user = _get_user_service().get_user_by_id(user_id)
     if not user or user.get('role') != 'admin':
         return jsonify({"error": "Unauthorized access"}), 403
         
-    tiers = subscription_service.get_all_subscription_tiers()
+    tiers = _get_subscription_service().get_all_subscription_tiers()
     return jsonify(tiers), 200
 
 @app.route('/api/admin/subscription/tiers', methods=['POST'])
@@ -3072,7 +3099,7 @@ def create_subscription_tier():
     """Create a new subscription tier"""
     # Check if user is admin
     user_id = get_jwt_identity()
-    user = user_service.get_user_by_id(user_id)
+    user = _get_user_service().get_user_by_id(user_id)
     if not user or user.get('role') != 'admin':
         return jsonify({"error": "Unauthorized access"}), 403
     
@@ -3083,7 +3110,7 @@ def create_subscription_tier():
     tier_name = data['tier_name'].upper()  # Convert to uppercase for consistency
     tier_data = data['tier_data']
     
-    success, message = subscription_service.create_subscription_tier(tier_name, tier_data)
+    success, message = _get_subscription_service().create_subscription_tier(tier_name, tier_data)
     if not success:
         return jsonify({"error": message}), 400
         
@@ -3132,7 +3159,7 @@ def get_billing_details():
     """Get user's billing details"""
     try:
         user_id = get_jwt_identity()
-        user_data = user_service.get_user_by_id(user_id)
+        user_data = _get_user_service().get_user_by_id(user_id)
         
         if not user_data:
             return jsonify({"error": "User not found"}), 404
@@ -3178,7 +3205,7 @@ def update_billing_details():
             }
         }
         
-        result = user_service.users.update_one(
+        result = _get_user_service().users.update_one(
             {"_id": ObjectId(user_id)},
             {"$set": update_data}
         )
@@ -3211,7 +3238,7 @@ def send_email():
     try:
         # Check if user is admin
         user_id = get_jwt_identity()
-        user = user_service.get_user_by_id(user_id)
+        user = _get_user_service().get_user_by_id(user_id)
         if not user or user.get('role') != 'admin':
             return jsonify({"error": "Unauthorized access"}), 403
             
@@ -3267,13 +3294,13 @@ def send_welcome_email():
         target_user_id = data.get('user_id')
         if target_user_id:
             # Admin sending to another user
-            user = user_service.get_user_by_id(user_id)
+            user = _get_user_service().get_user_by_id(user_id)
             if not user or user.get('role') != 'admin':
                 return jsonify({"error": "Unauthorized access"}), 403
-            target_user = user_service.get_user_by_id(target_user_id)
+            target_user = _get_user_service().get_user_by_id(target_user_id)
         else:
             # User sending to themselves
-            target_user = user_service.get_user_by_id(user_id)
+            target_user = _get_user_service().get_user_by_id(user_id)
         
         if not target_user:
             return jsonify({"error": "User not found"}), 404
@@ -3322,7 +3349,7 @@ def send_subscription_upgrade_email():
                 }), 400
         
         # Get user details
-        user = user_service.get_user_by_id(user_id)
+        user = _get_user_service().get_user_by_id(user_id)
         if not user:
             return jsonify({"error": "User not found"}), 404
         
@@ -3369,7 +3396,7 @@ def save_backtest_result():
             return jsonify({"error": "backtest_data is required"}), 400
         
         # Save the backtest result
-        success = user_service.save_backtest_result(user_id, data['backtest_data'])
+        success = _get_user_service().save_backtest_result(user_id, data['backtest_data'])
         
         if success:
             return jsonify({
@@ -3403,7 +3430,7 @@ def save_ai_analysis_result():
             return jsonify({"error": "analysis_data is required"}), 400
         
         # Save the AI analysis result
-        success = user_service.save_ai_analysis_result(user_id, data['analysis_data'])
+        success = _get_user_service().save_ai_analysis_result(user_id, data['analysis_data'])
         
         if success:
             return jsonify({
@@ -3437,7 +3464,7 @@ def save_chat_history():
             return jsonify({"error": "chat_data is required"}), 400
         
         # Save the chat history
-        result = user_service.save_chat_history(user_id, data['chat_data'])
+        result = _get_user_service().save_chat_history(user_id, data['chat_data'])
         
         if result.get("success"):
             return jsonify(result), 200
@@ -3473,7 +3500,7 @@ def get_user_backtests():
             skip = 0
         
         # Get user's backtest results
-        backtests = user_service.get_user_backtests(user_id, limit, skip)
+        backtests = _get_user_service().get_user_backtests(user_id, limit, skip)
         
         return jsonify({
             "success": True,
@@ -3504,7 +3531,7 @@ def delete_backtest(backtest_id):
             }), 400
 
         # Delete backtest (ensure it belongs to the user)
-        result = user_service.delete_backtest_result(user_id, backtest_id)
+        result = _get_user_service().delete_backtest_result(user_id, backtest_id)
 
         if result:
             return jsonify({
@@ -3542,7 +3569,7 @@ def get_user_ai_analyses():
             skip = 0
         
         # Get user's AI analysis results
-        analyses = user_service.get_user_ai_analyses(user_id, limit, skip)
+        analyses = _get_user_service().get_user_ai_analyses(user_id, limit, skip)
         
         return jsonify({
             "success": True,
@@ -3576,7 +3603,7 @@ def get_user_chat_history():
             skip = 0
 
         # Get user's chat history
-        chat_history = user_service.get_user_chat_history(user_id, limit, skip)
+        chat_history = _get_user_service().get_user_chat_history(user_id, limit, skip)
 
         return jsonify({
             "success": True,
@@ -3840,7 +3867,7 @@ def create_news_post():
     """Create a new news post (admin only)"""
     try:
         current_user_id = get_jwt_identity()
-        user_info = user_service.get_user_by_id(current_user_id)
+        user_info = _get_user_service().get_user_by_id(current_user_id)
         
         if not user_info or user_info.get('role') != 'admin':
             return jsonify({
@@ -3892,7 +3919,7 @@ def create_blog_post():
     """Create a new blog post (admin only)"""
     try:
         current_user_id = get_jwt_identity()
-        user_info = user_service.get_user_by_id(current_user_id)
+        user_info = _get_user_service().get_user_by_id(current_user_id)
         
         if not user_info or user_info.get('role') != 'admin':
             return jsonify({
@@ -4032,7 +4059,7 @@ def update_blog_post(post_id):
     """Update a blog post (admin only)"""
     try:
         current_user_id = get_jwt_identity()
-        user_info = user_service.get_user_by_id(current_user_id)
+        user_info = _get_user_service().get_user_by_id(current_user_id)
 
         if not user_info or user_info.get('role') != 'admin':
             return jsonify({
@@ -4078,7 +4105,7 @@ def delete_blog_post(post_id):
     """Delete a blog post (admin only)"""
     try:
         current_user_id = get_jwt_identity()
-        user_info = user_service.get_user_by_id(current_user_id)
+        user_info = _get_user_service().get_user_by_id(current_user_id)
 
         if not user_info or user_info.get('role') != 'admin':
             return jsonify({
@@ -4136,7 +4163,7 @@ def manual_credit_subscription():
         note = data.get('note', 'Manual credit by admin')
 
         # Apply subscription
-        success, message = subscription_service.apply_premium_subscription(
+        success, message = _get_subscription_service().apply_premium_subscription(
             user_id=user_id,
             plan_name=plan,
             plan_duration=duration

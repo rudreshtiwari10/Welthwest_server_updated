@@ -27,19 +27,13 @@ import requests
 import json
 from datetime import datetime, timedelta
 
-# Import all our services
-from services.indicators_service import get_indicators, get_signal_summary
-from services.chart_service import generate_chart, chart_service
-from services.screener_service import screen_stocks, run_screen, get_available_screens
-from services.simple_backtest_service import run_backtest
+# Heavy service imports deferred into methods to avoid slow startup
+# These all import yfinance/pandas/numpy which take seconds to load
 # RAG service disabled - PDF document analysis not currently used
-# from services.rag_service import get_context_for_query, rag_service
 class _DisabledRAG:
     def is_available(self): return False
 rag_service = _DisabledRAG()
 def get_context_for_query(*a, **kw): return None
-from services.stock_service import get_live_data
-import yfinance as yf
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -117,6 +111,11 @@ When analyzing data:
 - Explain what the data suggests, not what users should do
 - Use professional but accessible language
 - Always display prices with ₹ symbol for Indian markets"""
+
+    def _get_yf_ticker(self, symbol: str):
+        """Lazily import yfinance and return a Ticker object"""
+        import yfinance as yf
+        return yf.Ticker(symbol)
 
     def detect_analysis_intent(self, query: str) -> dict:
         """
@@ -373,7 +372,7 @@ When analyzing data:
 
             # Get stock data
             symbol = symbols[0]  # Use first symbol
-            ticker = yf.Ticker(symbol)
+            ticker = self._get_yf_ticker(symbol)
             info = ticker.info
             hist = ticker.history(period='1d')
 
@@ -434,6 +433,7 @@ When analyzing data:
             symbol = symbols[0]
 
             # Get indicators
+            from services.indicators_service import get_indicators, get_signal_summary
             indicators = get_indicators(symbol, period='6mo')
 
             if 'error' in indicators:
@@ -443,6 +443,7 @@ When analyzing data:
                 }
 
             # Generate comprehensive chart
+            from services.chart_service import generate_chart
             chart_base64 = generate_chart(
                 indicators['raw_data'],
                 chart_type='comprehensive',
@@ -450,6 +451,7 @@ When analyzing data:
             )
 
             # Get signal summary
+            from services.indicators_service import get_signal_summary
             signal_summary = get_signal_summary(symbol)
 
             # Prepare context for LLM
@@ -484,6 +486,7 @@ When analyzing data:
             query_lower = query.lower()
 
             # Determine which predefined screen to use
+            from services.screener_service import screen_stocks, run_screen, get_available_screens
             screens = get_available_screens()
             selected_screen = None
 
@@ -553,6 +556,7 @@ When analyzing data:
             end_date = datetime.now().strftime('%Y-%m-%d')
             start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
 
+            from services.simple_backtest_service import run_backtest
             results = run_backtest(
                 strategy=strategy,
                 symbol=symbol,
@@ -568,6 +572,7 @@ When analyzing data:
                 }
 
             # Generate equity curve chart
+            from services.chart_service import chart_service
             chart_base64 = chart_service.create_backtest_chart(
                 equity_curve=results['equity_curve']['values'],
                 dates=results['equity_curve']['dates'],
@@ -854,8 +859,14 @@ When analyzing data:
             }
 
 
-# Singleton instance
-finance_orchestrator = FinanceOrchestrator()
+# Lazy singleton instance
+_finance_orchestrator = None
+
+def _get_finance_orchestrator():
+    global _finance_orchestrator
+    if _finance_orchestrator is None:
+        _finance_orchestrator = FinanceOrchestrator()
+    return _finance_orchestrator
 
 
 # Helper function
@@ -870,4 +881,4 @@ def process_finance_query(query: str, conversation_history: List[Dict[str, str]]
     Returns:
         Complete response with data and AI explanation
     """
-    return finance_orchestrator.process_query(query, conversation_history)
+    return _get_finance_orchestrator().process_query(query, conversation_history)

@@ -8,29 +8,35 @@ from config import get_config
 from datetime import datetime, timedelta
 import threading
 
-# Initialize Redis client
-config = get_config()
-redis_client = None
-
 # In-memory fallback storage
 in_memory_storage: Dict[str, Dict] = {}
 storage_lock = threading.Lock()
 
-try:
-    redis_client = redis.Redis(
-        host=config.REDIS_HOST,
-        port=config.REDIS_PORT,
-        db=config.REDIS_DB,
-        password=config.REDIS_PASSWORD,
-        decode_responses=True,
-        socket_connect_timeout=5
-    )
-    # Test connection
-    redis_client.ping()
-    print(f"Redis connection established at {config.REDIS_HOST}:{config.REDIS_PORT}")
-except Exception as e:
-    print(f"Redis not available, using in-memory storage (OK for development)")
-    redis_client = None
+# Lazy Redis client
+_redis_client = None
+_redis_initialized = False
+
+def _get_redis_client():
+    """Lazily initialize Redis client on first use"""
+    global _redis_client, _redis_initialized
+    if not _redis_initialized:
+        _redis_initialized = True
+        config = get_config()
+        try:
+            _redis_client = redis.Redis(
+                host=config.REDIS_HOST,
+                port=config.REDIS_PORT,
+                db=config.REDIS_DB,
+                password=config.REDIS_PASSWORD,
+                decode_responses=True,
+                socket_connect_timeout=5
+            )
+            _redis_client.ping()
+            print(f"Redis connection established at {config.REDIS_HOST}:{config.REDIS_PORT}")
+        except Exception as e:
+            print(f"Redis not available, using in-memory storage (OK for development)")
+            _redis_client = None
+    return _redis_client
 
 
 def incr_feature_usage(session_id: str, feature: str) -> int:
@@ -46,6 +52,7 @@ def incr_feature_usage(session_id: str, feature: str) -> int:
         New usage count for this feature
     """
     cfg = get_config()
+    redis_client = _get_redis_client()
 
     if redis_client:
         # Use Redis if available
@@ -91,6 +98,7 @@ def get_feature_usage(session_id: str, feature: str) -> int:
     Returns:
         Current usage count (0 if not found)
     """
+    redis_client = _get_redis_client()
     if redis_client:
         # Use Redis if available
         key = f"anon:{session_id}:usage:{feature}"
@@ -117,6 +125,7 @@ def get_all_feature_usage(session_id: str) -> dict:
     Returns:
         Dictionary mapping feature names to usage counts
     """
+    redis_client = _get_redis_client()
     if redis_client:
         # Use Redis if available
         pattern = f"anon:{session_id}:usage:*"
@@ -155,6 +164,7 @@ def reset_feature_usage(session_id: str, feature: str) -> bool:
     Returns:
         True if reset successful
     """
+    redis_client = _get_redis_client()
     if redis_client:
         # Use Redis if available
         key = f"anon:{session_id}:usage:{feature}"
@@ -179,6 +189,7 @@ def delete_session(session_id: str) -> bool:
     Returns:
         True if deletion successful
     """
+    redis_client = _get_redis_client()
     if redis_client:
         # Use Redis if available
         pattern = f"anon:{session_id}:usage:*"
@@ -198,6 +209,7 @@ def delete_session(session_id: str) -> bool:
 
 def is_redis_available() -> bool:
     """Check if Redis connection is available"""
+    redis_client = _get_redis_client()
     if not redis_client:
         return False
 

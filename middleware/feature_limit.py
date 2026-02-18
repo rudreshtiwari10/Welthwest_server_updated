@@ -14,10 +14,21 @@ from config import get_config
 
 logger = logging.getLogger(__name__)
 
-# Initialize services
-subscription_service = SubscriptionService()
-usage_service = get_premium_usage_service()
-config = get_config()
+# Services initialized on first request to avoid slow startup
+_subscription_service = None
+_config = None
+
+def _get_subscription_service():
+    global _subscription_service
+    if _subscription_service is None:
+        _subscription_service = SubscriptionService()
+    return _subscription_service
+
+def _get_config():
+    global _config
+    if _config is None:
+        _config = get_config()
+    return _config
 
 
 def feature_limit(feature_key: str):
@@ -55,7 +66,7 @@ def feature_limit(feature_key: str):
                 # Step 2: Get or create session ID for anonymous users
                 session_id = None
                 if is_anonymous:
-                    session_id = request.cookies.get(config.ANON_SESSION_COOKIE)
+                    session_id = request.cookies.get(_get_config().ANON_SESSION_COOKIE)
                     if not session_id:
                         # Create new session ID
                         session_id = f"anon_{uuid.uuid4().hex}"
@@ -63,11 +74,11 @@ def feature_limit(feature_key: str):
 
                 # Step 3: Get limits for user or anonymous
                 if is_anonymous:
-                    limits = subscription_service.get_anonymous_limits()
+                    limits = _get_subscription_service().get_anonymous_limits()
                     actor_id = session_id
                     logger.debug(f"Anonymous user {session_id} accessing {feature_key}")
                 else:
-                    limits = subscription_service.get_limits_for_user(user_id)
+                    limits = _get_subscription_service().get_limits_for_user(user_id)
                     actor_id = user_id
                     logger.debug(f"Authenticated user {user_id} accessing {feature_key}")
 
@@ -93,7 +104,7 @@ def feature_limit(feature_key: str):
                         }), 403
 
                 # Step 5: Check and increment usage atomically
-                allowed, remaining = usage_service.check_and_increment(
+                allowed, remaining = get_premium_usage_service().check_and_increment(
                     actor_id=actor_id,
                     feature_key=feature_key,
                     limit=limit,
@@ -107,7 +118,7 @@ def feature_limit(feature_key: str):
                     # Get current plan for better messaging
                     current_plan = "FREE"
                     if not is_anonymous:
-                        user_sub = subscription_service.get_user_subscription(user_id)
+                        user_sub = _get_subscription_service().get_user_subscription(user_id)
                         if user_sub:
                             current_plan = user_sub.get('plan', 'FREE')
 
@@ -164,9 +175,9 @@ def feature_limit(feature_key: str):
                 # Set session cookie for anonymous users
                 if is_anonymous and session_id:
                     flask_response.set_cookie(
-                        config.ANON_SESSION_COOKIE,
+                        _get_config().ANON_SESSION_COOKIE,
                         session_id,
-                        max_age=config.ANON_SESSION_TTL_SECONDS,
+                        max_age=_get_config().ANON_SESSION_TTL_SECONDS,
                         httponly=True,
                         samesite='Lax'
                     )
@@ -204,7 +215,7 @@ def get_usage_info_decorator():
 
                 if user_id:
                     # Get user subscription info
-                    user_sub = subscription_service.get_user_subscription(user_id)
+                    user_sub = _get_subscription_service().get_user_subscription(user_id)
                     if user_sub:
                         g.user_subscription = user_sub
 
@@ -233,7 +244,7 @@ def admin_required(fn):
             from pymongo import MongoClient
             from bson import ObjectId
 
-            db = MongoClient(config.MONGODB_URI)[config.DB_NAME]
+            db = MongoClient(_get_config().MONGODB_URI)[_get_config().DB_NAME]
 
             try:
                 user = db.users.find_one({"_id": ObjectId(user_id)})

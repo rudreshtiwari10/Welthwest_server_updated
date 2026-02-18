@@ -282,5 +282,20 @@ class NotificationService:
         return self.notification_model.delete_all_user_notifications(user_id)
 
 
-# Singleton instance
-notification_service = NotificationService()
+# Lazy singleton - only connects to MongoDB when first used
+_notification_service = None
+
+def get_notification_service():
+    global _notification_service
+    if _notification_service is None:
+        _notification_service = NotificationService()
+    return _notification_service
+
+# Keep backward-compatible property for imports using 'notification_service' directly
+class _LazyNotificationProxy:
+    """Proxy that defers NotificationService creation until first attribute access"""
+    def __getattr__(self, name):
+        return getattr(get_notification_service(), name)
+
+notification_service = _LazyNotificationProxy()
+

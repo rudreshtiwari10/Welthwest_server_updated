@@ -13,10 +13,21 @@ logger = logging.getLogger(__name__)
 # Create blueprint
 premium_bp = Blueprint('premium', __name__, url_prefix='/api/premium')
 
-# Initialize services
-subscription_service = SubscriptionService()
-usage_service = get_premium_usage_service()
-config = get_config()
+# Services initialized on first request to avoid slow startup
+_subscription_service = None
+_config = None
+
+def _get_subscription_service():
+    global _subscription_service
+    if _subscription_service is None:
+        _subscription_service = SubscriptionService()
+    return _subscription_service
+
+def _get_config():
+    global _config
+    if _config is None:
+        _config = get_config()
+    return _config
 
 
 @premium_bp.route('/plans', methods=['GET'])
@@ -30,7 +41,7 @@ def get_plans():
     """
     try:
         # Get all plans from database
-        plans_from_db = subscription_service.get_all_premium_plans()
+        plans_from_db = _get_subscription_service().get_all_premium_plans()
 
         # If no plans in DB, return from config
         if not plans_from_db:
@@ -40,9 +51,9 @@ def get_plans():
                 plans.append({
                     "_id": plan_id,
                     "display_name": plan_id.capitalize(),
-                    "prices": config.PLAN_PRICES.get(plan_id, {}),
-                    "limits": config.PLAN_LIMITS.get(plan_id, {}),
-                    "features": list(config.PLAN_LIMITS.get(plan_id, {}).keys())
+                    "prices": _get_config().PLAN_PRICES.get(plan_id, {}),
+                    "limits": _get_config().PLAN_LIMITS.get(plan_id, {}),
+                    "features": list(_get_config().PLAN_LIMITS.get(plan_id, {}).keys())
                 })
         else:
             plans = []
@@ -88,7 +99,7 @@ def get_user_subscription():
     try:
         user_id = get_jwt_identity()
 
-        subscription = subscription_service.get_user_subscription(user_id)
+        subscription = _get_subscription_service().get_user_subscription(user_id)
 
         if not subscription:
             return jsonify({
@@ -123,11 +134,11 @@ def get_user_usage():
         user_id = get_jwt_identity()
 
         # Get user's limits
-        limits = subscription_service.get_limits_for_user(user_id)
+        limits = _get_subscription_service().get_limits_for_user(user_id)
 
         # Get usage for all features
         feature_keys = list(limits.keys())
-        usage = usage_service.get_all_usage(
+        usage = get_premium_usage_service().get_all_usage(
             actor_id=user_id,
             feature_keys=feature_keys,
             limits=limits,
@@ -135,7 +146,7 @@ def get_user_usage():
         )
 
         # Get subscription info
-        subscription = subscription_service.get_user_subscription(user_id)
+        subscription = _get_subscription_service().get_user_subscription(user_id)
 
         return jsonify({
             "success": True,
@@ -192,10 +203,10 @@ def get_feature_remaining(feature_key):
         from flask import request
         session_id = None
         if is_anonymous:
-            session_id = request.cookies.get(config.ANON_SESSION_COOKIE)
+            session_id = request.cookies.get(_get_config().ANON_SESSION_COOKIE)
             if not session_id:
                 # Return full anonymous limit if no session yet
-                limit = config.ANON_LIMITS.get(feature_key, 0)
+                limit = _get_config().ANON_LIMITS.get(feature_key, 0)
                 return jsonify({
                     "success": True,
                     "remaining": limit,
@@ -206,14 +217,14 @@ def get_feature_remaining(feature_key):
 
         # Get limits and remaining
         if is_anonymous:
-            limits = subscription_service.get_anonymous_limits()
+            limits = _get_subscription_service().get_anonymous_limits()
             actor_id = session_id
         else:
-            limits = subscription_service.get_limits_for_user(user_id)
+            limits = _get_subscription_service().get_limits_for_user(user_id)
             actor_id = user_id
 
         limit = limits.get(feature_key, 0)
-        remaining = usage_service.get_remaining(actor_id, feature_key, limit, is_anonymous)
+        remaining = get_premium_usage_service().get_remaining(actor_id, feature_key, limit, is_anonymous)
 
         return jsonify({
             "success": True,
@@ -258,7 +269,7 @@ def check_expired_subscriptions():
             }), 401
 
         # Run expiry check
-        results = subscription_service.check_and_downgrade_expired()
+        results = _get_subscription_service().check_and_downgrade_expired()
 
         return jsonify({
             "success": True,

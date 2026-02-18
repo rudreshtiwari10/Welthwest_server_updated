@@ -18,14 +18,37 @@ logger = logging.getLogger(__name__)
 # Initialize Blueprint
 admin_bp = Blueprint('admin', __name__, url_prefix='/api/admin')
 
-# Initialize services
-user_service = UserService()
-subscription_service = SubscriptionService()
-config = get_config()
+# Lazy service initialization to avoid slow startup
+_user_service = None
+_subscription_service = None
+_config = None
+_db = None
 
-# Get MongoDB connection
-from pymongo import MongoClient
-db = MongoClient(config.MONGODB_URI)[config.DB_NAME]
+def _get_user_service():
+    global _user_service
+    if _user_service is None:
+        _user_service = UserService()
+    return _user_service
+
+def _get_subscription_service():
+    global _subscription_service
+    if _subscription_service is None:
+        _subscription_service = SubscriptionService()
+    return _subscription_service
+
+def _get_config():
+    global _config
+    if _config is None:
+        _config = get_config()
+    return _config
+
+def _get_db():
+    global _db
+    if _db is None:
+        from pymongo import MongoClient
+        c = _get_config()
+        _db = MongoClient(c.MONGODB_URI)[c.DB_NAME]
+    return _db
 
 
 # Helper function to convert all ObjectIds to strings recursively
@@ -60,7 +83,7 @@ def log_admin_action(admin_id, action, resource_type, resource_id, before_state=
     """Log all admin actions for audit trail"""
     try:
         # Get admin user details
-        admin = db.users.find_one({'_id': ObjectId(admin_id)})
+        admin = _get_db().users.find_one({'_id': ObjectId(admin_id)})
         admin_username = admin.get('username', admin.get('email', 'Unknown')) if admin else 'Unknown'
         admin_email = admin.get('email', '') if admin else ''
 
@@ -77,7 +100,7 @@ def log_admin_action(admin_id, action, resource_type, resource_id, before_state=
             "ip_address": request.remote_addr,
             "user_agent": request.headers.get('User-Agent')
         }
-        db.audit_logs.insert_one(audit_log)
+        _get_db().audit_logs.insert_one(audit_log)
 
         # NEW: Also log to activity_logs collection for the Activity Logs page
         from models.activity_log import ActivityLog
@@ -119,10 +142,10 @@ def get_dashboard_overview():
         admin_id = get_jwt_identity()
 
         # Total Users
-        total_users = db.users.count_documents({})
+        total_users = _get_db().users.count_documents({})
 
         # Active Premium Users (subscription.is_active = true and plan != FREE)
-        active_premium_users = db.users.count_documents({
+        active_premium_users = _get_db().users.count_documents({
             'subscription.is_active': True,
             'subscription.plan': {'$ne': 'FREE'}
         })
@@ -135,11 +158,11 @@ def get_dashboard_overview():
             }}
         ]
         # Convert None to 'FREE' to avoid JSON serialization issues
-        users_by_plan = {(item['_id'] or 'FREE'): item['count'] for item in db.users.aggregate(pipeline)}
+        users_by_plan = {(item['_id'] or 'FREE'): item['count'] for item in _get_db().users.aggregate(pipeline)}
 
         # Recent Signups (last 7 days)
         seven_days_ago = datetime.utcnow() - timedelta(days=7)
-        recent_signups = db.users.count_documents({
+        recent_signups = _get_db().users.count_documents({
             'created_at': {'$gte': seven_days_ago}
         })
 
@@ -159,15 +182,15 @@ def get_dashboard_overview():
                 }
             }
         ]
-        monthly_revenue_result = list(db.transactions.aggregate(monthly_revenue_pipeline))
+        monthly_revenue_result = list(_get_db().transactions.aggregate(monthly_revenue_pipeline))
         monthly_revenue = monthly_revenue_result[0]['total'] if monthly_revenue_result else 0
 
         # Pending Payments
-        pending_payments = db.transactions.count_documents({'status': 'PENDING'})
+        pending_payments = _get_db().transactions.count_documents({'status': 'PENDING'})
 
         # Subscription Churn (cancelled in last 30 days)
         thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-        churn_count = db.users.count_documents({
+        churn_count = _get_db().users.count_documents({
             'subscription.cancelled_at': {'$gte': thirty_days_ago}
         })
 
@@ -176,11 +199,11 @@ def get_dashboard_overview():
             {'$match': {'status': 'SUCCESS'}},
             {'$group': {'_id': None, 'total': {'$sum': '$amount'}}}
         ]
-        total_revenue_result = list(db.transactions.aggregate(total_revenue_pipeline))
+        total_revenue_result = list(_get_db().transactions.aggregate(total_revenue_pipeline))
         total_revenue = total_revenue_result[0]['total'] if total_revenue_result else 0
 
         # Recent Activity (last 10 users who joined)
-        recent_users = list(db.users.find(
+        recent_users = list(_get_db().users.find(
             {},
             {'first_name': 1, 'last_name': 1, 'email': 1, 'created_at': 1, 'subscription.plan': 1}
         ).sort('created_at', DESCENDING).limit(10))
@@ -264,11 +287,11 @@ def list_users():
             query['role'] = role_filter
 
         # Count total matching documents
-        total = db.users.count_documents(query)
+        total = _get_db().users.count_documents(query)
 
         # Execute query with pagination
         sort_direction = DESCENDING if sort_order == 'desc' else ASCENDING
-        users = list(db.users.find(query).sort(sort_by, sort_direction).skip(skip).limit(limit))
+        users = list(_get_db().users.find(query).sort(sort_by, sort_direction).skip(skip).limit(limit))
 
         # Clean up sensitive data
         for user in users:
@@ -305,7 +328,7 @@ def get_user_details(user_id):
         admin_id = get_jwt_identity()
 
         # Get user
-        user = db.users.find_one({'_id': ObjectId(user_id)})
+        user = _get_db().users.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({"error": "User not found"}), 404
 
@@ -313,20 +336,20 @@ def get_user_details(user_id):
         user.pop('password', None)
 
         # Get purchase history (transactions)
-        transactions = list(db.transactions.find({'user_id': ObjectId(user_id)}).sort('created_at', DESCENDING).limit(50))
+        transactions = list(_get_db().transactions.find({'user_id': ObjectId(user_id)}).sort('created_at', DESCENDING).limit(50))
 
         # Get saved backtests count
-        backtests_count = db.backtests.count_documents({'user_id': user_id})
+        backtests_count = _get_db().backtests.count_documents({'user_id': user_id})
 
         # Get saved AI analyses count
-        ai_analyses_count = db.ai_analyses.count_documents({'user_id': user_id})
+        ai_analyses_count = _get_db().ai_analyses.count_documents({'user_id': user_id})
 
         # Get chat history count
-        chat_history_count = db.chat_history.count_documents({'user_id': user_id})
+        chat_history_count = _get_db().chat_history.count_documents({'user_id': user_id})
 
         # Get usage logs (last 30 days)
         thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-        usage_logs = list(db.usage_logs.find({
+        usage_logs = list(_get_db().usage_logs.find({
             'actor_id': user_id,
             'created_at': {'$gte': thirty_days_ago}
         }).sort('created_at', DESCENDING).limit(100))
@@ -368,7 +391,7 @@ def update_user(user_id):
         data = request.get_json()
 
         # Get current user state for audit log
-        user_before = db.users.find_one({'_id': ObjectId(user_id)})
+        user_before = _get_db().users.find_one({'_id': ObjectId(user_id)})
         if not user_before:
             return jsonify({"error": "User not found"}), 404
 
@@ -388,7 +411,7 @@ def update_user(user_id):
         update_data['updated_at'] = datetime.utcnow()
 
         # Update user
-        result = db.users.update_one(
+        result = _get_db().users.update_one(
             {'_id': ObjectId(user_id)},
             {'$set': update_data}
         )
@@ -397,7 +420,7 @@ def update_user(user_id):
             return jsonify({"error": "No changes made"}), 400
 
         # Get updated user
-        user_after = db.users.find_one({'_id': ObjectId(user_id)})
+        user_after = _get_db().users.find_one({'_id': ObjectId(user_id)})
         user_after.pop('password', None)
 
         # Serialize all MongoDB objects
@@ -447,7 +470,7 @@ def update_user_subscription(user_id):
             return jsonify({"error": f"Invalid plan. Must be one of: {', '.join(valid_plans)}"}), 400
 
         # Get user
-        user = db.users.find_one({'_id': ObjectId(user_id)})
+        user = _get_db().users.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({"error": "User not found"}), 404
 
@@ -513,7 +536,7 @@ def update_user_subscription(user_id):
         }
 
         # Update user document - now we only use $set
-        db.users.update_one(
+        _get_db().users.update_one(
             {'_id': ObjectId(user_id)},
             {'$set': {'subscription': new_subscription}}
         )
@@ -562,14 +585,14 @@ def block_user(user_id):
             return jsonify({"error": "Action must be 'block' or 'unblock'"}), 400
 
         # Get user
-        user = db.users.find_one({'_id': ObjectId(user_id)})
+        user = _get_db().users.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({"error": "User not found"}), 404
 
         # Update user status
         is_blocked = action == 'block'
 
-        db.users.update_one(
+        _get_db().users.update_one(
             {'_id': ObjectId(user_id)},
             {
                 '$set': {
@@ -612,12 +635,12 @@ def delete_user(user_id):
         admin_id = get_jwt_identity()
 
         # Get user
-        user = db.users.find_one({'_id': ObjectId(user_id)})
+        user = _get_db().users.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({"error": "User not found"}), 404
 
         # Soft delete - mark as deleted but keep data
-        db.users.update_one(
+        _get_db().users.update_one(
             {'_id': ObjectId(user_id)},
             {
                 '$set': {
@@ -669,11 +692,11 @@ def get_subscription_analytics():
                 'count': {'$sum': 1}
             }}
         ]
-        users_by_plan = {item['_id'] or 'FREE': item['count'] for item in db.users.aggregate(plan_pipeline)}
+        users_by_plan = {item['_id'] or 'FREE': item['count'] for item in _get_db().users.aggregate(plan_pipeline)}
 
         # Active vs Inactive subscriptions
-        active_subs = db.users.count_documents({'subscription.is_active': True})
-        inactive_subs = db.users.count_documents({'subscription.is_active': False})
+        active_subs = _get_db().users.count_documents({'subscription.is_active': True})
+        inactive_subs = _get_db().users.count_documents({'subscription.is_active': False})
 
         # Recent upgrades (last 30 days)
         thirty_days_ago = datetime.utcnow() - timedelta(days=30)
@@ -688,10 +711,10 @@ def get_subscription_analytics():
             }}
         ]
         # Convert None to 'UNKNOWN' to avoid JSON serialization issues
-        recent_upgrades = {(item['_id'] or 'UNKNOWN'): item['count'] for item in db.transactions.aggregate(upgrades_pipeline)}
+        recent_upgrades = {(item['_id'] or 'UNKNOWN'): item['count'] for item in _get_db().transactions.aggregate(upgrades_pipeline)}
 
         # Churn rate (cancelled in last 30 days)
-        churned_users = db.users.count_documents({
+        churned_users = _get_db().users.count_documents({
             'subscription.cancelled_at': {'$gte': thirty_days_ago}
         })
 
@@ -708,7 +731,7 @@ def get_subscription_analytics():
         revenue_by_plan = {(item['_id'] or 'UNKNOWN'): {
             'revenue': item['total_revenue'],
             'transactions': item['transaction_count']
-        } for item in db.transactions.aggregate(revenue_pipeline)}
+        } for item in _get_db().transactions.aggregate(revenue_pipeline)}
 
         # Subscription duration breakdown
         duration_pipeline = [
@@ -719,7 +742,7 @@ def get_subscription_analytics():
             }}
         ]
         # Convert None to 'N/A' to avoid JSON serialization issues
-        users_by_duration = {(item['_id'] or 'N/A'): item['count'] for item in db.users.aggregate(duration_pipeline)}
+        users_by_duration = {(item['_id'] or 'N/A'): item['count'] for item in _get_db().users.aggregate(duration_pipeline)}
 
         analytics = {
             'users_by_plan': users_by_plan,
@@ -778,10 +801,10 @@ def list_transactions():
             query['gateway'] = gateway
 
         # Count total
-        total = db.transactions.count_documents(query)
+        total = _get_db().transactions.count_documents(query)
 
         # Execute query
-        transactions = list(db.transactions.find(query).sort('created_at', DESCENDING).skip(skip).limit(limit))
+        transactions = list(_get_db().transactions.find(query).sort('created_at', DESCENDING).skip(skip).limit(limit))
 
         response = {
             'transactions': transactions,
@@ -814,12 +837,12 @@ def get_transaction_details(transaction_id):
     try:
         admin_id = get_jwt_identity()
 
-        transaction = db.transactions.find_one({'_id': ObjectId(transaction_id)})
+        transaction = _get_db().transactions.find_one({'_id': ObjectId(transaction_id)})
         if not transaction:
             return jsonify({"error": "Transaction not found"}), 404
 
         # Get associated user info
-        user = db.users.find_one({'_id': ObjectId(transaction['user_id'])}, {'email': 1, 'first_name': 1, 'last_name': 1})
+        user = _get_db().users.find_one({'_id': ObjectId(transaction['user_id'])}, {'email': 1, 'first_name': 1, 'last_name': 1})
         if user:
             transaction['user_info'] = user
 
@@ -849,7 +872,7 @@ def refund_transaction(transaction_id):
         reason = data.get('reason', 'Admin refund')
 
         # Get transaction
-        transaction = db.transactions.find_one({'_id': ObjectId(transaction_id)})
+        transaction = _get_db().transactions.find_one({'_id': ObjectId(transaction_id)})
         if not transaction:
             return jsonify({"error": "Transaction not found"}), 404
 
@@ -862,7 +885,7 @@ def refund_transaction(transaction_id):
             return jsonify({"error": "Refund amount cannot exceed transaction amount"}), 400
 
         # Update transaction
-        db.transactions.update_one(
+        _get_db().transactions.update_one(
             {'_id': ObjectId(transaction_id)},
             {
                 '$set': {
@@ -968,7 +991,7 @@ def get_revenue_report():
             {'$sort': {'date': 1}}
         ]
 
-        revenue_data = list(db.transactions.aggregate(pipeline))
+        revenue_data = list(_get_db().transactions.aggregate(pipeline))
 
         # Calculate summary
         total_revenue = sum(item['total_revenue'] for item in revenue_data)
@@ -1051,7 +1074,7 @@ def get_usage_report():
             }}
         ]
 
-        usage_by_feature = list(db.usage_logs.aggregate(feature_pipeline))
+        usage_by_feature = list(_get_db().usage_logs.aggregate(feature_pipeline))
 
         # Total usage
         total_uses = sum(item['total_uses'] for item in usage_by_feature)
@@ -1118,10 +1141,10 @@ def get_audit_logs():
                 query['timestamp']['$lte'] = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
 
         # Count total
-        total = db.audit_logs.count_documents(query)
+        total = _get_db().audit_logs.count_documents(query)
 
         # Execute query
-        logs = list(db.audit_logs.find(query).sort('timestamp', DESCENDING).skip(skip).limit(limit))
+        logs = list(_get_db().audit_logs.find(query).sort('timestamp', DESCENDING).skip(skip).limit(limit))
 
         response = {
             'logs': logs,
@@ -1174,10 +1197,10 @@ def get_all_feedback():
             query['rating'] = int(rating)
 
         # Count total
-        total = db.feedback.count_documents(query)
+        total = _get_db().feedback.count_documents(query)
 
         # Execute query
-        feedback_list = list(db.feedback.find(query).sort('created_at', DESCENDING).skip(skip).limit(limit))
+        feedback_list = list(_get_db().feedback.find(query).sort('created_at', DESCENDING).skip(skip).limit(limit))
 
         response = {
             'feedback': feedback_list,
@@ -1215,16 +1238,16 @@ def get_system_settings():
         admin_id = get_jwt_identity()
 
         # Get plans
-        plans = list(db.plans.find({}))
+        plans = list(_get_db().plans.find({}))
 
         # Get system stats
         stats = {
-            'total_users': db.users.count_documents({}),
-            'total_transactions': db.transactions.count_documents({}),
-            'total_backtests': db.backtests.count_documents({}),
-            'total_ai_analyses': db.ai_analyses.count_documents({}),
-            'total_chats': db.chat_history.count_documents({}),
-            'total_feedback': db.feedback.count_documents({})
+            'total_users': _get_db().users.count_documents({}),
+            'total_transactions': _get_db().transactions.count_documents({}),
+            'total_backtests': _get_db().backtests.count_documents({}),
+            'total_ai_analyses': _get_db().ai_analyses.count_documents({}),
+            'total_chats': _get_db().chat_history.count_documents({}),
+            'total_feedback': _get_db().feedback.count_documents({})
         }
 
         settings = {
@@ -1257,7 +1280,7 @@ def update_plan(plan_id):
         data = request.get_json()
 
         # Get current plan
-        plan_before = db.plans.find_one({'_id': plan_id})
+        plan_before = _get_db().plans.find_one({'_id': plan_id})
         if not plan_before:
             return jsonify({"error": "Plan not found"}), 404
 
@@ -1278,13 +1301,13 @@ def update_plan(plan_id):
         update_data['updated_at'] = datetime.utcnow()
 
         # Update plan
-        db.plans.update_one(
+        _get_db().plans.update_one(
             {'_id': plan_id},
             {'$set': update_data}
         )
 
         # Get updated plan
-        plan_after = db.plans.find_one({'_id': plan_id})
+        plan_after = _get_db().plans.find_one({'_id': plan_id})
         plan_after['_id'] = str(plan_after['_id'])
 
         # Log admin action

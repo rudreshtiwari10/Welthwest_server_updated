@@ -1,4 +1,11 @@
-import yfinance as yf
+# yfinance imported lazily to avoid slow startup
+_yf = None
+def _get_yf():
+    global _yf
+    if _yf is None:
+        import yfinance as yf
+        _yf = yf
+    return _yf
 import pandas as pd
 from datetime import datetime, timedelta, time
 import time
@@ -250,7 +257,7 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
         try:
             logger.info(f"Attempt {attempt + 1}: Calling yfinance for ticker: {formatted_ticker}")
             _sleep_before_yf_call()
-            ticker = yf.Ticker(formatted_ticker)
+            ticker = _get_yf().Ticker(formatted_ticker)
             hist_data = ticker.history(period=period, interval=interval)
             
             if len(hist_data) > 0:
@@ -283,7 +290,7 @@ def get_historical_data_yfinance(ticker_symbol, period="1y", interval="1d"):
             if formatted_ticker.endswith('.NS'):
                 bse_ticker = ticker_symbol + '.BO'
                 _sleep_before_yf_call()
-                ticker = yf.Ticker(bse_ticker)
+                ticker = _get_yf().Ticker(bse_ticker)
                 hist_data = ticker.history(period=period, interval=interval)
                 
                 if len(hist_data) > 0:
@@ -440,7 +447,7 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
         try:
             logger.info(f"Attempt {attempt + 1} to fetch data from yfinance")
             _sleep_before_yf_call()
-            ticker = yf.Ticker(formatted_ticker)
+            ticker = _get_yf().Ticker(formatted_ticker)
             hist_data = ticker.history(start=start_date, end=end_date, interval=interval)
             
             if len(hist_data) > 0:
@@ -472,7 +479,7 @@ def get_ohlc_data_yfinance(ticker_symbol, start_date=None, end_date=None, interv
                 logger.info("No data from NSE, trying BSE")
                 bse_ticker = ticker_symbol + '.BO'
                 _sleep_before_yf_call()
-                ticker = yf.Ticker(bse_ticker)
+                ticker = _get_yf().Ticker(bse_ticker)
                 hist_data = ticker.history(start=start_date, end=end_date, interval=interval)
                 
                 if len(hist_data) > 0:
@@ -618,7 +625,7 @@ def get_live_data_yfinance(ticker_symbols):
             try:
                 logger.info(f"Attempt {attempt + 1} for {symbol}")
                 _sleep_before_yf_call()
-                ticker = yf.Ticker(symbol)
+                ticker = _get_yf().Ticker(symbol)
                 
                 # First try to get info
                 try:
@@ -661,7 +668,7 @@ def get_live_data_yfinance(ticker_symbols):
                         logger.info(f"Trying BSE fallback for {symbol}")
                         bse_symbol = symbol.replace('.NS', '.BO')
                         _sleep_before_yf_call()
-                        ticker = yf.Ticker(bse_symbol)
+                        ticker = _get_yf().Ticker(bse_symbol)
                         
                         # Get info
                         try:
@@ -916,7 +923,7 @@ def get_market_indices_yfinance_optimized(limit=None):
         
         # Use yfinance's download function to get data for all indices in a single call
         # Fetch 7 days of data to provide chart history
-        data = yf.download(
+        data = _get_yf().download(
             tickers=indices,
             period="7d",  # 7 days for chart data
             group_by="ticker",
@@ -1044,7 +1051,7 @@ def get_market_indices_individual_fallback():
     for index_symbol in indices:
         try:
             _sleep_before_yf_call()
-            index = yf.Ticker(index_symbol, session=_YF_SESSION)
+            index = _get_yf().Ticker(index_symbol, session=_YF_SESSION)
             hist = index.history(period="1d")
             if len(hist) > 0:
                 latest_price = hist['Close'].iloc[-1]
@@ -1131,7 +1138,7 @@ def get_market_indices_individual_optimized(limit=None):
         try:
             # No sleep delay for market indices - they're less rate-limited
             # Don't pass custom session - let yfinance handle its own session
-            index = yf.Ticker(index_symbol)
+            index = _get_yf().Ticker(index_symbol)
 
             # Get 7 days of data for chart
             hist = index.history(period="7d")
@@ -1243,7 +1250,7 @@ def validate_ticker(ticker_symbol):
     for attempt in range(max_retries):
         try:
             _sleep_before_yf_call()
-            ticker = yf.Ticker(nse_ticker)
+            ticker = _get_yf().Ticker(nse_ticker)
             
             # First check: Try to get history data
             hist = ticker.history(period="1d")
@@ -1259,7 +1266,7 @@ def validate_ticker(ticker_symbol):
             # If we got here but didn't return True, try BSE
             bse_ticker = f"{base_ticker}.BO"
             _sleep_before_yf_call()
-            ticker = yf.Ticker(bse_ticker)
+            ticker = _get_yf().Ticker(bse_ticker)
             
             hist = ticker.history(period="1d")
             if len(hist) > 0:
@@ -1312,7 +1319,7 @@ def get_top_gainers_losers():
         # Use yfinance's download function to get data for all stocks in a single call
         # This is much more efficient than making individual calls for each stock
         _sleep_before_yf_call()
-        data = yf.download(
+        data = _get_yf().download(
             tickers=key_stocks,
             period="5d",  # Get 5 days to ensure we have valid data for 1d interval
             group_by="ticker",
@@ -1424,7 +1431,7 @@ def get_top_gainers_losers_backup():
         
         # Use yfinance's download function for bulk fetching
         _sleep_before_yf_call()
-        data = yf.download(
+        data = _get_yf().download(
             tickers=backup_stocks,
             period="5d",  # Get 5 days to ensure we have valid data for 1d interval
             group_by="ticker",
@@ -1585,7 +1592,7 @@ def get_stock_fundamentals(ticker_symbol):
     
     try:
         _sleep_before_yf_call()
-        ticker = yf.Ticker(formatted_ticker)
+        ticker = _get_yf().Ticker(formatted_ticker)
         
         # Get company info
         info = ticker.info

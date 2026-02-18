@@ -21,7 +21,7 @@ import numpy as np
 from typing import Dict, Any, Optional, List, Callable
 import logging
 from datetime import datetime, timedelta
-import yfinance as yf
+# yfinance not directly used — screener operates via indicator_engine
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from services.indicators_service import indicator_engine

@@ -17,15 +17,32 @@ logger = logging.getLogger(__name__)
 # Create blueprint
 subscription_bp = Blueprint('subscription', __name__, url_prefix='/api/subscription')
 
-# Initialize services
-subscription_service = SubscriptionService()
-usage_service = get_premium_usage_service()
-cashfree_service = get_cashfree_service()
-config = get_config()
+# Services initialized on first request to avoid slow startup
+_subscription_service = None
+_config = None
+_db = None
 
-# Initialize MongoDB
-db = MongoClient(config.MONGODB_URI)[config.DB_NAME]
-transactions_collection = db.transactions
+def _get_subscription_service():
+    global _subscription_service
+    if _subscription_service is None:
+        _subscription_service = SubscriptionService()
+    return _subscription_service
+
+def _get_config():
+    global _config
+    if _config is None:
+        _config = get_config()
+    return _config
+
+def _get_db():
+    global _db
+    if _db is None:
+        c = _get_config()
+        _db = MongoClient(c.MONGODB_URI)[c.DB_NAME]
+    return _db
+
+def _get_transactions():
+    return _get_db().transactions
 
 
 @subscription_bp.route('/status', methods=['GET'])
@@ -43,10 +60,10 @@ def get_subscription_status():
         user_id = get_jwt_identity()
 
         # Fix missing subscription fields (migration for old users)
-        subscription_service.fix_missing_subscription(user_id)
+        _get_subscription_service().fix_missing_subscription(user_id)
 
         # Get subscription details
-        subscription = subscription_service.get_user_subscription(user_id)
+        subscription = _get_subscription_service().get_user_subscription(user_id)
 
         if not subscription:
             return jsonify({
@@ -55,11 +72,11 @@ def get_subscription_status():
             }), 404
 
         # Get per-feature limits
-        limits = subscription_service.get_limits_for_user(user_id)
+        limits = _get_subscription_service().get_limits_for_user(user_id)
 
         # Get usage for all features
         feature_keys = list(limits.keys())
-        usage = usage_service.get_all_usage(
+        usage = get_premium_usage_service().get_all_usage(
             actor_id=user_id,
             feature_keys=feature_keys,
             limits=limits,
@@ -89,7 +106,7 @@ def get_subscription_status():
         from datetime import timedelta
         import pytz
 
-        tz = pytz.timezone(config.SERVER_TIMEZONE)
+        tz = pytz.timezone(_get_config().SERVER_TIMEZONE)
         now = datetime.now(tz)
         tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         time_until_reset = tomorrow - now
@@ -140,7 +157,7 @@ def verify_subscription_expiry():
         user_id = get_jwt_identity()
 
         # Check subscription expiry
-        result = subscription_service.check_subscription_expiry(user_id)
+        result = _get_subscription_service().check_subscription_expiry(user_id)
 
         if result.get('expired') and result.get('downgraded'):
             return jsonify({
@@ -193,12 +210,12 @@ def get_payment_history():
         skip = request.args.get('skip', 0, type=int)
 
         # Get transactions from database
-        transactions = list(transactions_collection.find(
+        transactions = list(_get_transactions().find(
             {"user_id": ObjectId(user_id)}
         ).sort("created_at", -1).skip(skip).limit(limit))
 
         # Get total count
-        total_count = transactions_collection.count_documents({"user_id": ObjectId(user_id)})
+        total_count = _get_transactions().count_documents({"user_id": ObjectId(user_id)})
 
         # Format transactions
         formatted_transactions = []
@@ -263,7 +280,7 @@ def get_transaction_details(transaction_id):
         user_id = get_jwt_identity()
 
         # Find transaction
-        transaction = transactions_collection.find_one({
+        transaction = _get_transactions().find_one({
             "_id": ObjectId(transaction_id),
             "user_id": ObjectId(user_id)
         })
@@ -299,11 +316,11 @@ def get_transaction_details(transaction_id):
         }
 
         # Try to fetch additional details from Cashfree if payment is successful
-        if transaction.get('status') == 'SUCCESS' and config.IS_PAYMENT_GATEWAY_ENABLED:
+        if transaction.get('status') == 'SUCCESS' and _get_config().IS_PAYMENT_GATEWAY_ENABLED:
             order_id = transaction.get('gateway_order_id')
             if order_id:
                 try:
-                    success, order_data = cashfree_service.get_order_status(order_id)
+                    success, order_data = get_cashfree_service().get_order_status(order_id)
                     if success:
                         details['cashfree_details'] = {
                             'order_status': order_data.get('order_status'),
@@ -365,11 +382,11 @@ def update_usage():
             }), 400
 
         # Get user's limit for this feature
-        limits = subscription_service.get_limits_for_user(user_id)
+        limits = _get_subscription_service().get_limits_for_user(user_id)
         limit = limits.get(feature_key, 0)
 
         # Check and increment usage
-        allowed, remaining = usage_service.check_and_increment(
+        allowed, remaining = get_premium_usage_service().check_and_increment(
             actor_id=user_id,
             feature_key=feature_key,
             limit=limit,
@@ -432,7 +449,7 @@ def reset_usage():
 
         if feature_key == 'all':
             # Reset all features
-            usage_service.delete_all_usage(user_id, is_anonymous=False)
+            get_premium_usage_service().delete_all_usage(user_id, is_anonymous=False)
             return jsonify({
                 "success": True,
                 "message": "All usage reset successfully"
@@ -446,7 +463,7 @@ def reset_usage():
                     "error": "Invalid feature key"
                 }), 400
 
-            usage_service.reset_usage(user_id, feature_key, is_anonymous=False)
+            get_premium_usage_service().reset_usage(user_id, feature_key, is_anonymous=False)
             return jsonify({
                 "success": True,
                 "message": f"Usage reset for {feature_key}"
@@ -505,7 +522,7 @@ def create_test_transaction():
             "payment_time": datetime.utcnow().isoformat()
         }
 
-        result = transactions_collection.insert_one(test_transaction)
+        result = _get_transactions().insert_one(test_transaction)
 
         logger.info(f"Created test transaction for user {user_id}")
 

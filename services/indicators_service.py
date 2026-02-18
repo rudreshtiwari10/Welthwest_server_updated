@@ -15,7 +15,7 @@ import numpy as np
 from typing import Dict, Any, Optional, List
 import logging
 from datetime import datetime, timedelta
-import yfinance as yf
+# yfinance imported lazily inside methods to avoid slow startup
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -276,6 +276,7 @@ class IndicatorEngine:
 
             # Fetch data
             logger.info(f"Fetching data for {symbol}")
+            import yfinance as yf
             ticker = yf.Ticker(symbol)
             hist = ticker.history(period=period)
 

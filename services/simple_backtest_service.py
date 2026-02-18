@@ -21,7 +21,7 @@ import numpy as np
 from typing import Dict, Any, Optional, List
 import logging
 from datetime import datetime
-import yfinance as yf
+# yfinance imported lazily inside fetch_data to avoid slow startup
 from services.indicators_service import IndicatorEngine
 
 # Setup logging
@@ -50,6 +50,7 @@ class SimpleBacktestEngine:
             DataFrame with OHLCV data
         """
         try:
+            import yfinance as yf
             ticker = yf.Ticker(symbol)
             data = ticker.history(start=start_date, end=end_date)
 
