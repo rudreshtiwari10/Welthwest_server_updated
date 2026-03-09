@@ -595,33 +595,35 @@ def google_auth():
             except Exception as e:
                 logger.error(f"Error initializing subscription for Google user: {str(e)}")
         
-        # Send welcome email for new Google users
+        # Send emails for new Google users in background threads (non-blocking)
         if is_new_user:
-            try:
-                user_name = user.get('name', user.get('first_name', user.get('email', '').split('@')[0]))
-                email_service.send_welcome_email(
-                    user_email=user['email'],
-                    user_name=user_name
-                )
-                logger.info(f"Welcome email sent to new Google user: {user['email']}")
-            except Exception as e:
-                logger.error(f"Failed to send welcome email to Google user {user['email']}: {str(e)}")
-        
-        # Send company notification for new Google users
-        if is_new_user:
-            try:
-                from datetime import datetime
-                user_name = user.get('name', user.get('first_name', user.get('email', '').split('@')[0]))
-                registration_date = datetime.now().strftime('%B %d, %Y at %I:%M %p')
-                email_service.send_new_user_notification_to_company(
-                    user_email=user['email'],
-                    user_name=user_name,
-                    registration_date=registration_date,
-                    registration_method="Google OAuth"
-                )
-                logger.info(f"Company notification email sent for new Google user: {user['email']}")
-            except Exception as e:
-                logger.error(f"Failed to send company notification email for Google user {user['email']}: {str(e)}")
+            import threading
+            from datetime import datetime as _dt
+            _user_email = user['email']
+            _user_name = user.get('name', user.get('first_name', _user_email.split('@')[0]))
+            _registration_date = _dt.now().strftime('%B %d, %Y at %I:%M %p')
+
+            def _send_welcome():
+                try:
+                    email_service.send_welcome_email(user_email=_user_email, user_name=_user_name)
+                    logger.info(f"Welcome email sent to new Google user: {_user_email}")
+                except Exception as e:
+                    logger.error(f"Failed to send welcome email to Google user {_user_email}: {str(e)}")
+
+            def _send_company_notification():
+                try:
+                    email_service.send_new_user_notification_to_company(
+                        user_email=_user_email,
+                        user_name=_user_name,
+                        registration_date=_registration_date,
+                        registration_method="Google OAuth"
+                    )
+                    logger.info(f"Company notification email sent for new Google user: {_user_email}")
+                except Exception as e:
+                    logger.error(f"Failed to send company notification for Google user {_user_email}: {str(e)}")
+
+            threading.Thread(target=_send_welcome, daemon=True).start()
+            threading.Thread(target=_send_company_notification, daemon=True).start()
         
         # Create access and refresh tokens with current timestamp
         import time

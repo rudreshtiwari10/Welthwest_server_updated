@@ -274,15 +274,35 @@ class IndicatorEngine:
                     logger.info(f"Using cached indicators for {symbol}")
                     return cached_data
 
-            # Fetch data
+            # Fetch data — try symbol as-is first, then .NS/.BO fallbacks
             logger.info(f"Fetching data for {symbol}")
             import yfinance as yf
+            # Disable SQLite timezone cache — prevents "database or disk is full" on EC2
+            try:
+                yf.set_tz_cache_location(None)
+            except Exception:
+                pass
             ticker = yf.Ticker(symbol)
             hist = ticker.history(period=period)
 
+            # If no data and symbol has no exchange suffix, try NSE then BSE
+            if hist.empty and not symbol.endswith('.NS') and not symbol.endswith('.BO'):
+                logger.info(f"No data for {symbol}, retrying as {symbol}.NS")
+                ticker = yf.Ticker(f"{symbol}.NS")
+                hist = ticker.history(period=period)
+                if not hist.empty:
+                    symbol = f"{symbol}.NS"
+                else:
+                    logger.info(f"No data for {symbol}.NS, retrying as {symbol.split('.')[0]}.BO")
+                    base = symbol.split('.')[0]
+                    ticker = yf.Ticker(f"{base}.BO")
+                    hist = ticker.history(period=period)
+                    if not hist.empty:
+                        symbol = f"{base}.BO"
+
             if hist.empty:
                 return {
-                    "error": f"No data available for {symbol}",
+                    "error": f"No data available for {symbol}. Please verify the NSE/BSE ticker symbol.",
                     "symbol": symbol
                 }
 

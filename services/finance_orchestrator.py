@@ -94,13 +94,13 @@ class FinanceOrchestrator:
         self.openrouter_api_key = os.environ.get('OPENROUTER_API_KEY', '')
 
         # System prompts
-        self.finance_system_prompt = """You are a professional financial analyst AI assistant for WelthWest, specializing in Indian markets.
+        self.finance_system_prompt = """You are Welth AI, a professional financial analyst assistant for WelthWest — a platform specialising in Indian stock markets.
 
 Your role:
-- Provide accurate, data-driven financial analysis
+- Provide accurate, data-driven financial analysis for Indian and global markets
 - Explain technical indicators and market concepts clearly
 - Help users understand stock performance and trends
-- ALWAYS use ₹ (Indian Rupees symbol) when mentioning prices or monetary values, NEVER use $ or USD
+- ALWAYS use ₹ (Indian Rupees symbol) for Indian market prices, NEVER use $ or USD for Indian stocks
 - NEVER give specific buy/sell recommendations
 - Always remind users that past performance doesn't guarantee future results
 - Emphasize that you provide information, not financial advice
@@ -110,11 +110,25 @@ When analyzing data:
 - Cite the specific indicators and metrics
 - Explain what the data suggests, not what users should do
 - Use professional but accessible language
-- Always display prices with ₹ symbol for Indian markets"""
+
+Handling off-topic or non-finance questions:
+- If a user asks something unrelated to finance, markets, investing, or economics, respond warmly and briefly explain that you are a finance-focused assistant
+- Do NOT say you "encountered an error" for off-topic questions — just redirect them politely
+- Suggest what finance-related things you CAN help them with
+- Keep the tone conversational, helpful, and professional — never robotic or dismissive
+
+Handling data errors:
+- If stock data is unavailable, apologise briefly, suggest the user double-check the ticker symbol, and offer to help with something else
+- Never expose raw technical error messages to the user"""
 
     def _get_yf_ticker(self, symbol: str):
         """Lazily import yfinance and return a Ticker object"""
         import yfinance as yf
+        # Disable SQLite timezone cache — prevents "database or disk is full" on EC2
+        try:
+            yf.set_tz_cache_location(None)
+        except Exception:
+            pass
         return yf.Ticker(symbol)
 
     def detect_analysis_intent(self, query: str) -> dict:
@@ -312,53 +326,68 @@ When analyzing data:
 
     def extract_symbols(self, query: str) -> List[str]:
         """
-        Extract stock symbols from query
-
-        Args:
-            query: User query
-
-        Returns:
-            List of stock symbols
+        Extract stock symbols from query.
+        Uses a dynamic NSE symbol map (2000+ stocks fetched from NSE's public
+        equity list and cached) so any listed Indian stock is recognised.
+        Falls back to defaulting to .NS suffix for unknown tokens.
         """
+        from services.nse_symbols import get_nse_symbol_map
+
         symbols = []
         query_upper = query.upper()
+        nse_map = get_nse_symbol_map()  # {SYMBOL/NAME → 'SYMBOL.NS'}, 2000+ entries
 
-        # Indian stock mapping (both uppercase and lowercase)
-        indian_stocks = {
-            'RELIANCE': 'RELIANCE.NS', 'TCS': 'TCS.NS', 'INFY': 'INFY.NS',
-            'HDFCBANK': 'HDFCBANK.NS', 'ICICIBANK': 'ICICIBANK.NS',
-            'SBIN': 'SBIN.NS', 'ITC': 'ITC.NS', 'INFOSYS': 'INFY.NS',
-            'WIPRO': 'WIPRO.NS', 'TATAMOTORS': 'TATAMOTORS.NS',
-            'BHARTIAIRTEL': 'BHARTIAIRTEL.NS', 'AIRTEL': 'BHARTIAIRTEL.NS',
-            'HINDUNILVR': 'HINDUNILVR.NS', 'HUL': 'HINDUNILVR.NS',
-            'MARUTI': 'MARUTI.NS', 'TATASTEEL': 'TATASTEEL.NS',
-            'BAJFINANCE': 'BAJFINANCE.NS', 'KOTAKBANK': 'KOTAKBANK.NS'
+        # Known US tickers — kept as bare symbols (no .NS suffix)
+        known_us_tickers = {
+            'AAPL', 'TSLA', 'GOOGL', 'GOOG', 'MSFT', 'AMZN', 'META', 'NVDA',
+            'NFLX', 'UBER', 'LYFT', 'AMD', 'INTC', 'CRM', 'ORCL', 'IBM',
+            'QCOM', 'AVGO', 'JPM', 'BAC', 'GS', 'MS', 'WFC', 'V', 'MA',
+            'PYPL', 'SQ', 'WMT', 'TGT', 'COST', 'HD', 'NKE', 'SBUX', 'MCD',
+            'KO', 'PEP', 'JNJ', 'DIS', 'SPOT', 'ABNB', 'BABA', 'PDD', 'NIO',
+            'XOM', 'CVX', 'PFE', 'MRNA', 'ABBV', 'LLY', 'SPY', 'QQQ', 'GLD',
         }
 
-        # First, check for symbols with .NS or .BO suffix
-        ns_symbols = re.findall(r'\b([A-Z]+\.(?:NS|BO))\b', query_upper)
+        # Step 1: explicit .NS / .BO suffixes in the query
+        ns_symbols = re.findall(r'\b([A-Z&-]+\.(?:NS|BO))\b', query_upper)
         symbols.extend(ns_symbols)
 
-        # Check for known Indian company names (case insensitive)
-        for stock_name, symbol in indian_stocks.items():
-            if stock_name in query_upper and symbol not in symbols:
-                symbols.append(symbol)
+        # Step 2: match known company names / NSE symbols via the dynamic map
+        # Check multi-word company names first (longer matches take priority)
+        for name, ticker in sorted(nse_map.items(), key=lambda x: -len(x[0])):
+            if name in query_upper and ticker not in symbols:
+                symbols.append(ticker)
+                # Stop after first good match to avoid symbol explosion
+                if len(symbols) >= 3:
+                    break
 
-        # If no symbols found yet, find uppercase words (2-5 letters) excluding common words
+        # Step 3: if still nothing, tokenise the uppercased query and resolve each token
         if not symbols:
-            common_words = {'FOR', 'AND', 'THE', 'SHOW', 'GET', 'ME', 'OF', 'IN', 'ON', 'AT', 'TO', 'NS', 'BO'}
-            potential_symbols = re.findall(r'\b([A-Z]{2,5})\b', query)
+            common_words = {
+                'FOR', 'AND', 'THE', 'SHOW', 'GET', 'ME', 'OF', 'IN', 'ON',
+                'AT', 'TO', 'NS', 'BO', 'IS', 'IT', 'BY', 'MY', 'DO', 'BE',
+                'AN', 'AS', 'UP', 'IF', 'OR', 'SO', 'NO', 'VS', 'HOW',
+                'ARE', 'YOU', 'CAN', 'WHAT', 'WHY', 'WHO', 'WHEN', 'WHERE',
+                'WILL', 'WOULD', 'SHOULD', 'COULD', 'THIS', 'THAT', 'HAVE',
+                'HAS', 'HAD', 'WAS', 'WERE', 'BEEN', 'DOES', 'DID',
+                'TELL', 'GIVE', 'GOOD', 'BEST', 'HIGH', 'LOW', 'BUY', 'SELL',
+                'STOCK', 'SHARE', 'PRICE', 'CHART', 'DATA', 'LAST', 'DAYS',
+                'WEEK', 'YEAR', 'MONTH', 'NEWS', 'HELP', 'ABOUT', 'WITH',
+                'ANALYSE', 'ANALYZE', 'ANALYSIS', 'TECHNICAL', 'SHOW', 'TELL',
+            }
+            potential_symbols = re.findall(r'\b([A-Z]{2,12})\b', query_upper)
 
-            for symbol in potential_symbols:
-                if symbol not in common_words and symbol not in symbols:
-                    # Check if it's a known Indian stock
-                    if symbol in indian_stocks:
-                        symbols.append(indian_stocks[symbol])
-                    else:
-                        # Assume it's a US stock
-                        symbols.append(symbol)
+            for sym in potential_symbols:
+                if sym in common_words or sym in symbols:
+                    continue
+                if sym in nse_map:
+                    symbols.append(nse_map[sym])
+                elif sym in known_us_tickers:
+                    symbols.append(sym)
+                else:
+                    # Indian-market platform: default unrecognised tokens to .NS
+                    symbols.append(f"{sym}.NS")
 
-        return list(set(symbols))  # Remove duplicates
+        return list(dict.fromkeys(symbols))  # deduplicate, preserve order
 
     def handle_stock_price_query(self, query: str, symbols: List[str]) -> Dict[str, Any]:
         """Handle stock price queries"""
@@ -373,14 +402,28 @@ When analyzing data:
             # Get stock data
             symbol = symbols[0]  # Use first symbol
             ticker = self._get_yf_ticker(symbol)
-            info = ticker.info
-            hist = ticker.history(period='1d')
+            hist = ticker.history(period='5d')
+
+            # If no data and symbol lacks exchange suffix, retry with .NS then .BO
+            if hist.empty and not symbol.endswith('.NS') and not symbol.endswith('.BO'):
+                logger.info(f"No data for {symbol}, retrying as {symbol}.NS")
+                symbol = f"{symbol}.NS"
+                ticker = self._get_yf_ticker(symbol)
+                hist = ticker.history(period='5d')
+            if hist.empty and symbol.endswith('.NS'):
+                base = symbol[:-3]
+                logger.info(f"No data for {symbol}, retrying as {base}.BO")
+                symbol = f"{base}.BO"
+                ticker = self._get_yf_ticker(symbol)
+                hist = ticker.history(period='5d')
 
             if hist.empty:
                 return {
                     'category': 'stock_price',
-                    'error': f'No data available for {symbol}'
+                    'error': f'No data available for {symbol}. Please verify the NSE/BSE ticker symbol.'
                 }
+
+            info = ticker.info
 
             current_price = hist['Close'].iloc[-1]
             prev_close = info.get('previousClose', current_price)
@@ -767,6 +810,29 @@ When analyzing data:
             else:
                 prompt_parts.append("No documents have been uploaded yet.\n\n")
 
+        elif data_type == 'error':
+            error_detail = context.get('error_detail', '')
+            original_category = context.get('original_category', '')
+            # Give LLM enough context to respond gracefully without exposing internals
+            if 'No data available' in error_detail or 'verify the NSE' in error_detail:
+                prompt_parts.append(
+                    "SITUATION: The system tried to look up stock market data but could not find "
+                    "data for the requested ticker symbol. This could mean:\n"
+                    "- The symbol is misspelled or not listed on NSE/BSE\n"
+                    "- The query may not have been about a specific stock\n"
+                    "- The question may be unrelated to finance entirely\n\n"
+                    "INSTRUCTION: Respond warmly. If the question looks non-financial (e.g. sports, "
+                    "history, general knowledge), politely explain you are a finance assistant and "
+                    "redirect. If it looks like a stock query, ask the user to confirm the correct "
+                    "NSE ticker symbol. Do NOT mention error codes or technical details.\n\n"
+                )
+            else:
+                prompt_parts.append(
+                    "SITUATION: A technical issue occurred while fetching data. "
+                    "Apologise briefly and suggest the user try again or rephrase. "
+                    "Do not expose technical error details.\n\n"
+                )
+
         # Add user query
         prompt_parts.append(f"User Question: {query}\n\n")
         prompt_parts.append("Please provide a clear, helpful response based on the data above. Remember to emphasize that this is information, not financial advice.")
@@ -835,13 +901,17 @@ When analyzing data:
             if result.get('category') == 'general' and category != 'general':
                 logger.info(f"Handler converted {category} to general query (no symbols found)")
 
-            # Generate AI response with conversation context
-            # Always generate response for 'general' queries, even if they were converted from other categories
-            if 'error' not in result or result.get('category') == 'general':
-                ai_response = self.generate_response(query, result, conversation_history)
-                result['ai_response'] = ai_response
-            else:
-                result['ai_response'] = f"I encountered an error: {result['error']}"
+            # Always generate a proper AI response — even on data errors.
+            # Pass error context so the LLM responds helpfully instead of
+            # exposing raw technical messages to the user.
+            if 'error' in result:
+                result['context'] = {
+                    'data_type': 'error',
+                    'error_detail': result['error'],
+                    'original_category': result.get('category', 'unknown'),
+                }
+            ai_response = self.generate_response(query, result, conversation_history)
+            result['ai_response'] = ai_response
 
             result['query'] = query
             result['timestamp'] = datetime.now().isoformat()
@@ -854,8 +924,12 @@ When analyzing data:
             return {
                 'query': query,
                 'category': 'error',
-                'error': str(e),
-                'ai_response': "I'm sorry, I encountered an error processing your request."
+                'ai_response': (
+                    "I'm sorry, something went wrong on my end while processing your request. "
+                    "Could you try rephrasing your question? If you were asking about a specific "
+                    "stock or market topic, feel free to ask again — I'm here to help with all "
+                    "things related to Indian and global markets."
+                )
             }
 
 

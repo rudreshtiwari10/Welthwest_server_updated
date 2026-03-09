@@ -15,6 +15,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Disable SQLite timezone cache — prevents "database or disk is full" on EC2
+try:
+    yf.set_tz_cache_location(None)
+except Exception:
+    pass
+
 
 class YFinanceIndiaProvider:
     """Indian stock market data from Yahoo Finance API.
@@ -50,29 +56,63 @@ class YFinanceIndiaProvider:
         self, symbol: str, start_date: date, end_date: date, interval: str = "1d"
     ) -> pd.DataFrame:
         yf_symbol = self._to_yf_symbol(symbol)
-        try:
-            ticker = yf.Ticker(yf_symbol)
-            # For intraday intervals, use period-based fetch (yfinance caps at 60 days)
-            if interval in ("1h", "15m"):
-                df = ticker.history(period="60d", interval=interval, auto_adjust=True, actions=False)
-            else:
-                df = ticker.history(start=start_date, end=end_date, auto_adjust=True, actions=False)
-            if df.empty:
-                logger.warning(f"No data returned for {yf_symbol} (interval={interval})")
-                return pd.DataFrame()
-            df = df.reset_index()
-            # yfinance uses "Date" for daily, "Datetime" for intraday
-            ts_col = "Datetime" if "Datetime" in df.columns else "Date"
-            df = df.rename(columns={
-                ts_col: "timestamp", "Open": "open", "High": "high",
-                "Low": "low", "Close": "close", "Volume": "volume",
-            })
-            df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_localize(None)
-            time.sleep(self._rate_limit_delay)
-            return df[["timestamp", "open", "high", "low", "close", "volume"]]
-        except Exception as e:
-            logger.error(f"Failed to fetch {yf_symbol} (interval={interval}): {e}")
-            return pd.DataFrame()
+        for attempt in range(2):  # retry once on failure
+            try:
+                ticker = yf.Ticker(yf_symbol)
+                # For intraday intervals, use period-based fetch (yfinance caps at 60 days)
+                if interval in ("1h", "15m"):
+                    df = ticker.history(period="60d", interval=interval, auto_adjust=True, actions=False)
+                else:
+                    df = ticker.history(start=start_date, end=end_date, auto_adjust=True, actions=False)
+                if df.empty:
+                    logger.warning(f"No data returned for {yf_symbol} (interval={interval}, attempt={attempt+1})")
+                    if attempt == 0:
+                        time.sleep(1.5)
+                        continue
+                    return pd.DataFrame()
+                df = df.reset_index()
+                # Detect timestamp column — yfinance column name varies by version and interval
+                ts_col = None
+                for candidate in ("Datetime", "Date", "Timestamp", "timestamp", "datetime", "date"):
+                    if candidate in df.columns:
+                        ts_col = candidate
+                        break
+                if ts_col is None:
+                    # Last resort: first column that isn't a price/volume field
+                    price_cols = {"Open", "High", "Low", "Close", "Volume", "Dividends", "Stock Splits"}
+                    for col in df.columns:
+                        if col not in price_cols:
+                            ts_col = col
+                            break
+                if ts_col is None:
+                    logger.warning(f"Cannot identify timestamp column for {yf_symbol}; columns: {list(df.columns)}")
+                    if attempt == 0:
+                        time.sleep(1.5)
+                        continue
+                    return pd.DataFrame()
+                df = df.rename(columns={
+                    ts_col: "timestamp", "Open": "open", "High": "high",
+                    "Low": "low", "Close": "close", "Volume": "volume",
+                })
+                # Strip timezone info robustly — handle both tz-aware and tz-naive series
+                ts_series = pd.to_datetime(df["timestamp"])
+                if hasattr(ts_series.dt, "tz") and ts_series.dt.tz is not None:
+                    ts_series = ts_series.dt.tz_convert(None)
+                df["timestamp"] = ts_series
+                time.sleep(self._rate_limit_delay)
+                result = df[[c for c in ["timestamp", "open", "high", "low", "close", "volume"] if c in df.columns]]
+                if "close" not in result.columns or result.empty:
+                    logger.warning(f"Missing close column for {yf_symbol} after parse")
+                    if attempt == 0:
+                        time.sleep(1.5)
+                        continue
+                    return pd.DataFrame()
+                return result
+            except Exception as e:
+                logger.error(f"Failed to fetch {yf_symbol} (interval={interval}, attempt={attempt+1}): {e}")
+                if attempt == 0:
+                    time.sleep(1.5)
+        return pd.DataFrame()
 
     def fetch_fundamentals(self, symbol: str) -> dict:
         # Check cache first
@@ -238,17 +278,25 @@ class YFinanceIndiaProvider:
                         symbol = batch_raw[j]
                         try:
                             stock_df = df[yf_sym].dropna(how="all").reset_index()
-                            stock_df = stock_df.rename(columns={
-                                "Date": "timestamp", "Datetime": "timestamp",
-                                "Open": "open", "High": "high",
-                                "Low": "low", "Close": "close", "Volume": "volume",
-                            })
+                            # Detect the timestamp column (varies across yfinance versions)
+                            ts_col = None
+                            for candidate in ("Datetime", "Date", "Timestamp", "timestamp", "datetime", "date"):
+                                if candidate in stock_df.columns:
+                                    ts_col = candidate
+                                    break
+                            rename_map = {"Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}
+                            if ts_col:
+                                rename_map[ts_col] = "timestamp"
+                            stock_df = stock_df.rename(columns=rename_map)
                             if "timestamp" in stock_df.columns:
-                                stock_df["timestamp"] = pd.to_datetime(stock_df["timestamp"]).dt.tz_localize(None)
-                            if not stock_df.empty:
+                                ts_series = pd.to_datetime(stock_df["timestamp"])
+                                if hasattr(ts_series.dt, "tz") and ts_series.dt.tz is not None:
+                                    ts_series = ts_series.dt.tz_convert(None)
+                                stock_df["timestamp"] = ts_series
+                            if not stock_df.empty and "close" in stock_df.columns:
                                 cols = [c for c in ["timestamp", "open", "high", "low", "close", "volume"] if c in stock_df.columns]
                                 all_data[symbol] = stock_df[cols]
-                        except (KeyError, TypeError):
+                        except Exception:
                             logger.warning(f"No data for {symbol}")
             except Exception as e:
                 logger.error(f"Bulk download batch failed: {e}")
@@ -306,18 +354,28 @@ class YFinanceIndiaProvider:
         return results
 
     def fetch_stock_detail_parallel(self, symbol: str, interval: str = "1d") -> dict:
-        """Fetch all detail data for a single stock in parallel.
+        """Fetch all detail data for a single stock.
 
-        Returns {"price_df", "fundamentals", "earnings", "insiders", "holders", "index_df"}.
+        Price data is fetched first (critical path) to avoid rate-limit contention
+        with the other concurrent requests. Returns:
+        {"price_df", "fundamentals", "earnings", "insiders", "holders", "index_df"}.
         """
         end_date = date.today()
-        start_date = end_date - timedelta(days=365)
+        # Use 730 days so we always have well above the 60-bar minimum
+        start_date = end_date - timedelta(days=730)
 
         results: dict = {}
 
-        def _price():
-            return self.fetch_price_data(symbol, start_date, end_date, interval=interval)
+        # ── 1. Fetch price data first, before spawning other threads ──────────
+        price_df = self.fetch_price_data(symbol, start_date, end_date, interval=interval)
+        if price_df.empty:
+            # One more attempt with a longer pause
+            logger.warning(f"Price data empty on first try for {symbol}, retrying in 3s …")
+            time.sleep(3)
+            price_df = self.fetch_price_data(symbol, start_date, end_date, interval=interval)
+        results["price_df"] = price_df
 
+        # ── 2. Fetch supplementary data in parallel (non-critical) ───────────
         def _fundamentals():
             return self.fetch_fundamentals(symbol)
 
@@ -334,7 +392,6 @@ class YFinanceIndiaProvider:
             return self.fetch_index_data("NIFTY50")
 
         tasks = {
-            "price_df": _price,
             "fundamentals": _fundamentals,
             "earnings": _earnings,
             "insiders": _insiders,
@@ -342,7 +399,7 @@ class YFinanceIndiaProvider:
             "index_df": _index,
         }
 
-        with ThreadPoolExecutor(max_workers=6) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             future_to_key = {
                 executor.submit(fn): key for key, fn in tasks.items()
             }
@@ -352,7 +409,7 @@ class YFinanceIndiaProvider:
                     results[key] = future.result()
                 except Exception as e:
                     logger.warning(f"Detail fetch '{key}' failed for {symbol}: {e}")
-                    results[key] = {} if key != "price_df" else pd.DataFrame()
+                    results[key] = {}
 
         return results
 
