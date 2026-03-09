@@ -339,6 +339,12 @@ def root():
     return jsonify({"status": "healthy", "message": "Indian Stock Market API is running"}), 200
 
 # Health check endpoint with cache status
+@app.route('/api/activity/track', methods=['POST', 'OPTIONS'])
+def track_activity():
+    """Activity tracking stub — accepts and silently discards frontend activity events."""
+    return jsonify({'success': True}), 200
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check with cache status and performance metrics"""

@@ -1,4 +1,11 @@
 import yfinance as yf
+
+# Disable SQLite timezone cache — prevents "database or disk is full" on EC2
+try:
+    yf.set_tz_cache_location(None)
+except Exception:
+    pass
+
 import pandas as pd
 import numpy as np
 import ta
