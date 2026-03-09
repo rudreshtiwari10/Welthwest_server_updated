@@ -126,7 +126,7 @@ Handling data errors:
         import yfinance as yf
         # Disable SQLite timezone cache — prevents "database or disk is full" on EC2
         try:
-            yf.set_tz_cache_location(None)
+            yf.set_tz_cache_location('/tmp/yfinance_tz_cache')
         except Exception:
             pass
         return yf.Ticker(symbol)
