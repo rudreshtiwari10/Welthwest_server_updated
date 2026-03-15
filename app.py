@@ -51,7 +51,7 @@ from services.session_service import InMemorySessionService
 from bson import ObjectId
 from datetime import datetime
 import time
-from services.cache_service import get_cached_data
+from services.cache_service import get_cached_data, set_cached_data
 from services.stock_service import warm_market_indices_cache
 
 # Setup logging with more detailed format
@@ -3756,12 +3756,21 @@ def get_blogs():
 
         logger.info(f"GET /api/blogs - Page: {page}, Limit: {limit}, Category: {category}")
 
+        # Cache blogs for 5 minutes to avoid hitting MongoDB on every request
+        cache_key = f"blogs_{page}_{limit}_{category}_{featured_only}"
+        cached = get_cached_data(cache_key)
+        if cached:
+            return jsonify(cached), 200
+
         result = news_service.get_all_blogs(
             page=page,
             limit=limit,
             category=category,
             featured_only=featured_only
         )
+
+        if result.get('success'):
+            set_cached_data(cache_key, result, expiry_seconds=300)
 
         logger.info(f"Result from news_service: success={result.get('success')}, blogs_count={len(result.get('blogs', []))}")
 

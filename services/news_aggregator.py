@@ -14,6 +14,7 @@ import feedparser
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from urllib.parse import quote_plus
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # In-memory cache with TTL
 class NewsCache:
@@ -40,7 +41,7 @@ class NewsCache:
             del self.cache[key]
 
 # Global cache instance
-news_cache = NewsCache(ttl_minutes=10)
+news_cache = NewsCache(ttl_minutes=60)
 
 # News sources configuration
 NEWS_API_KEY = os.getenv('NEWSAPI_KEY', '')  # Using existing env variable name
@@ -128,9 +129,11 @@ class NewsAggregator:
 
     @staticmethod
     def fetch_from_rss(feed_url: str, category: str) -> List[Dict]:
-        """Fetch news from RSS feed"""
+        """Fetch news from RSS feed with timeout"""
         try:
-            feed = feedparser.parse(feed_url)
+            # Fetch with timeout to prevent hanging
+            response = requests.get(feed_url, timeout=5)
+            feed = feedparser.parse(response.content)
             source_name = feed.feed.get('title', 'RSS Feed')
 
             news_items = []
@@ -218,29 +221,41 @@ class NewsAggregator:
 
         all_news = []
 
-        # Fetch from RSS feeds
+        # Build list of fetch tasks to run in parallel
+        tasks = []
         if category in RSS_FEEDS:
             for feed_url in RSS_FEEDS[category]:
-                rss_news = NewsAggregator.fetch_from_rss(feed_url, category)
-                all_news.extend(rss_news)
+                tasks.append(('rss', feed_url, category))
         elif category == 'all':
-            # Fetch from all RSS feeds
             for cat, feeds in RSS_FEEDS.items():
                 for feed_url in feeds:
-                    rss_news = NewsAggregator.fetch_from_rss(feed_url, cat)
-                    all_news.extend(rss_news)
+                    tasks.append(('rss', feed_url, cat))
 
-        # Fetch from NewsAPI if available
         if NEWS_API_KEY:
-            newsapi_category = 'business' if region == 'indian' else 'general'
-            country = 'in' if region == 'indian' else 'us'
-            newsapi_news = NewsAggregator.fetch_from_newsapi(newsapi_category, country)
-            all_news.extend(newsapi_news)
-
-        # Fetch from Alpha Vantage if available
+            tasks.append(('newsapi', region, category))
         if ALPHA_VANTAGE_KEY and category in ['nse', 'bse', 'all']:
-            av_news = NewsAggregator.fetch_alpha_vantage_news()
-            all_news.extend(av_news)
+            tasks.append(('alphavantage', None, category))
+
+        # Fetch all sources in parallel (max 5 seconds total)
+        def _fetch(task):
+            source_type, arg1, arg2 = task
+            if source_type == 'rss':
+                return NewsAggregator.fetch_from_rss(arg1, arg2)
+            elif source_type == 'newsapi':
+                newsapi_cat = 'business' if arg1 == 'indian' else 'general'
+                country = 'in' if arg1 == 'indian' else 'us'
+                return NewsAggregator.fetch_from_newsapi(newsapi_cat, country)
+            elif source_type == 'alphavantage':
+                return NewsAggregator.fetch_alpha_vantage_news()
+            return []
+
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            futures = {executor.submit(_fetch, t): t for t in tasks}
+            for future in as_completed(futures, timeout=8):
+                try:
+                    all_news.extend(future.result())
+                except Exception:
+                    pass
 
         # Remove duplicates based on title similarity
         unique_news = NewsAggregator.deduplicate_news(all_news)
