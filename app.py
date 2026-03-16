@@ -3807,17 +3807,30 @@ def get_news_post(post_id):
             "message": f"Internal server error: {str(e)}"
         }), 500
 
+@app.route('/api/blogs/slug/<slug>', methods=['GET'])
+def get_blog_by_slug(slug):
+    """Get a blog post by slug (SEO-friendly URL)"""
+    try:
+        result = news_service.get_blog_by_slug(slug)
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 404
+    except Exception as e:
+        logger.error(f"Error in get_blog_by_slug endpoint: {str(e)}")
+        return jsonify({"success": False, "message": f"Internal server error: {str(e)}"}), 500
+
 @app.route('/api/blogs/<post_id>', methods=['GET'])
 def get_blog_post(post_id):
     """Get a specific blog post by ID"""
     try:
         result = news_service.get_post_by_id(post_id, post_type="blog")
-        
+
         if result['success']:
             return jsonify(result), 200
         else:
             return jsonify(result), 404
-            
+
     except Exception as e:
         logger.error(f"Error in get_blog_post endpoint: {str(e)}")
         return jsonify({
@@ -3981,6 +3994,25 @@ def create_blog_post():
             "success": False,
             "message": f"Internal server error: {str(e)}"
         }), 500
+
+@app.route('/api/blogs/migrate-slugs', methods=['POST'])
+def migrate_blog_slugs():
+    """One-time migration: generate slugs for existing blogs that don't have one"""
+    try:
+        from services.news_service import generate_slug
+        blogs = list(news_service.blogs_collection.find({"slug": {"$exists": False}}))
+        updated = 0
+        for blog in blogs:
+            slug = generate_slug(blog.get('title', ''))
+            # Ensure uniqueness
+            existing = news_service.blogs_collection.find_one({"slug": slug, "_id": {"$ne": blog["_id"]}})
+            if existing:
+                slug = f"{slug}-{str(blog['_id'])[-6:]}"
+            news_service.blogs_collection.update_one({"_id": blog["_id"]}, {"$set": {"slug": slug}})
+            updated += 1
+        return jsonify({"success": True, "updated": updated}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
 
 @app.route('/api/blogs/debug/count', methods=['GET'])
 def debug_blogs_count():

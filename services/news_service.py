@@ -1,10 +1,20 @@
 import os
+import re
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 from config import get_config
+
+
+def generate_slug(title: str) -> str:
+    """Generate URL-friendly slug from title"""
+    slug = title.lower().strip()
+    slug = re.sub(r'[^a-z0-9\s-]', '', slug)
+    slug = re.sub(r'[\s-]+', '-', slug)
+    slug = slug.strip('-')
+    return slug[:120]  # cap length
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +87,15 @@ class NewsService:
                         image_url: str = None, summary: str = None) -> Dict[str, Any]:
         """Create a new blog post"""
         try:
+            slug = generate_slug(title)
+            # Ensure slug is unique
+            existing = self.blogs_collection.find_one({"slug": slug})
+            if existing:
+                slug = f"{slug}-{int(datetime.now().timestamp())}"
+
             blog_post = {
                 "title": title,
+                "slug": slug,
                 "content": content,
                 "summary": summary or content[:200] + "..." if len(content) > 200 else content,
                 "author": author,
@@ -129,6 +146,7 @@ class NewsService:
 
             if title is not None:
                 update_data["title"] = title
+                update_data["slug"] = generate_slug(title)
             if content is not None:
                 update_data["content"] = content
                 # Update summary if content changes
@@ -361,6 +379,28 @@ class NewsService:
                 "message": f"Error fetching post: {str(e)}"
             }
     
+    def get_blog_by_slug(self, slug: str) -> Dict[str, Any]:
+        """Get a blog post by its slug"""
+        try:
+            post = self.blogs_collection.find_one({"slug": slug, "type": "blog"})
+
+            if not post:
+                return {"success": False, "message": "Blog not found"}
+
+            post["_id"] = str(post["_id"])
+
+            # Increment view count
+            self.blogs_collection.update_one(
+                {"slug": slug},
+                {"$inc": {"view_count": 1}}
+            )
+
+            return {"success": True, "blog": post}
+
+        except Exception as e:
+            logger.error(f"Error fetching blog by slug: {str(e)}")
+            return {"success": False, "message": f"Error: {str(e)}"}
+
     def get_featured_posts(self, limit: int = 5) -> Dict[str, Any]:
         """Get featured posts from both news and blogs"""
 
