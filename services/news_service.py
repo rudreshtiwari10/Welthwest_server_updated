@@ -287,6 +287,7 @@ class NewsService:
                 try:
                     serialized_post = {
                         "_id": str(post.get("_id", "")),
+                        "slug": post.get("slug", ""),
                         "title": post.get("title", ""),
                         "content": post.get("content", ""),
                         "summary": post.get("summary", ""),
