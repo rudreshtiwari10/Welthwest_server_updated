@@ -44,13 +44,35 @@ def refresh_top_gainers_losers():
     except Exception as e:
         logger.error(f"Error refreshing top gainers and losers: {str(e)}")
 
+# Function to run news intelligence pipeline
+def run_news_pipeline():
+    try:
+        logger.info("Running news intelligence pipeline...")
+        from app import mongo
+        from services.news_intelligence import NewsIntelligence
+        pipeline = NewsIntelligence(mongo.db)
+        results = pipeline.run_pipeline(max_articles=10)
+        logger.info(f"Pipeline complete: {results.get('published', 0)} articles published")
+    except Exception as e:
+        logger.error(f"News pipeline error: {str(e)}")
+
 # Function to run the scheduler in a separate thread
 def run_scheduler():
     # Schedule the job to run every 15 minutes
     schedule.every(15).minutes.do(refresh_top_gainers_losers)
 
+    # Schedule news pipeline every 30 minutes
+    schedule.every(30).minutes.do(run_news_pipeline)
+
     # Run the job once at startup to initialize data
     refresh_top_gainers_losers()
+
+    # Delay first news pipeline run by 2 minutes to avoid startup load
+    def delayed_first_pipeline():
+        time.sleep(120)
+        run_news_pipeline()
+    import threading as _threading
+    _threading.Thread(target=delayed_first_pipeline, daemon=True).start()
 
     while True:
         schedule.run_pending()

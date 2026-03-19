@@ -25,6 +25,7 @@ from routes.admin_support import admin_support_bp
 from routes.admin_monitoring import admin_monitoring_bp
 from routes.support import support_bp
 from routes.ai_screener_routes import ai_screener_bp
+from routes.market_routes import market_bp
 from middleware.feature_limit import feature_limit, admin_required
 from database.seed_plans import initialize_premium_system
 from services.google_auth_service import GoogleAuthService
@@ -249,6 +250,9 @@ app.register_blueprint(admin_monitoring_bp)
 
 # Register AI Screener blueprint
 app.register_blueprint(ai_screener_bp)
+
+# Register Market Intelligence blueprint
+app.register_blueprint(market_bp)
 
 # Register enhanced Finance AI routes
 register_finance_ai_routes(app)
