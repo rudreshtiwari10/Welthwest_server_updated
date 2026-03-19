@@ -41,10 +41,19 @@ class ArticleWriter:
             },
         }
 
-        response = requests.post(url, json=payload, timeout=60)
-        response.raise_for_status()
-        data = response.json()
-        return data['candidates'][0]['content']['parts'][0]['text']
+        # Retry up to 3 times on rate limit (429)
+        for attempt in range(3):
+            response = requests.post(url, json=payload, timeout=60)
+            if response.status_code == 429:
+                wait = 15 * (attempt + 1)  # 15s, 30s, 45s
+                logger.warning(f"Gemini rate limited, waiting {wait}s (attempt {attempt + 1}/3)")
+                time.sleep(wait)
+                continue
+            response.raise_for_status()
+            data = response.json()
+            return data['candidates'][0]['content']['parts'][0]['text']
+
+        raise Exception("Gemini rate limit exceeded after 3 retries")
 
     def call_grok(self, prompt: str, max_tokens: int = 4000, temperature: float = 0.7) -> str:
         if not self.grok_key:
@@ -209,11 +218,11 @@ Respond ONLY with valid JSON:
         logger.info(f"Analyzing cluster of {len(news_cluster)} articles...")
 
         analysis = self.analyze(news_cluster)
-        time.sleep(4)  # Rate limiting between API calls
+        time.sleep(10)  # Rate limiting between API calls
 
         logger.info(f"Writing article for: {analysis.get('core_event', 'unknown')}")
         article_data = self.write_article(analysis, news_cluster)
-        time.sleep(4)
+        time.sleep(10)
 
         # Merge analysis metadata into article
         article_data.update({

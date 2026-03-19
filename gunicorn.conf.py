@@ -34,7 +34,7 @@ def when_ready(server):
             from database import db
             from services.news_intelligence import NewsIntelligence
             pipeline = NewsIntelligence(db)
-            results = pipeline.run_pipeline(max_articles=10)
+            results = pipeline.run_pipeline(max_articles=5)
             logger.info(f"Pipeline complete: {results.get('published', 0)} published, {results.get('failed', 0)} failed")
         except Exception as e:
             logger.error(f"News pipeline error: {e}")

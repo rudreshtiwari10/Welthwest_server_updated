@@ -174,7 +174,7 @@ class NewsIntelligence:
 
     # ── Full Pipeline ──────────────────────────────────────────
 
-    def run_pipeline(self, max_articles: int = 10) -> dict:
+    def run_pipeline(self, max_articles: int = 5) -> dict:
         """Run the full pipeline: ingest → cluster → process → publish"""
         start = datetime.utcnow()
         logger.info("=== News Intelligence Pipeline Starting ===")
