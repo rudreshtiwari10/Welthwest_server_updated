@@ -5,8 +5,9 @@ Fetches → Dedupes → Clusters → Analyzes → Writes → Publishes
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List
+from dateutil import parser as dateparser
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,29 @@ class NewsIntelligence:
 
         if not all_items:
             logger.info("No news items fetched")
+            return 0
+
+        # Filter out news older than 3 days
+        cutoff = datetime.utcnow() - timedelta(days=3)
+        fresh_items = []
+        for item in all_items:
+            pub_date = item.get('publishedAt', item.get('published_at', ''))
+            if pub_date:
+                try:
+                    parsed = dateparser.parse(str(pub_date))
+                    if parsed.tzinfo:
+                        parsed = parsed.replace(tzinfo=None)
+                    if parsed < cutoff:
+                        continue
+                except Exception:
+                    pass  # If we can't parse the date, include it
+            fresh_items.append(item)
+
+        logger.info(f"Filtered to {len(fresh_items)} fresh items from {len(all_items)} total")
+        all_items = fresh_items
+
+        if not all_items:
+            logger.info("No fresh news items after date filtering")
             return 0
 
         saved = self.raw_news.save_batch(all_items)

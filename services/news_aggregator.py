@@ -260,6 +260,9 @@ class NewsAggregator:
         # Remove duplicates based on title similarity
         unique_news = NewsAggregator.deduplicate_news(all_news)
 
+        # Filter out news older than 1 month
+        unique_news = NewsAggregator.filter_recent(unique_news, max_age_days=30)
+
         # Sort by published date (newest first)
         unique_news.sort(key=lambda x: x.get('publishedAt', ''), reverse=True)
 
@@ -280,6 +283,26 @@ class NewsAggregator:
         news_cache.set(cache_key, result)
 
         return result
+
+    @staticmethod
+    def filter_recent(news_list: List[Dict], max_age_days: int = 30) -> List[Dict]:
+        """Filter out news older than max_age_days"""
+        from dateutil import parser as dateparser
+        cutoff = datetime.now() - timedelta(days=max_age_days)
+        filtered = []
+        for item in news_list:
+            pub_date = item.get('publishedAt', '')
+            if pub_date:
+                try:
+                    parsed = dateparser.parse(str(pub_date))
+                    if parsed.tzinfo:
+                        parsed = parsed.replace(tzinfo=None)
+                    if parsed < cutoff:
+                        continue
+                except Exception:
+                    pass  # Can't parse date — include it
+            filtered.append(item)
+        return filtered
 
     @staticmethod
     def deduplicate_news(news_list: List[Dict]) -> List[Dict]:
