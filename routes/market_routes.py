@@ -12,9 +12,9 @@ market_bp = Blueprint('market', __name__)
 
 def get_models():
     """Lazy import to avoid circular dependency"""
-    from app import mongo
+    from database import db
     from models.market_article import MarketArticle
-    return MarketArticle(mongo.db)
+    return MarketArticle(db)
 
 
 def admin_required(f):
@@ -25,8 +25,8 @@ def admin_required(f):
         try:
             verify_jwt_in_request()
             user_id = get_jwt_identity()
-            from app import mongo
-            user = mongo.db.users.find_one({'_id': user_id})
+            from database import db
+            user = db.users.find_one({'_id': user_id})
             if not user or user.get('role') not in ['admin', 'developer']:
                 return jsonify({'success': False, 'error': 'Admin access required'}), 403
         except Exception:
@@ -125,9 +125,9 @@ def trigger_pipeline():
     try:
         max_articles = int(request.args.get('max', 10))
 
-        from app import mongo
+        from database import db
         from services.news_intelligence import NewsIntelligence
-        pipeline = NewsIntelligence(mongo.db)
+        pipeline = NewsIntelligence(db)
         results = pipeline.run_pipeline(max_articles=max_articles)
 
         return jsonify({'success': True, 'results': results}), 200

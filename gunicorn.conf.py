@@ -31,9 +31,9 @@ def when_ready(server):
 
     def run_news_pipeline():
         try:
-            from app import mongo
+            from database import db
             from services.news_intelligence import NewsIntelligence
-            pipeline = NewsIntelligence(mongo.db)
+            pipeline = NewsIntelligence(db)
             results = pipeline.run_pipeline(max_articles=10)
             logger.info(f"Pipeline complete: {results.get('published', 0)} published, {results.get('failed', 0)} failed")
         except Exception as e:
