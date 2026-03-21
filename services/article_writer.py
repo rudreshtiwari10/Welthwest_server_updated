@@ -122,11 +122,22 @@ class ArticleWriter:
 
         prompt = f"""You are a senior financial analyst at WelthWest Research Desk.
 
-Given these related news reports from multiple sources, analyze and extract structured intelligence.
+Given these news reports, analyze and extract structured intelligence with a MARKET IMPACT angle.
+
+IMPORTANT: Even if the news is about wars, geopolitics, elections, technology, crypto, policy changes, natural disasters, or any global event — ALWAYS find and explain the connection to Indian stock markets, specific sectors, and affected companies. Every major world event impacts markets.
+
+Examples of connections:
+- War/conflict → Defence stocks, oil prices, gold, shipping
+- US Fed rate decisions → IT stocks, FII flows, rupee value
+- New government policy → affected industry sectors
+- Tech breakthroughs (AI, chips) → Indian IT, semiconductor plays
+- Crypto movements → crypto-linked stocks, exchange regulations
+- Elections → infrastructure, PSU banks, defense, policy-sensitive sectors
+- Natural disasters → insurance, commodities, supply chain
 
 DO NOT summarize each article individually. Instead:
 1. Identify the CORE EVENT across all sources
-2. Determine WHY it matters to financial markets
+2. Determine WHY it matters to Indian/global financial markets
 3. Identify winners and losers (companies, sectors)
 4. Assess short-term vs long-term impact
 5. Identify specific Indian stocks/sectors affected
@@ -136,17 +147,17 @@ NEWS ARTICLES:
 
 Respond ONLY with valid JSON (no markdown, no explanation):
 {{
-  "core_event": "one-line description of the core event",
-  "why_it_matters": "2-3 sentences on market significance",
+  "core_event": "one-line catchy description of the core event",
+  "why_it_matters": "2-3 sentences on market significance — be specific about how this impacts Indian markets",
   "winners": ["list of companies/sectors that benefit"],
   "losers": ["list of companies/sectors that suffer"],
-  "affected_stocks": ["specific Indian stock names if applicable"],
-  "sector": "primary sector affected (e.g., Banking, IT, Pharma, Energy, Auto, FMCG, Metals, Infra, Telecom, General)",
+  "affected_stocks": ["specific Indian stock names/tickers if applicable"],
+  "sector": "primary sector affected (e.g., Banking, IT, Pharma, Energy, Auto, FMCG, Metals, Infra, Telecom, Defence, Crypto, General)",
   "sentiment": "Bullish or Bearish or Neutral",
   "impact_score": "Low or Medium or High",
   "time_horizon": "Short-term or Long-term",
   "category": "market-pulse or deep-analysis or stock-signals or global-impact",
-  "tags": ["3-5 relevant SEO tags"],
+  "tags": ["5-8 relevant trending SEO tags — include the topic name AND market-related keywords"],
   "key_risks": "1-2 sentences on risks"
 }}"""
 
@@ -162,9 +173,9 @@ Respond ONLY with valid JSON (no markdown, no explanation):
             for item in news_cluster
         )
 
-        prompt = f"""You are a financial journalist at WelthWest Research Desk.
+        prompt = f"""You are a top financial journalist at WelthWest Research Desk. Your articles go viral because they combine trending news with sharp market insights.
 
-Based on this analysis, write an ORIGINAL financial article. Do NOT copy any source phrasing.
+Based on this analysis, write an ORIGINAL article that connects this event to financial markets. Do NOT copy any source phrasing.
 
 ANALYSIS:
 - Core Event: {analysis.get('core_event', '')}
@@ -181,31 +192,33 @@ SOURCE HEADLINES (for context only — do NOT copy):
 {sources_summary}
 
 Write the article with this structure:
-1. Strong SEO-optimized headline
-2. Key takeaway (2 lines max)
-3. What happened (brief)
-4. Market impact analysis (detailed)
-5. Who benefits, who loses
-6. Investor insight / what to watch
+1. CATCHY, clickable headline that includes trending keywords people are searching for
+2. Key takeaway (2 lines max — the "so what" for investors)
+3. What happened (brief, engaging hook)
+4. Market impact analysis (detailed — connect to Indian stock market)
+5. Who benefits, who loses (name specific stocks/sectors)
+6. Investor insight / what to watch next
 7. Risks to consider
 
 Requirements:
 - 700-1200 words
-- Professional but accessible tone
-- Add original analysis beyond the news
-- Include "Why it matters" perspective
-- Mention specific stocks/sectors when relevant
+- Crispy, engaging tone — like a smart friend explaining markets to you
+- Write like it's breaking news people NEED to read right now
+- Add original analysis beyond the news — give insights readers can't find elsewhere
+- ALWAYS connect back to Indian stock market, sectors, and specific stocks
+- Use trending keywords naturally in the content for SEO
 - Do NOT include any disclaimer text in the article body
+- Make headings catchy and search-friendly
 
 Respond ONLY with valid JSON:
 {{
-  "title": "SEO-optimized headline (max 80 chars)",
-  "meta_title": "title for search engines (max 60 chars)",
-  "meta_description": "compelling description for search results (max 155 chars)",
-  "key_takeaway": "2-line key takeaway",
-  "summary": "3-4 sentence summary for cards/previews",
+  "title": "catchy, trending, SEO-optimized headline (max 80 chars) — use keywords people actually search for",
+  "meta_title": "search-engine optimized title (max 60 chars) — include key topic + 'Indian market' or 'stocks'",
+  "meta_description": "compelling click-worthy description for search results (max 155 chars)",
+  "key_takeaway": "2-line key takeaway for investors",
+  "summary": "3-4 sentence crispy summary for cards/previews",
   "content": "full HTML article content with <h2>, <p>, <strong>, <ul>/<li> tags",
-  "tags": ["5-8 SEO-optimized tags"]
+  "tags": ["8-12 SEO tags — mix of trending topic tags AND financial/market tags that people search for"]
 }}"""
 
         raw = self._call_provider(self.writing_provider, prompt, max_tokens=4000, temperature=0.7)

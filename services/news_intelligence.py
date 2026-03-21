@@ -30,9 +30,9 @@ class NewsIntelligence:
         """Fetch news from all sources and store new items"""
         logger.info("Starting news ingestion...")
 
-        # Fetch from all categories
+        # Fetch from all categories (including trending, geopolitics, tech, crypto, ipos)
         all_items = []
-        for category in ['all', 'indian_markets', 'global_markets', 'economy', 'banking']:
+        for category in ['all', 'indian_markets', 'global_markets', 'economy', 'banking', 'trending', 'geopolitics', 'tech', 'crypto', 'ipos']:
             try:
                 result = self.news_aggregator.get_news(category=category, limit=30)
                 if result.get('success'):
@@ -210,10 +210,11 @@ class NewsIntelligence:
         multi_source = [c for c in clusters if len(c) >= 2]
         single_source = [c for c in clusters if len(c) == 1]
 
-        # Process multi-source first, then fill with singles if needed
+        # Process multi-source first, then fill with trending singles
         to_process = multi_source[:max_articles]
         remaining = max_articles - len(to_process)
         if remaining > 0:
+            # Pick single-source items that are likely trending/important
             to_process.extend(single_source[:remaining])
 
         for cluster in to_process:

@@ -52,20 +52,42 @@ RSS_FEEDS = {
     'indian_markets': [
         'https://www.moneycontrol.com/rss/marketreports.xml',
         'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms',
+        'https://www.livemint.com/rss/markets',
     ],
     'global_markets': [
         'https://feeds.bloomberg.com/markets/news.rss',
         'https://www.cnbc.com/id/100003114/device/rss/rss.html',
+        'https://www.cnbc.com/id/100727362/device/rss/rss.html',  # CNBC World
     ],
     'nse': [
         'https://www.nseindia.com/rss/news.xml',
     ],
     'economy': [
         'https://economictimes.indiatimes.com/news/economy/rssfeeds/1373380680.cms',
+        'https://www.livemint.com/rss/economy',
     ],
     'banking': [
         'https://economictimes.indiatimes.com/industry/banking/finance/rssfeeds/13358259.cms',
-    ]
+    ],
+    'trending': [
+        'https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx6TVdZU0FtVnVHZ0pKVGlnQVAB?hl=en-IN&gl=IN&ceid=IN:en',  # Google News India Top Stories
+        'https://economictimes.indiatimes.com/news/rssfeeds/1715249553.cms',  # ET trending
+        'https://www.livemint.com/rss/news',
+    ],
+    'geopolitics': [
+        'https://economictimes.indiatimes.com/news/defence/rssfeeds/68597640.cms',
+        'https://economictimes.indiatimes.com/news/international/rssfeeds/1715249782.cms',
+    ],
+    'tech': [
+        'https://economictimes.indiatimes.com/tech/rssfeeds/13357270.cms',
+        'https://www.livemint.com/rss/technology',
+    ],
+    'crypto': [
+        'https://www.coindesk.com/arc/outboundfeeds/rss/',
+    ],
+    'ipos': [
+        'https://www.moneycontrol.com/rss/ipo.xml',
+    ],
 }
 
 class NewsAggregator:
@@ -232,7 +254,11 @@ class NewsAggregator:
                     tasks.append(('rss', feed_url, cat))
 
         if NEWS_API_KEY:
-            tasks.append(('newsapi', region, category))
+            tasks.append(('newsapi', region, 'business'))
+            if category == 'all':
+                # Also fetch general & technology news for trending coverage
+                tasks.append(('newsapi', region, 'general'))
+                tasks.append(('newsapi', region, 'technology'))
         if ALPHA_VANTAGE_KEY and category in ['nse', 'bse', 'all']:
             tasks.append(('alphavantage', None, category))
 
@@ -242,9 +268,8 @@ class NewsAggregator:
             if source_type == 'rss':
                 return NewsAggregator.fetch_from_rss(arg1, arg2)
             elif source_type == 'newsapi':
-                newsapi_cat = 'business' if arg1 == 'indian' else 'general'
                 country = 'in' if arg1 == 'indian' else 'us'
-                return NewsAggregator.fetch_from_newsapi(newsapi_cat, country)
+                return NewsAggregator.fetch_from_newsapi(arg2, country)
             elif source_type == 'alphavantage':
                 return NewsAggregator.fetch_alpha_vantage_news()
             return []
