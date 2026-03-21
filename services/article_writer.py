@@ -163,6 +163,35 @@ class ArticleWriter:
 
         raise ValueError(f"Could not parse JSON from LLM response: {text[:200]}")
 
+    # ── Relevance Check ────────────────────────────────────────
+
+    def check_relevance(self, news_cluster: list) -> bool:
+        """Quick check: is this news actually relevant to financial markets?"""
+        titles = " | ".join(item.get('title', '') for item in news_cluster)
+
+        prompt = f"""You are a financial news editor. Your job is to decide if a news story has REAL, MEANINGFUL impact on financial markets, stocks, or the economy.
+
+Score this news from 1-10 on market relevance:
+- 8-10: Directly about markets, stocks, economy, trade, monetary policy, corporate earnings, IPOs, commodities, crypto prices
+- 5-7: Indirectly impacts markets — government policy, industry regulation, major geopolitical events (wars, sanctions), tech disruptions affecting listed companies
+- 1-4: Celebrity deaths, sports, entertainment, local crime, obituaries, social media drama, lifestyle — these do NOT meaningfully impact markets even with a forced connection
+
+NEWS: {titles}
+
+Respond ONLY with valid JSON:
+{{"score": <number 1-10>, "reason": "one line why"}}"""
+
+        try:
+            raw = self._call_provider(self.analysis_provider, prompt, max_tokens=100, temperature=0.2)
+            result = self._parse_json(raw)
+            score = int(result.get('score', 0))
+            reason = result.get('reason', '')
+            logger.info(f"Relevance check: {score}/10 — {reason} — {titles[:80]}")
+            return score >= 5
+        except Exception as e:
+            logger.warning(f"Relevance check failed: {e}, allowing through")
+            return True  # If check fails, let it through
+
     # ── Analysis Step ──────────────────────────────────────────
 
     def analyze(self, news_cluster: list) -> dict:
@@ -177,9 +206,9 @@ class ArticleWriter:
 
 Given these news reports, analyze and extract structured intelligence with a MARKET IMPACT angle.
 
-IMPORTANT: Even if the news is about wars, geopolitics, elections, technology, crypto, policy changes, natural disasters, or any global event — ALWAYS find and explain the connection to Indian stock markets, specific sectors, and affected companies. Every major world event impacts markets.
+This news has already been screened for market relevance. Find the REAL connection to financial markets — but be honest and specific. If the impact is indirect, say so clearly. Don't exaggerate or manufacture connections.
 
-Examples of connections:
+Examples of real connections:
 - War/conflict → Defence stocks, oil prices, gold, shipping
 - US Fed rate decisions → IT stocks, FII flows, rupee value
 - New government policy → affected industry sectors
@@ -280,9 +309,16 @@ Respond ONLY with valid JSON:
     # ── Full Pipeline for One Cluster ──────────────────────────
 
     def process_cluster(self, news_cluster: list) -> dict:
-        """Full pipeline: analyze + write for one cluster of news"""
-        logger.info(f"Analyzing cluster of {len(news_cluster)} articles...")
+        """Full pipeline: relevance check → analyze → write for one cluster"""
+        titles_preview = " | ".join(item.get('title', '')[:50] for item in news_cluster)
+        logger.info(f"Checking relevance of {len(news_cluster)} articles: {titles_preview[:100]}")
 
+        # Quick relevance gate — skip junk news
+        if not self.check_relevance(news_cluster):
+            raise Exception("Skipped: not market-relevant (score < 5)")
+        time.sleep(5)
+
+        logger.info(f"Analyzing cluster of {len(news_cluster)} articles...")
         analysis = self.analyze(news_cluster)
         time.sleep(10)  # Rate limiting between API calls
 
