@@ -145,7 +145,7 @@ class NewsIntelligence:
 
             # Quality check
             content = article_data.get('content', '')
-            if len(content) < 500:
+            if len(content) < 1500:
                 logger.warning(f"Cluster {cluster_id}: Article too short ({len(content)} chars), skipping")
                 return {'success': False, 'reason': 'too_short'}
 

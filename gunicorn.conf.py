@@ -34,13 +34,13 @@ def when_ready(server):
             from database import db
             from services.news_intelligence import NewsIntelligence
             pipeline = NewsIntelligence(db)
-            results = pipeline.run_pipeline(max_articles=5)
+            results = pipeline.run_pipeline(max_articles=3)
             logger.info(f"Pipeline complete: {results.get('published', 0)} published, {results.get('failed', 0)} failed")
         except Exception as e:
             logger.error(f"News pipeline error: {e}")
 
     def scheduler_loop():
-        schedule.every(30).minutes.do(run_news_pipeline)
+        schedule.every(2).hours.do(run_news_pipeline)
         time.sleep(120)  # Wait 2 min before first run
         run_news_pipeline()
         while True:

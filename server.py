@@ -51,7 +51,7 @@ def run_news_pipeline():
         from app import mongo
         from services.news_intelligence import NewsIntelligence
         pipeline = NewsIntelligence(mongo.db)
-        results = pipeline.run_pipeline(max_articles=10)
+        results = pipeline.run_pipeline(max_articles=3)
         logger.info(f"Pipeline complete: {results.get('published', 0)} articles published")
     except Exception as e:
         logger.error(f"News pipeline error: {str(e)}")
@@ -61,8 +61,8 @@ def run_scheduler():
     # Schedule the job to run every 15 minutes
     schedule.every(15).minutes.do(refresh_top_gainers_losers)
 
-    # Schedule news pipeline every 30 minutes
-    schedule.every(30).minutes.do(run_news_pipeline)
+    # Schedule news pipeline every 2 hours (~30 articles/day)
+    schedule.every(2).hours.do(run_news_pipeline)
 
     # Run the job once at startup to initialize data
     refresh_top_gainers_losers()

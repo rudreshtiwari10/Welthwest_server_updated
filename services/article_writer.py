@@ -187,7 +187,7 @@ Respond ONLY with valid JSON:
             score = int(result.get('score', 0))
             reason = result.get('reason', '')
             logger.info(f"Relevance check: {score}/10 — {reason} — {titles[:80]}")
-            return score >= 5
+            return score >= 7
         except Exception as e:
             logger.warning(f"Relevance check failed: {e}, allowing through")
             return True  # If check fails, let it through
@@ -255,9 +255,9 @@ Respond ONLY with valid JSON (no markdown, no explanation):
             for item in news_cluster
         )
 
-        prompt = f"""You are a top financial journalist at WelthWest Research Desk. Your articles go viral because they combine trending news with sharp market insights.
+        prompt = f"""You are a senior financial analyst and investigative journalist at WelthWest Research Desk. You write in-depth, data-driven articles that become the definitive resource on a topic. Your articles rank #1 on Google because of their depth, original analysis, and comprehensive coverage.
 
-Based on this analysis, write an ORIGINAL article that connects this event to financial markets. Do NOT copy any source phrasing.
+Based on this analysis, write a COMPREHENSIVE, ORIGINAL article. Do NOT copy any source phrasing. Every sentence must add value.
 
 ANALYSIS:
 - Core Event: {analysis.get('core_event', '')}
@@ -274,36 +274,39 @@ SOURCE HEADLINES (for context only — do NOT copy):
 {sources_summary}
 
 Write the article with this structure:
-1. CATCHY, clickable headline that includes trending keywords people are searching for
-2. Key takeaway (2 lines max — the "so what" for investors)
-3. What happened (brief, engaging hook)
-4. Market impact analysis (detailed — connect to Indian stock market)
-5. Who benefits, who loses (name specific stocks/sectors)
-6. Investor insight / what to watch next
-7. Risks to consider
+1. CATCHY, clickable headline with high-search-volume keywords
+2. Key takeaway (2-3 lines — the "so what" for investors, make it punchy)
+3. What happened — set the scene with context and background, explain WHY this matters NOW
+4. Deep market impact analysis — connect to Indian stock market with specific data points, historical parallels, and sector-level breakdown
+5. Stock-by-stock breakdown — name 4-6 specific NSE/BSE stocks affected, explain HOW and WHY each is impacted, include sector peers
+6. Expert perspective — add contrarian views, what bears vs bulls would argue
+7. Actionable investor playbook — concrete steps: what to buy/sell/watch, entry points, time horizons
+8. Risk matrix — list 3-4 specific risks with probability assessment
+9. What to watch next — upcoming catalysts, dates, data releases that will move this story
 
 Requirements:
-- 700-1200 words
-- Crispy, engaging tone — like a smart friend explaining markets to you
-- Write like it's breaking news people NEED to read right now
-- Add original analysis beyond the news — give insights readers can't find elsewhere
-- ALWAYS connect back to Indian stock market, sectors, and specific stocks
-- Use trending keywords naturally in the content for SEO
+- 1200-2000 words — this is a DEEP DIVE, not a news brief
+- Authoritative, data-driven tone — like a Goldman Sachs research note but readable
+- Include specific numbers: market cap, P/E ratios, revenue figures, % changes where relevant
+- Reference historical parallels ("last time this happened in 2022, Nifty moved X%")
+- ALWAYS connect to Indian stock market with specific NSE/BSE tickers
+- Use long-tail keywords naturally throughout for SEO dominance
+- Include 2-3 subheadings as questions people would Google (e.g., "How will RBI rate cut affect bank stocks?")
 - Do NOT include any disclaimer text in the article body
-- Make headings catchy and search-friendly
+- Every paragraph must contain an insight the reader can't easily find elsewhere
 
 Respond ONLY with valid JSON:
 {{
   "title": "catchy, trending, SEO-optimized headline (max 80 chars) — use keywords people actually search for",
   "meta_title": "search-engine optimized title (max 60 chars) — include key topic + 'Indian market' or 'stocks'",
   "meta_description": "compelling click-worthy description for search results (max 155 chars)",
-  "key_takeaway": "2-line key takeaway for investors",
-  "summary": "3-4 sentence crispy summary for cards/previews",
-  "content": "full HTML article content with <h2>, <p>, <strong>, <ul>/<li> tags",
-  "tags": ["8-12 SEO tags — mix of trending topic tags AND financial/market tags that people search for"]
+  "key_takeaway": "2-3 line key takeaway for investors — make it quotable",
+  "summary": "3-4 sentence summary for cards/previews — hook the reader",
+  "content": "full HTML article content with <h2>, <h3>, <p>, <strong>, <ul>/<li>, <blockquote> tags. Use <h2> for main sections, <h3> for subsections.",
+  "tags": ["10-15 SEO tags — mix of trending topic tags, long-tail keywords, stock names, and financial terms people search for"]
 }}"""
 
-        raw = self._call_provider(self.writing_provider, prompt, max_tokens=4000, temperature=0.7)
+        raw = self._call_provider(self.writing_provider, prompt, max_tokens=6000, temperature=0.7)
         return self._parse_json(raw)
 
     # ── Full Pipeline for One Cluster ──────────────────────────
