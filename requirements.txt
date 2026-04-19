@@ -47,6 +47,9 @@ frozendict==2.4.6
 plotly==5.17.0
 matplotlib==3.8.2
 
+# Image / CDN
+cloudinary==1.41.0
+
 # HTTP & Web
 requests==2.31.0
 httpx==0.27.0

@@ -13,7 +13,6 @@ Query Categories:
 - technical_analysis: Charts, indicators, signals
 - screener: Stock screening requests
 - backtest: Strategy backtesting
-- document_query: Questions about uploaded PDFs
 - news_analysis: Market news and sentiment
 - finance_explanation: General finance concepts
 - general: Non-finance queries
@@ -27,14 +26,6 @@ import requests
 import json
 from datetime import datetime, timedelta
 
-# Heavy service imports deferred into methods to avoid slow startup
-# These all import yfinance/pandas/numpy which take seconds to load
-# RAG service disabled - PDF document analysis not currently used
-class _DisabledRAG:
-    def is_available(self): return False
-rag_service = _DisabledRAG()
-def get_context_for_query(*a, **kw): return None
-
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -45,56 +36,30 @@ class FinanceOrchestrator:
     Advanced orchestrator for finance AI queries
     """
 
-    # Comprehensive trigger words for analysis-related features (100+ keywords)
-    ANALYSIS_TRIGGER_WORDS = {
-        # General analysis keywords
-        'analysis', 'analyze', 'technical analysis', 'fundamental analysis',
-        'regime', 'market regime', 'rsi', 'rsa', 'macd', 'moving average', 'ma', 'ema', 'sma',
-        'bollinger bands', 'fibonacci', 'candlestick', 'chart pattern', 'pattern',
-        'support', 'resistance', 'trend', 'breakout', 'breakdown',
-        'momentum', 'volatility', 'oscillator', 'stochastic', 'adx', 'atr',
-        'volume analysis', 'price action', 'swing trading', 'day trading', 'scalping',
-        'position trading', 'bull market', 'bear market', 'market trend',
-        'technical indicator', 'indicator', 'signal',
-        'entry point', 'exit point', 'stop loss', 'target',
-        'trade setup', 'chart analysis', 'market analysis', 'stock analysis',
-        'equity analysis',
-
-        # Backtesting / Strategy engine keywords
-        'backtest', 'backtesting', 'strategy test', 'strategy testing', 'test my strategy',
-        'validate strategy', 'strategy', 'historical test', 'historical testing',
-        'paper trading', 'simulate trades', 'trading simulator', 'performance test',
-        'performance analysis', 'pnl analysis', 'profit and loss', 'drawdown',
-        'max drawdown', 'sharpe ratio', 'risk reward', 'win rate', 'success rate',
-        'equity curve', 'trade log', 'trade history', 'optimize strategy',
-        'strategy optimization', 'parameter tuning', 'indicator test',
-        'rsi strategy', 'macd strategy', 'moving average strategy',
-        'trading strategy', 'test strategy', 'performance', 'historical data', 'historical analysis',
-
-        # AI price forecasting / signals keywords
-        'forecast', 'prediction', 'predict', 'price forecast', 'price prediction',
-        'price predicting', 'stock forecast', 'stock prediction', 'stock signals',
-        'buy signal', 'sell signal', 'trading signals', 'market forecast',
-        'market prediction', 'ai forecast', 'ai signals', 'ml model',
-        'machine learning forecast', 'time series forecast', 'next day price',
-        'tomorrow price', 'short term forecast', 'swing trade signal',
-        'regime prediction', 'bull bear signal', 'trend prediction',
-        'volatility forecast', 'hmm', 'hidden markov', 'ai analysis',
-        'machine learning', 'pattern recognition',
-
-        # Generic platform-intent keywords
-        'automated trading', 'trading bot', 'auto buy sell', 'quant tools',
-        'analysis tools', 'trading platform', 'ai trading platform',
-        'strategy builder', 'portfolio analysis'
+    # Merged common words blacklist — used by both classify_query and extract_symbols
+    # to avoid false-positive symbol matches on English words
+    COMMON_WORDS = {
+        # Pronouns, articles, prepositions, conjunctions
+        'HOW', 'ARE', 'YOU', 'THE', 'AND', 'FOR', 'CAN', 'WHAT', 'WHY',
+        'WHO', 'WHEN', 'WHERE', 'WHICH', 'WILL', 'WOULD', 'SHOULD', 'COULD',
+        'THIS', 'THAT', 'THESE', 'THOSE', 'HAVE', 'HAS', 'HAD', 'WAS', 'WERE',
+        'BEEN', 'BEING', 'DOES', 'DID', 'DOING', 'ME', 'OF', 'IN', 'ON',
+        'AT', 'TO', 'NS', 'BO', 'IS', 'IT', 'BY', 'MY', 'DO', 'BE',
+        'AN', 'AS', 'UP', 'IF', 'OR', 'SO', 'NO', 'VS',
+        # Verbs / adjectives common in finance queries
+        'SHOW', 'TELL', 'GIVE', 'GET', 'INVEST', 'GOOD', 'BAD', 'BEST',
+        'HIGH', 'LOW', 'BUY', 'SELL',
+        # Finance / domain terms that aren't tickers
+        'STOCK', 'SHARE', 'PRICE', 'CHART', 'DATA', 'LAST', 'DAYS',
+        'WEEK', 'YEAR', 'MONTH', 'NEWS', 'HELP', 'ABOUT', 'WITH',
+        'ANALYSE', 'ANALYZE', 'ANALYSIS', 'TECHNICAL',
     }
 
     def __init__(self):
         # Load API keys
         self.gemini_api_key = os.environ.get('GEMINI_API_KEY', '')
-        self.openrouter_api_key = os.environ.get('OPENROUTER_API_KEY', '')
-
         # System prompts
-        self.finance_system_prompt = """You are Welth AI, a professional financial analyst assistant for WelthWest — a platform specialising in Indian stock markets.
+        self.finance_system_prompt = """You are Welth, the in-house research assistant built by the WelthWest team — a platform specialising in Indian stock markets.
 
 Your role:
 - Provide accurate, data-driven financial analysis for Indian and global markets
@@ -135,100 +100,11 @@ Handling data errors:
         """
         Detect if query contains analysis-related keywords and return suggested tools.
         Returns a dict with 'show_buttons' (bool) and 'suggested_tools' (list).
+
+        NOTE: Feature promotion will be rebuilt as a dynamic, YAML-driven system
+        in a future phase. For now, returns empty to avoid promoting dead routes.
         """
-        query_lower = query.lower().strip()
-
-        # Check if any trigger word is present in the query
-        has_trigger_word = any(
-            trigger_word in query_lower
-            for trigger_word in self.ANALYSIS_TRIGGER_WORDS
-        )
-
-        if not has_trigger_word:
-            return {'show_buttons': False, 'suggested_tools': []}
-
-        # Build suggested tools based on specific keywords
-        suggested_tools = []
-
-        # Market Regime & AI Analysis triggers
-        regime_keywords = {
-            'regime', 'market regime', 'forecast', 'prediction', 'predict',
-            'hmm', 'hidden markov', 'ai analysis', 'market analysis',
-            'technical analysis', 'analysis', 'pattern recognition',
-            'price forecast', 'price prediction', 'stock forecast', 'stock prediction',
-            'market forecast', 'market prediction', 'ai forecast', 'ai signals',
-            'ml model', 'machine learning forecast', 'time series forecast',
-            'next day price', 'tomorrow price', 'short term forecast',
-            'swing trade signal', 'regime prediction', 'bull bear signal',
-            'trend prediction', 'volatility forecast', 'stock signals',
-            'trading signals', 'buy signal', 'sell signal'
-        }
-
-        # Backtesting triggers
-        backtest_keywords = {
-            'backtest', 'backtesting', 'strategy test', 'strategy testing',
-            'test my strategy', 'validate strategy', 'strategy', 'historical test',
-            'historical testing', 'paper trading', 'simulate trades',
-            'trading simulator', 'performance test', 'performance analysis',
-            'pnl analysis', 'profit and loss', 'drawdown', 'max drawdown',
-            'sharpe ratio', 'win rate', 'success rate', 'equity curve',
-            'trade log', 'trade history', 'optimize strategy',
-            'strategy optimization', 'parameter tuning', 'indicator test',
-            'rsi strategy', 'macd strategy', 'moving average strategy',
-            'trading strategy', 'test strategy', 'performance',
-            'historical data', 'historical analysis'
-        }
-
-        # Check for regime/forecast keywords
-        has_regime_keywords = any(kw in query_lower for kw in regime_keywords)
-
-        # Check for backtest keywords
-        has_backtest_keywords = any(kw in query_lower for kw in backtest_keywords)
-
-        # For general "analysis" or "technical analysis" queries, show BOTH tools
-        general_analysis_keywords = {'analysis', 'analyze', 'technical analysis', 'fundamental analysis', 'chart analysis', 'stock analysis'}
-        has_general_analysis = any(kw in query_lower for kw in general_analysis_keywords)
-
-        # Add Market Regime button if relevant keywords found OR general analysis
-        if has_regime_keywords or has_general_analysis:
-            suggested_tools.append({
-                'name': 'AI Market Regime & Forecast',
-                'description': 'Get AI-powered market regime analysis and trade forecasts',
-                'url': '/welth-market-regime',
-                'icon': 'chart'
-            })
-
-        # Add Backtesting button if relevant keywords found OR general analysis
-        if has_backtest_keywords or has_general_analysis:
-            suggested_tools.append({
-                'name': 'Advanced Backtesting',
-                'description': 'Test your trading strategies with historical data',
-                'url': '/backtest-beta',
-                'icon': 'backtest'
-            })
-
-        # If no specific match but general trigger words detected, suggest both
-        if not suggested_tools:
-            suggested_tools = [
-                {
-                    'name': 'AI Market Regime & Forecast',
-                    'description': 'Get AI-powered market regime analysis and trade forecasts',
-                    'url': '/welth-market-regime',
-                    'icon': 'chart'
-                },
-                {
-                    'name': 'Advanced Backtesting',
-                    'description': 'Test your trading strategies with historical data',
-                    'url': '/backtest-beta',
-                    'icon': 'backtest'
-                }
-            ]
-
-        logger.info(f"Analysis intent detected! Showing {len(suggested_tools)} tool suggestions")
-        return {
-            'show_buttons': True,
-            'suggested_tools': suggested_tools
-        }
+        return {'show_buttons': False, 'suggested_tools': []}
 
     def classify_query(self, query: str, conversation_history: List[Dict[str, str]] = None) -> str:
         """
@@ -239,7 +115,6 @@ Handling data errors:
         - technical_analysis: "Show me RSI for TCS", "Analyze INFY chart"
         - screener: "Find oversold stocks", "Screen for momentum stocks"
         - backtest: "Test SMA crossover on AAPL", "Backtest RSI strategy"
-        - document_query: "What does the earnings report say about revenue?"
         - news_analysis: "Latest news on Tesla", "Market sentiment for tech"
         - finance_explanation: "What is RSI?", "Explain moving averages"
         - general: Everything else (default for safety)
@@ -262,11 +137,6 @@ Handling data errors:
         if len(query.split()) <= 3 and not self.extract_symbols(query):
             return 'general'
 
-        # Document query patterns
-        doc_keywords = ['earnings report', 'annual report', '10-k', 'prospectus', 'according to the document', 'in the report']
-        if any(keyword in query_lower for keyword in doc_keywords):
-            return 'document_query'
-
         # Backtesting patterns
         backtest_keywords = ['backtest', 'test strategy', 'simulate', 'historical performance', 'strategy performance']
         if any(keyword in query_lower for keyword in backtest_keywords):
@@ -284,12 +154,7 @@ Handling data errors:
         has_ta_verb = any(verb in query_lower for verb in ta_verbs)
 
         # Check for stock symbols (exclude common words)
-        common_words = {'HOW', 'ARE', 'YOU', 'THE', 'AND', 'FOR', 'CAN', 'WHAT', 'WHY',
-                        'WHO', 'WHEN', 'WHERE', 'WHICH', 'WILL', 'WOULD', 'SHOULD', 'COULD',
-                        'THIS', 'THAT', 'THESE', 'THOSE', 'HAVE', 'HAS', 'HAD', 'WAS', 'WERE',
-                        'BEEN', 'BEING', 'DOES', 'DID', 'DOING', 'SHOW', 'TELL', 'GIVE', 'GET',
-                        'INVEST', 'GOOD', 'BAD', 'BEST'}
-        potential_symbols = [s for s in re.findall(r'\b[A-Z]{2,5}\b', query.upper()) if s not in common_words]
+        potential_symbols = [s for s in re.findall(r'\b[A-Z]{2,5}\b', query.upper()) if s not in self.COMMON_WORDS]
         has_stock_symbol = len(potential_symbols) > 0
 
         # Only classify as technical_analysis if BOTH keywords AND clear symbols exist
@@ -362,22 +227,10 @@ Handling data errors:
 
         # Step 3: if still nothing, tokenise the uppercased query and resolve each token
         if not symbols:
-            common_words = {
-                'FOR', 'AND', 'THE', 'SHOW', 'GET', 'ME', 'OF', 'IN', 'ON',
-                'AT', 'TO', 'NS', 'BO', 'IS', 'IT', 'BY', 'MY', 'DO', 'BE',
-                'AN', 'AS', 'UP', 'IF', 'OR', 'SO', 'NO', 'VS', 'HOW',
-                'ARE', 'YOU', 'CAN', 'WHAT', 'WHY', 'WHO', 'WHEN', 'WHERE',
-                'WILL', 'WOULD', 'SHOULD', 'COULD', 'THIS', 'THAT', 'HAVE',
-                'HAS', 'HAD', 'WAS', 'WERE', 'BEEN', 'DOES', 'DID',
-                'TELL', 'GIVE', 'GOOD', 'BEST', 'HIGH', 'LOW', 'BUY', 'SELL',
-                'STOCK', 'SHARE', 'PRICE', 'CHART', 'DATA', 'LAST', 'DAYS',
-                'WEEK', 'YEAR', 'MONTH', 'NEWS', 'HELP', 'ABOUT', 'WITH',
-                'ANALYSE', 'ANALYZE', 'ANALYSIS', 'TECHNICAL', 'SHOW', 'TELL',
-            }
             potential_symbols = re.findall(r'\b([A-Z]{2,12})\b', query_upper)
 
             for sym in potential_symbols:
-                if sym in common_words or sym in symbols:
+                if sym in self.COMMON_WORDS or sym in symbols:
                     continue
                 if sym in nse_map:
                     symbols.append(nse_map[sym])
@@ -646,46 +499,6 @@ Handling data errors:
                 'error': str(e)
             }
 
-    def handle_document_query(self, query: str) -> Dict[str, Any]:
-        """Handle queries about uploaded PDFs"""
-        try:
-            # Check if RAG service is available
-            if not rag_service.is_available():
-                return {
-                    'category': 'document_query',
-                    'error': 'Document analysis not available. Required dependencies: PyPDF2, sentence-transformers, chromadb'
-                }
-
-            # Get relevant context from documents
-            doc_context = get_context_for_query(query, top_k=3)
-
-            if "No relevant information" in doc_context:
-                return {
-                    'category': 'document_query',
-                    'message': 'No uploaded documents found. Please upload a PDF first.',
-                    'context': {'data_type': 'document_query', 'has_documents': False}
-                }
-
-            # Prepare context for LLM
-            context = {
-                'data_type': 'document_query',
-                'document_context': doc_context,
-                'has_documents': True
-            }
-
-            return {
-                'category': 'document_query',
-                'document_context': doc_context,
-                'context': context
-            }
-
-        except Exception as e:
-            logger.error(f"Error in document query: {e}")
-            return {
-                'category': 'document_query',
-                'error': str(e)
-            }
-
     def call_gemini(self, prompt: str, temperature: float = 0.2) -> str:
         """
         Call Google Gemini API
@@ -698,7 +511,8 @@ Handling data errors:
             LLM response text
         """
         if not self.gemini_api_key:
-            return "Gemini API key not configured."
+            logger.error("LLM API key not configured")
+            return "I'm temporarily unable to process your request. Please try again shortly."
 
         try:
             url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={self.gemini_api_key}"
@@ -725,8 +539,8 @@ Handling data errors:
                 return "Unable to generate response."
 
         except Exception as e:
-            logger.error(f"Gemini API error: {e}")
-            return f"Error calling Gemini: {str(e)}"
+            logger.error(f"LLM API error: {e}")
+            return "I'm sorry, I'm having trouble processing your request right now. Please try again in a moment."
 
     def generate_response(self, query: str, context_data: Dict[str, Any], conversation_history: List[Dict[str, str]] = None) -> str:
         """
@@ -804,12 +618,6 @@ Handling data errors:
             prompt_parts.append(f"Max Drawdown: {metrics.get('max_drawdown_pct')}%\n")
             prompt_parts.append(f"Sharpe Ratio: {metrics.get('sharpe_ratio')}\n\n")
 
-        elif data_type == 'document_query':
-            if context.get('has_documents'):
-                prompt_parts.append(f"Relevant Document Context:\n{context.get('document_context')}\n\n")
-            else:
-                prompt_parts.append("No documents have been uploaded yet.\n\n")
-
         elif data_type == 'error':
             error_detail = context.get('error_detail', '')
             original_category = context.get('original_category', '')
@@ -841,9 +649,6 @@ Handling data errors:
 
         # Call LLM
         response = self.call_gemini(full_prompt, temperature=0.2)
-
-        # Post-process to replace any $ symbols with ₹
-        response = response.replace('$', '₹')
 
         return response
 
@@ -880,9 +685,6 @@ Handling data errors:
 
             elif category == 'backtest':
                 result = self.handle_backtest_query(query)
-
-            elif category == 'document_query':
-                result = self.handle_document_query(query)
 
             elif category in ['news_analysis', 'finance_explanation', 'general']:
                 # For these, we just use LLM without special data

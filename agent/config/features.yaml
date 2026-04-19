@@ -1,0 +1,107 @@
+# WelthWest Feature Registry
+# Single source of truth for all platform features the agent can recommend.
+# To add/remove a feature: edit this file, no code changes needed.
+# Features with enabled: false will not be promoted.
+
+features:
+  - key: stock_page
+    name: "Stock Details"
+    description: "Deep-dive analytics on any NSE/BSE stock — live prices, charts, fundamentals, technicals"
+    url_template: "/stock/{symbol}"
+    deep_link_params: ["symbol"]
+    trigger_intents:
+      - stock_lookup
+      - price_query
+      - chart
+      - fundamentals_query
+      - deep_dive
+      - stock_details
+      - technical_analysis
+    plan_tier: FREE
+    enabled: true
+
+  - key: ai_screener
+    name: "AI Screener"
+    description: "Find stocks matching your criteria using custom filters and rules"
+    url_template: "/ai-screener"
+    deep_link_params: []
+    trigger_intents:
+      - screener_query
+      - stock_discovery
+      - find_stocks
+      - filter_stocks
+    plan_tier: FREE
+    enabled: true
+
+  - key: news
+    name: "Market News"
+    description: "Latest market news, company updates, and sector developments"
+    url_template: "/news"
+    deep_link_params: ["topic", "symbol"]
+    trigger_intents:
+      - news_query
+      - sentiment_query
+      - market_update
+      - company_news
+    plan_tier: FREE
+    enabled: true
+
+  - key: blogs
+    name: "WelthWest Blogs"
+    description: "Educational articles on investing, trading strategies, and financial concepts"
+    url_template: "/blogs"
+    deep_link_params: ["q"]
+    trigger_intents:
+      - education
+      - concept_explanation
+      - learn_trading
+      - investment_strategy
+    plan_tier: FREE
+    enabled: true
+
+  - key: welth_assistant
+    name: "WelthAI Assistant"
+    description: "Full-page research assistant with conversation history and advanced analysis"
+    url_template: "/welth-ai-assistant"
+    deep_link_params: []
+    trigger_intents:
+      - detailed_analysis
+      - long_conversation
+      - research
+    plan_tier: FREE
+    enabled: true
+
+  - key: contact
+    name: "Contact Us"
+    description: "Get in touch with the WelthWest team for support or feedback"
+    url_template: "/contact"
+    deep_link_params: []
+    trigger_intents:
+      - support
+      - feedback
+      - contact
+      - help
+    plan_tier: FREE
+    enabled: true
+
+  # Disabled features — kept for registry completeness, never promoted
+  - key: market_regime
+    name: "Market Regime Analysis"
+    description: "ML-based market regime detection"
+    url_template: "/welth-market-regime"
+    deep_link_params: []
+    trigger_intents:
+      - regime_analysis
+    plan_tier: PRO
+    enabled: false
+
+  - key: backtest
+    name: "Strategy Backtester"
+    description: "Backtest trading strategies on historical data"
+    url_template: "/backtest-beta"
+    deep_link_params: []
+    trigger_intents:
+      - backtest
+      - strategy_test
+    plan_tier: PRO
+    enabled: false

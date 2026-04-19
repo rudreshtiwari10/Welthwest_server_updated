@@ -26,6 +26,7 @@ from routes.admin_monitoring import admin_monitoring_bp
 from routes.support import support_bp
 from routes.ai_screener_routes import ai_screener_bp
 from routes.market_routes import market_bp
+from routes.welth_routes import welth_bp
 from middleware.feature_limit import feature_limit, admin_required
 from database.seed_plans import initialize_premium_system
 from services.google_auth_service import GoogleAuthService
@@ -253,6 +254,9 @@ app.register_blueprint(ai_screener_bp)
 
 # Register Market Intelligence blueprint
 app.register_blueprint(market_bp)
+
+# Register Welth Agent blueprint (new agentic assistant — coexists with old finance-ai)
+app.register_blueprint(welth_bp)
 
 # Register enhanced Finance AI routes
 register_finance_ai_routes(app)
@@ -1336,222 +1340,6 @@ def _send_feedback_notification_email(user_info: Dict[str, Any], feedback_data: 
     
     subject = f"New WealthWest Feedback - {user_info.get('name', 'Unknown User')}"
     email_service.send_email(company_email, subject, template, context)
-
-# Anonymous Chat endpoint with session tracking
-@app.route('/api/chat', methods=['POST'])
-@validate_json_request
-@anon_or_auth_feature_limit('welth-ai-assistant')
-def chat_with_ai():
-    """Chat with AI with automatic anonymous trial limiting"""
-    try:
-        data = request.get_json()
-
-        # Process the chat message
-        message = data.get('message', '')
-        if not message:
-            return jsonify({"error": "Message is required"}), 400
-
-        model = data.get('model', 'openrouter')  # Default to OpenRouter
-
-        # Validate model selection
-        valid_models = ['openai', 'claude', 'openrouter', 'llama']
-        if model not in valid_models:
-            model = 'openrouter'  # Fallback to default
-
-        # Check if the model's API key is configured
-        api_key_map = {
-            'openai': os.environ.get('OPENAI_API_KEY'),
-            'claude': os.environ.get('CLAUDE_API_KEY'),
-            'openrouter': os.environ.get('OPENROUTER_API_KEY')
-        }
-
-        # For llama or if the selected model's API key is not configured, use available model
-        if model == 'llama' or not api_key_map.get(model):
-            # Find first available model
-            for available_model, key in api_key_map.items():
-                if key:
-                    model = available_model
-                    break
-            else:
-                # If no API keys configured, use llama (simulated)
-                model = 'llama'
-
-        # Process the chat query
-        ai_response = get_ai_service().process_chat_query(message, model)
-
-        # Convert any numpy/pandas types to native Python types for JSON serialization
-        def convert_to_serializable(obj):
-            """Convert numpy/pandas types to JSON serializable types"""
-            if obj is None:
-                return None
-
-            # Handle basic containers first
-            if isinstance(obj, dict):
-                return {k: convert_to_serializable(v) for k, v in obj.items()}
-            elif isinstance(obj, (list, tuple)):
-                return [convert_to_serializable(v) for v in obj]
-
-            # Check if it's a numpy/pandas type by string name to avoid import issues
-            type_name = type(obj).__name__
-            module_name = type(obj).__module__
-
-            # Handle numpy types
-            if 'numpy' in module_name or type_name.startswith('int') or type_name.startswith('float'):
-                if 'int' in type_name or 'Int' in type_name:
-                    return int(obj)
-                elif 'float' in type_name or 'Float' in type_name:
-                    return float(obj)
-                elif 'ndarray' in type_name:
-                    return obj.tolist()
-
-            # Handle pandas types
-            if 'pandas' in module_name:
-                try:
-                    import pandas as pd
-                    if pd.isna(obj):
-                        return None
-                except ImportError:
-                    pass
-
-                # Convert pandas Series/DataFrame to dict/list
-                if hasattr(obj, 'to_dict'):
-                    return convert_to_serializable(obj.to_dict())
-                elif hasattr(obj, 'tolist'):
-                    return convert_to_serializable(obj.tolist())
-
-            # For any other object that might not be serializable, convert to string
-            try:
-                import json
-                json.dumps(obj)  # Test if it's JSON serializable
-                return obj
-            except (TypeError, OverflowError):
-                return str(obj)
-
-        # Clean the entire AI response for JSON serialization
-        clean_ai_response = convert_to_serializable(ai_response)
-
-        # Get usage info if available (set by decorator)
-        usage_info = getattr(g, '_anon_feature_usage', None)
-
-        # Prepare response data with explicit type conversions
-        response_data = {
-            "response": str(clean_ai_response.get('analysis', 'Sorry, I could not process your request.')),
-            "model": str(clean_ai_response.get('model', model)),
-            "stock_data": clean_ai_response.get('stock_data', {}),
-            "usage": usage_info
-        }
-
-        return jsonify(response_data), 200
-
-    except Exception as e:
-        logger.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
-        return jsonify({
-            "error": "An unexpected error occurred",
-            "details": str(e)
-        }), 500
-
-# NextGen AI Chat endpoint with multi-model orchestration
-@app.route('/api/nextgenchat', methods=['POST'])
-@validate_json_request
-@feature_limit('welth-ai-assistant')
-def nextgen_chat():
-    """
-    NextGen AI Chat endpoint with multi-model orchestration
-    Supports both authenticated users and anonymous sessions with trial limits
-    """
-    try:
-        data = request.get_json()
-        message = data.get('message', '').strip()
-        conversation_history = data.get('conversation_history', [])
-
-        if not message:
-            return jsonify({"error": "Message is required"}), 400
-
-        # Check if user is authenticated (decorator already handled trial limits)
-        user_id = None
-        is_authenticated = hasattr(g, 'current_user') and g.current_user is not None
-        if is_authenticated:
-            user_id = g.current_user.get('id') or g.current_user.get('email')
-            logger.info(f"NextGen Chat request from authenticated user: {user_id}")
-
-        # Process the query through NextGen AI Orchestrator
-        logger.info(f"Processing NextGen query: {message[:100]}...")
-
-        # Use async processing
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        try:
-            from services.nextgen_ai_service import get_nextgen_orchestrator
-            ai_response = loop.run_until_complete(
-                get_nextgen_orchestrator().process_query(message, conversation_history)
-            )
-        finally:
-            loop.close()
-
-        logger.info(f"NextGen AI response type: {ai_response.get('query_type')}, model: {ai_response.get('model_used')}")
-        logger.info(f"Analysis buttons: {ai_response.get('analysis_buttons')}")
-        
-        # Save chat history for authenticated users
-        if is_authenticated and user_id:
-            try:
-                # Save to nextgen_chat_sessions collection
-                from services.user_service import get_db_connection
-                db = get_db_connection()
-                nextgen_collection = db.nextgen_chat_sessions
-                
-                chat_entry = {
-                    "user_id": user_id,
-                    "message": message,
-                    "response": ai_response.get('response', ''),
-                    "query_type": ai_response.get('query_type', 'general'),
-                    "model_used": ai_response.get('model_used', 'unknown'),
-                    "confidence": ai_response.get('confidence', 0.0),
-                    "stock_data": ai_response.get('stock_data'),
-                    "sentiment": ai_response.get('sentiment'),
-                    "timestamp": datetime.utcnow(),
-                    "session_info": {
-                        "conversation_length": len(conversation_history) + 1
-                    }
-                }
-                
-                nextgen_collection.insert_one(chat_entry)
-                logger.info(f"Saved NextGen chat entry for user: {user_id}")
-                
-            except Exception as e:
-                logger.error(f"Failed to save NextGen chat history: {e}")
-                # Continue without failing the request
-        
-        # Get usage info from decorator (for anonymous users)
-        usage_info = getattr(g, '_anon_feature_usage', None)
-
-        # Prepare response
-        response_data = {
-            "response": ai_response.get('response', 'Sorry, I could not process your request.'),
-            "query_type": ai_response.get('query_type', 'general'),
-            "model_used": ai_response.get('model_used', 'unknown'),
-            "confidence": ai_response.get('confidence', 0.0),
-            "stock_data": ai_response.get('stock_data'),
-            "sentiment": ai_response.get('sentiment'),
-            "analysis_buttons": ai_response.get('analysis_buttons', {'show_buttons': False, 'suggested_tools': []}),
-            "requires_login": False
-        }
-
-        # Add usage info from decorator
-        if usage_info:
-            response_data["usage"] = usage_info
-
-        return jsonify(response_data), 200
-        
-    except Exception as e:
-        logger.error(f"Error in NextGen chat endpoint: {str(e)}", exc_info=True)
-        return jsonify({
-            "error": "An unexpected error occurred",
-            "details": str(e),
-            "model_used": "error"
-        }), 500
-
 
 # Get current anonymous usage for all features
 @app.route('/api/usage/anonymous', methods=['GET'])
@@ -3750,6 +3538,7 @@ def search_news():
         }), 500
 
 @app.route('/api/blogs', methods=['GET'])
+@app.route('/api/admin/blogs', methods=['GET'])
 def get_blogs():
     """Get all blog posts with pagination and filtering"""
     try:
@@ -3825,6 +3614,7 @@ def get_blog_by_slug(slug):
         return jsonify({"success": False, "message": f"Internal server error: {str(e)}"}), 500
 
 @app.route('/api/blogs/<post_id>', methods=['GET'])
+@app.route('/api/admin/blogs/<post_id>', methods=['GET'])
 def get_blog_post(post_id):
     """Get a specific blog post by ID"""
     try:
@@ -3948,6 +3738,7 @@ def create_news_post():
         }), 500
 
 @app.route('/api/blogs', methods=['POST'])
+@app.route('/api/admin/blogs', methods=['POST'])
 @jwt_required()
 def create_blog_post():
     """Create a new blog post (admin only)"""
@@ -4107,6 +3898,7 @@ def debug_blogs_test():
         }), 500
 
 @app.route('/api/blogs/<post_id>', methods=['PUT'])
+@app.route('/api/admin/blogs/<post_id>', methods=['PUT'])
 @jwt_required()
 def update_blog_post(post_id):
     """Update a blog post (admin only)"""
@@ -4153,6 +3945,7 @@ def update_blog_post(post_id):
         }), 500
 
 @app.route('/api/blogs/<post_id>', methods=['DELETE'])
+@app.route('/api/admin/blogs/<post_id>', methods=['DELETE'])
 @jwt_required()
 def delete_blog_post(post_id):
     """Delete a blog post (admin only)"""

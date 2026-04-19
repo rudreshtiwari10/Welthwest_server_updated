@@ -1,21 +1,18 @@
 """
-Finance AI Routes - Enhanced API endpoints for upgraded Wealth AI Assistant
+Finance AI Routes - API endpoints for Welth AI Assistant
 
-New Enhanced Endpoints:
-- POST /api/finance-ai/query - Main query endpoint (replaces basic chat)
+Endpoints:
+- POST /api/finance-ai/query - Main query endpoint
 - GET /api/finance-ai/indicators/<symbol> - Get technical indicators
 - POST /api/finance-ai/screener - Run stock screener
 - POST /api/finance-ai/backtest - Run strategy backtest
-- POST /api/finance-ai/upload-pdf - Upload PDF for RAG analysis
-- POST /api/finance-ai/doc-query - Query uploaded documents
 - GET /api/finance-ai/screens - Get available predefined screens
 """
 
 from flask import Blueprint, request, jsonify
 from functools import wraps
 import logging
-import os
-from werkzeug.utils import secure_filename
+from datetime import datetime
 
 # Import middleware
 from middleware.anon_limit import anon_or_auth_feature_limit
@@ -25,32 +22,12 @@ from middleware.anon_limit import anon_or_auth_feature_limit
 # simple_backtest_service, chart_service all import yfinance/pandas/numpy
 # and are only needed when the user accesses these specific features.
 
-# RAG service disabled - PDF document analysis not currently used
-class _DisabledRAG:
-    def is_available(self): return False
-rag_service = _DisabledRAG()
-def ingest_pdf(*a, **kw): return None
-def search_documents(*a, **kw): return []
-from datetime import datetime
-
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Create blueprint
 finance_ai_bp = Blueprint('finance_ai', __name__, url_prefix='/api/finance-ai')
-
-# Configuration
-UPLOAD_FOLDER = './uploaded_pdfs'
-ALLOWED_EXTENSIONS = {'pdf'}
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-
-def allowed_file(filename):
-    """Check if file extension is allowed"""
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 def validate_json_request(f):
@@ -117,8 +94,8 @@ def enhanced_query():
     except Exception as e:
         logger.error(f"Error in enhanced_query: {e}")
         return jsonify({
-            'error': str(e),
-            'message': 'An error occurred processing your query'
+            'error': 'query_failed',
+            'message': 'An error occurred processing your query. Please try again.'
         }), 500
 
 
@@ -167,7 +144,7 @@ def get_stock_indicators(symbol):
 
     except Exception as e:
         logger.error(f"Error in get_stock_indicators: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Unable to fetch indicators. Please check the symbol and try again.'}), 500
 
 
 @finance_ai_bp.route('/screener', methods=['POST'])
@@ -231,7 +208,7 @@ def run_screener():
 
     except Exception as e:
         logger.error(f"Error in run_screener: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Screener encountered an error. Please try again.'}), 500
 
 
 @finance_ai_bp.route('/screens', methods=['GET'])
@@ -256,7 +233,7 @@ def list_available_screens():
 
     except Exception as e:
         logger.error(f"Error in list_available_screens: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Unable to load available screens.'}), 500
 
 
 @finance_ai_bp.route('/backtest', methods=['POST'])
@@ -321,170 +298,26 @@ def run_strategy_backtest():
 
     except Exception as e:
         logger.error(f"Error in run_strategy_backtest: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@finance_ai_bp.route('/upload-pdf', methods=['POST'])
-def upload_pdf():
-    """
-    Upload a PDF for RAG analysis
-
-    Form data:
-    - file: PDF file
-    - company: Company name (optional)
-    - report_type: Type of report (optional)
-    - report_date: Report date (optional)
-
-    Response:
-    {
-        "success": true,
-        "doc_id": "abc123",
-        "num_chunks": 45,
-        "metadata": {...}
-    }
-    """
-    try:
-        # Check if RAG service is available
-        if not rag_service.is_available():
-            return jsonify({
-                'error': 'RAG service not available',
-                'message': 'Please install required dependencies: PyPDF2, sentence-transformers, chromadb',
-                'install_command': 'pip install PyPDF2 sentence-transformers chromadb'
-            }), 503
-
-        # Check if file is present
-        if 'file' not in request.files:
-            return jsonify({'error': 'No file provided'}), 400
-
-        file = request.files['file']
-
-        if file.filename == '':
-            return jsonify({'error': 'No file selected'}), 400
-
-        if not allowed_file(file.filename):
-            return jsonify({'error': 'Only PDF files are allowed'}), 400
-
-        # Save file
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        file.save(filepath)
-
-        # Prepare metadata
-        metadata = {
-            'company': request.form.get('company', ''),
-            'report_type': request.form.get('report_type', ''),
-            'report_date': request.form.get('report_date', '')
-        }
-
-        # Ingest document
-        result = ingest_pdf(filepath, metadata)
-
-        # Clean up file
-        os.remove(filepath)
-
-        if 'error' in result:
-            return jsonify(result), 500
-
-        return jsonify(result), 200
-
-    except Exception as e:
-        logger.error(f"Error in upload_pdf: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@finance_ai_bp.route('/doc-query', methods=['POST'])
-@validate_json_request
-def query_documents():
-    """
-    Query uploaded documents
-
-    Body:
-    {
-        "query": "What was the revenue growth?",
-        "top_k": 5,
-        "filter": {
-            "company": "Tesla"
-        }
-    }
-
-    Response:
-    {
-        "query": "What was the revenue growth?",
-        "results": [
-            {
-                "text": "...",
-                "metadata": {...},
-                "distance": 0.23
-            }
-        ]
-    }
-    """
-    try:
-        if not rag_service.is_available():
-            return jsonify({
-                'error': 'RAG service not available',
-                'message': 'Please install required dependencies'
-            }), 503
-
-        data = request.get_json()
-        query = data.get('query', '').strip()
-        top_k = data.get('top_k', 5)
-        filter_metadata = data.get('filter', None)
-
-        if not query:
-            return jsonify({'error': 'Query is required'}), 400
-
-        # Search documents
-        results = search_documents(query, top_k)
-
-        return jsonify({
-            'query': query,
-            'num_results': len(results),
-            'results': results
-        }), 200
-
-    except Exception as e:
-        logger.error(f"Error in query_documents: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Backtest failed. Please check your parameters and try again.'}), 500
 
 
 @finance_ai_bp.route('/status', methods=['GET'])
 def service_status():
-    """
-    Get status of all finance AI services
-
-    Response:
-    {
-        "orchestrator": "active",
-        "indicators": "active",
-        "screener": "active",
-        "backtest": "active",
-        "rag": "active" | "unavailable",
-        "charts": "active"
-    }
-    """
+    """Get status of all finance AI services"""
     try:
         status = {
             'orchestrator': 'active',
             'indicators': 'active',
             'screener': 'active',
             'backtest': 'active',
-            'rag': 'active' if rag_service.is_available() else 'unavailable',
             'charts': 'active',
             'timestamp': datetime.now().isoformat()
         }
-
-        if not rag_service.is_available():
-            status['rag_missing_dependencies'] = {
-                'pdf': not rag_service.is_available(),
-                'install_command': 'pip install PyPDF2 sentence-transformers chromadb'
-            }
-
         return jsonify(status), 200
 
     except Exception as e:
         logger.error(f"Error in service_status: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Service status check failed'}), 500
 
 
 # Helper to register blueprint with app

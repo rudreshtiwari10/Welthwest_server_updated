@@ -18,11 +18,13 @@ class NewsIntelligence:
         from models.market_article import MarketArticle
         from services.news_aggregator import NewsAggregator
         from services.article_writer import ArticleWriter
+        from services.image_service import ImageService
 
         self.raw_news = RawNews(db)
         self.market_article = MarketArticle(db)
         self.news_aggregator = NewsAggregator()
         self.writer = ArticleWriter()
+        self.image_service = ImageService()
 
     # ── Step 1: Ingest ─────────────────────────────────────────
 
@@ -152,6 +154,15 @@ class NewsIntelligence:
             if not article_data.get('title'):
                 logger.warning(f"Cluster {cluster_id}: No title generated, skipping")
                 return {'success': False, 'reason': 'no_title'}
+
+            # Source and upload article image
+            try:
+                image_url = self.image_service.get_article_image(cluster, article_data)
+                if image_url:
+                    article_data['image_url'] = image_url
+                    logger.info(f"Cluster {cluster_id}: Image sourced → {image_url[:80]}")
+            except Exception as e:
+                logger.warning(f"Cluster {cluster_id}: Image sourcing failed (non-fatal): {e}")
 
             # Save to database
             article = self.market_article.create(article_data)
