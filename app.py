@@ -3760,18 +3760,26 @@ def create_blog_post():
                 "message": "Request body is required"
             }), 400
         
-        required_fields = ['title', 'content', 'author']
+        required_fields = ['title', 'content']
         for field in required_fields:
             if not data.get(field):
                 return jsonify({
                     "success": False,
                     "message": f"{field} is required"
                 }), 400
-        
+
+        # Default author to the authenticated admin if client didn't send one
+        author = data.get('author')
+        if not author:
+            first = user_info.get('first_name') or ''
+            last = user_info.get('last_name') or ''
+            full_name = f"{first} {last}".strip()
+            author = full_name or user_info.get('username') or user_info.get('email') or 'Admin'
+
         result = news_service.create_blog_post(
             title=data['title'],
             content=data['content'],
-            author=data['author'],
+            author=author,
             category=data.get('category', 'Finance'),
             tags=data.get('tags', []),
             image_url=data.get('image_url'),
