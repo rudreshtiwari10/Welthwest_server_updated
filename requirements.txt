@@ -74,6 +74,7 @@ schedule==1.2.0
 
 # Utilities
 python-dotenv==1.0.0
+PyYAML==6.0.2
 cachetools==5.5.2
 cachelib==0.9.0
 limits==5.4.0
