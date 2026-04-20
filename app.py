@@ -3616,17 +3616,38 @@ def get_blog_by_slug(slug):
 @app.route('/api/blogs/<post_id>', methods=['GET'])
 @app.route('/api/admin/blogs/<post_id>', methods=['GET'])
 def get_blog_post(post_id):
-    """Get a specific blog post by ID"""
+    """Get a specific blog post by ID. Falls back to legacy 'blogs' collection."""
     try:
-        result = news_service.get_post_by_id(post_id, post_type="blog")
+        from bson.objectid import ObjectId
+        from bson.errors import InvalidId
+        try:
+            oid = ObjectId(post_id)
+        except (InvalidId, TypeError):
+            return jsonify({
+                "success": False,
+                "message": "Invalid blog id"
+            }), 400
 
-        if result['success']:
+        result = news_service.get_post_by_id(post_id, post_type="blog")
+        if result.get('success'):
             return jsonify(result), 200
-        else:
-            return jsonify(result), 404
+
+        legacy = news_service.db.blogs.find_one({"_id": oid})
+        if legacy:
+            legacy['_id'] = str(legacy['_id'])
+            for k in ('createdAt', 'updatedAt', 'publishedAt', 'created_at', 'updated_at', 'published_at'):
+                v = legacy.get(k)
+                if hasattr(v, 'isoformat'):
+                    legacy[k] = v.isoformat()
+            return jsonify({"success": True, "post": legacy, "blog": legacy}), 200
+
+        return jsonify({
+            "success": False,
+            "message": "Blog post not found"
+        }), 404
 
     except Exception as e:
-        logger.error(f"Error in get_blog_post endpoint: {str(e)}")
+        logger.error(f"Error in get_blog_post endpoint: {str(e)}", exc_info=True)
         return jsonify({
             "success": False,
             "message": f"Internal server error: {str(e)}"
@@ -3909,7 +3930,7 @@ def debug_blogs_test():
 @app.route('/api/admin/blogs/<post_id>', methods=['PUT'])
 @jwt_required()
 def update_blog_post(post_id):
-    """Update a blog post (admin only)"""
+    """Update a blog post (admin only). Falls back to legacy 'blogs' collection."""
     try:
         current_user_id = get_jwt_identity()
         user_info = _get_user_service().get_user_by_id(current_user_id)
@@ -3928,25 +3949,68 @@ def update_blog_post(post_id):
                 "message": "Request body is required"
             }), 400
 
-        result = news_service.update_blog_post(
-            post_id=post_id,
-            title=data.get('title'),
-            content=data.get('content'),
-            author=data.get('author'),
-            category=data.get('category'),
-            tags=data.get('tags'),
-            image_url=data.get('image_url'),
-            summary=data.get('summary'),
-            status=data.get('status')
-        )
+        from bson.objectid import ObjectId
+        from bson.errors import InvalidId
+        from datetime import datetime, timezone
+        try:
+            oid = ObjectId(post_id)
+        except (InvalidId, TypeError):
+            return jsonify({
+                "success": False,
+                "message": "Invalid blog id"
+            }), 400
 
-        if result['success']:
-            return jsonify(result), 200
-        else:
+        db = news_service.db
+        in_primary = db.blog_posts.find_one({"_id": oid}, {"_id": 1}) is not None
+
+        if in_primary:
+            result = news_service.update_blog_post(
+                post_id=post_id,
+                title=data.get('title'),
+                content=data.get('content'),
+                author=data.get('author'),
+                category=data.get('category'),
+                tags=data.get('tags'),
+                image_url=data.get('image_url'),
+                summary=data.get('summary'),
+                status=data.get('status')
+            )
+            if result.get('success'):
+                return jsonify(result), 200
             return jsonify(result), 500
 
+        if db.blogs.find_one({"_id": oid}, {"_id": 1}) is None:
+            return jsonify({
+                "success": False,
+                "message": "Blog post not found"
+            }), 404
+
+        update_fields = {"updatedAt": datetime.now(timezone.utc)}
+        for src, dst in (
+            ('title', 'title'), ('content', 'content'), ('author', 'author'),
+            ('category', 'category'), ('tags', 'tags'), ('summary', 'summary'),
+            ('status', 'status'), ('image_url', 'imageUrl'), ('imageUrl', 'imageUrl'),
+        ):
+            if src in data and data[src] is not None:
+                update_fields[dst] = data[src]
+
+        db.blogs.update_one({"_id": oid}, {"$set": update_fields})
+        updated = db.blogs.find_one({"_id": oid})
+        updated['_id'] = str(updated['_id'])
+        for k in ('createdAt', 'updatedAt', 'publishedAt'):
+            v = updated.get(k)
+            if hasattr(v, 'isoformat'):
+                updated[k] = v.isoformat()
+
+        logger.info(f"Blog updated (legacy) id={post_id} by admin={current_user_id}")
+        return jsonify({
+            "success": True,
+            "message": "Blog post updated successfully",
+            "blog": updated
+        }), 200
+
     except Exception as e:
-        logger.error(f"Error in update_blog_post endpoint: {str(e)}")
+        logger.error(f"Error in update_blog_post endpoint: {str(e)}", exc_info=True)
         return jsonify({
             "success": False,
             "message": f"Internal server error: {str(e)}"
@@ -3956,7 +4020,7 @@ def update_blog_post(post_id):
 @app.route('/api/admin/blogs/<post_id>', methods=['DELETE'])
 @jwt_required()
 def delete_blog_post(post_id):
-    """Delete a blog post (admin only)"""
+    """Delete a blog post (admin only). Falls back to legacy 'blogs' collection."""
     try:
         current_user_id = get_jwt_identity()
         user_info = _get_user_service().get_user_by_id(current_user_id)
@@ -3967,15 +4031,36 @@ def delete_blog_post(post_id):
                 "message": "Admin access required"
             }), 403
 
-        result = news_service.delete_post(post_id, post_type="blog")
+        from bson.objectid import ObjectId
+        from bson.errors import InvalidId
+        try:
+            oid = ObjectId(post_id)
+        except (InvalidId, TypeError):
+            return jsonify({
+                "success": False,
+                "message": "Invalid blog id"
+            }), 400
 
-        if result['success']:
-            return jsonify(result), 200
-        else:
-            return jsonify(result), 500
+        db = news_service.db
+        deleted = db.blog_posts.delete_one({"_id": oid}).deleted_count
+        if deleted == 0:
+            deleted = db.blogs.delete_one({"_id": oid}).deleted_count
+
+        if deleted == 0:
+            logger.warning(f"Delete blog: id {post_id} not found in blog_posts or blogs")
+            return jsonify({
+                "success": False,
+                "message": "Blog post not found"
+            }), 404
+
+        logger.info(f"Blog deleted id={post_id} by admin={current_user_id}")
+        return jsonify({
+            "success": True,
+            "message": "Blog post deleted successfully"
+        }), 200
 
     except Exception as e:
-        logger.error(f"Error in delete_blog_post endpoint: {str(e)}")
+        logger.error(f"Error in delete_blog_post endpoint: {str(e)}", exc_info=True)
         return jsonify({
             "success": False,
             "message": f"Internal server error: {str(e)}"
