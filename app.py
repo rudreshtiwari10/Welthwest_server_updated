@@ -4042,21 +4042,48 @@ def delete_blog_post(post_id):
             }), 400
 
         db = news_service.db
-        deleted = db.blog_posts.delete_one({"_id": oid}).deleted_count
-        if deleted == 0:
-            deleted = db.blogs.delete_one({"_id": oid}).deleted_count
+
+        # Try known collections first, then scan every collection as a last resort.
+        # Some deployments stored blogs in `blog_posts`, others in `blogs`, and
+        # if the code path that created it wrote elsewhere we want to find it.
+        candidate_collections = ['blog_posts', 'blogs']
+        deleted = 0
+        found_in = None
+        for coll_name in candidate_collections:
+            res = db[coll_name].delete_one({"_id": oid})
+            if res.deleted_count:
+                deleted = res.deleted_count
+                found_in = coll_name
+                break
 
         if deleted == 0:
-            logger.warning(f"Delete blog: id {post_id} not found in blog_posts or blogs")
+            for coll_name in db.list_collection_names():
+                if coll_name in candidate_collections:
+                    continue
+                if db[coll_name].find_one({"_id": oid}, {"_id": 1}):
+                    res = db[coll_name].delete_one({"_id": oid})
+                    if res.deleted_count:
+                        deleted = res.deleted_count
+                        found_in = coll_name
+                        break
+
+        if deleted == 0:
+            all_colls = db.list_collection_names()
+            logger.warning(
+                f"Delete blog: id {post_id} not found in any collection "
+                f"(db={db.name}, collections={all_colls})"
+            )
             return jsonify({
                 "success": False,
-                "message": "Blog post not found"
+                "message": "Blog post not found",
+                "debug": {"db": db.name, "collections": all_colls}
             }), 404
 
-        logger.info(f"Blog deleted id={post_id} by admin={current_user_id}")
+        logger.info(f"Blog deleted id={post_id} from {found_in} by admin={current_user_id}")
         return jsonify({
             "success": True,
-            "message": "Blog post deleted successfully"
+            "message": "Blog post deleted successfully",
+            "collection": found_in
         }), 200
 
     except Exception as e:
