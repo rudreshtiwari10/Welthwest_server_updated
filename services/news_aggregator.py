@@ -9,12 +9,16 @@ Supports multiple news sources:
 """
 
 import os
+import re
 import requests
 import feedparser
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from urllib.parse import quote_plus
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Match the first <img src="..."> in HTML (handles single/double quotes)
+_IMG_SRC_RE = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
 
 # In-memory cache with TTL
 class NewsCache:
@@ -150,6 +154,54 @@ class NewsAggregator:
             return []
 
     @staticmethod
+    def _extract_rss_image(entry) -> Optional[str]:
+        """Try every common RSS image location. Indian feeds vary wildly."""
+        # 1. media:content (Bloomberg, CNBC)
+        media_content = entry.get('media_content') or []
+        for m in media_content:
+            url = m.get('url')
+            if url:
+                return url
+
+        # 2. media:thumbnail (LiveMint, some ET feeds)
+        media_thumb = entry.get('media_thumbnail') or []
+        for m in media_thumb:
+            url = m.get('url')
+            if url:
+                return url
+
+        # 3. enclosures (MoneyControl, NSE)
+        for enc in entry.get('enclosures', []) or []:
+            url = enc.get('url') or enc.get('href')
+            etype = (enc.get('type') or '').lower()
+            if url and (etype.startswith('image/') or not etype):
+                return url
+
+        # 4. links with rel=enclosure
+        for link in entry.get('links', []) or []:
+            if link.get('rel') == 'enclosure':
+                url = link.get('href')
+                etype = (link.get('type') or '').lower()
+                if url and (etype.startswith('image/') or not etype):
+                    return url
+
+        # 5. inline <img> in summary/description/content (ET, MoneyControl fallback)
+        html_blobs = [
+            entry.get('summary', ''),
+            entry.get('description', ''),
+        ]
+        for c in entry.get('content', []) or []:
+            html_blobs.append(c.get('value', ''))
+        for blob in html_blobs:
+            if not blob:
+                continue
+            m = _IMG_SRC_RE.search(blob)
+            if m:
+                return m.group(1)
+
+        return None
+
+    @staticmethod
     def fetch_from_rss(feed_url: str, category: str) -> List[Dict]:
         """Fetch news from RSS feed with timeout"""
         try:
@@ -167,7 +219,7 @@ class NewsAggregator:
                             'summary': entry.get('summary', entry.get('description', '')),
                             'link': entry.get('link'),
                             'published': entry.get('published', ''),
-                            'image': entry.get('media_content', [{}])[0].get('url') if entry.get('media_content') else None
+                            'image': NewsAggregator._extract_rss_image(entry),
                         },
                         source_name,
                         category
