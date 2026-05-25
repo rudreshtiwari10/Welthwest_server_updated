@@ -139,6 +139,34 @@ class MarketDataProvider(ABC):
         """Return dividends, splits, bonuses, etc."""
         raise NotImplementedError(f"{self.name} does not support corporate actions")
 
+    def get_financials(
+        self,
+        symbol: str,
+        statement: str = "income",
+        period: str = "quarterly",
+        num_periods: int = 4,
+    ) -> dict:
+        """
+        Return financial-statement line items for a symbol.
+
+        statement: "income" | "balance" | "cashflow"
+        period:    "quarterly" | "annual"
+        num_periods: how many recent periods to include (default 4)
+
+        Returns a dict:
+            {
+              "symbol": "...",
+              "statement": "income",
+              "period": "quarterly",
+              "currency": "INR",
+              "periods": [
+                  {"period_end": "YYYY-MM-DD", "line_items": {...}},
+                  ...
+              ],
+            }
+        """
+        raise NotImplementedError(f"{self.name} does not support financial statements")
+
     def health_check(self) -> bool:
         """Return True if the provider is currently reachable."""
         try:

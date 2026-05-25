@@ -100,6 +100,7 @@ def chat():
         result = agent.run(
             message,
             conversation_history=conversation_history,
+            user_id=user_id,
         )
     except Exception as e:
         logger.error("Agent error: %s", e)
@@ -161,6 +162,7 @@ def chat():
         "disclaimer": result.disclaimer,
         "conversation_id": conversation_id,
         "tools_used": result.tool_calls_made,
+        "display_payloads": result.display_payloads,
         "tokens": {"in": result.tokens_in, "out": result.tokens_out},
         "elapsed_ms": result.elapsed_ms,
         "iterations": result.iterations,
@@ -261,6 +263,164 @@ def add_feedback(conversation_id: str):
         conversation_id, message_index, user_id, rating, comment
     )
     return jsonify({"feedback_id": feedback_id}), 201
+
+
+# ---- Personal money context (profile / goals / portfolio) -------------------
+
+
+def _require_user():
+    """Resolve user_id from JWT or return a 401 response."""
+    uid = _get_user_id()
+    if not uid:
+        return None, (jsonify({"error": "authentication_required"}), 401)
+    return uid, None
+
+
+@welth_bp.route("/me/profile", methods=["GET"])
+def me_profile_get():
+    user_id, err = _require_user()
+    if err:
+        return err
+    from services.user_context_service import get_profile
+    return jsonify({"profile": get_profile(user_id)})
+
+
+@welth_bp.route("/me/profile", methods=["PUT"])
+def me_profile_put():
+    user_id, err = _require_user()
+    if err:
+        return err
+    from services.user_context_service import upsert_profile
+    payload = request.get_json(silent=True) or {}
+    try:
+        saved = upsert_profile(user_id, payload)
+        return jsonify({"profile": saved})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@welth_bp.route("/me/goals", methods=["GET"])
+def me_goals_get():
+    user_id, err = _require_user()
+    if err:
+        return err
+    from services.user_context_service import get_goals
+    return jsonify({"goals": get_goals(user_id)})
+
+
+@welth_bp.route("/me/goals", methods=["POST"])
+def me_goals_add():
+    user_id, err = _require_user()
+    if err:
+        return err
+    from services.user_context_service import add_goal
+    payload = request.get_json(silent=True) or {}
+    try:
+        goal = add_goal(user_id, payload)
+        return jsonify({"goal": goal}), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@welth_bp.route("/me/goals/<goal_id>", methods=["PUT"])
+def me_goals_update(goal_id: str):
+    user_id, err = _require_user()
+    if err:
+        return err
+    from services.user_context_service import update_goal
+    payload = request.get_json(silent=True) or {}
+    if update_goal(user_id, goal_id, payload):
+        return jsonify({"ok": True})
+    return jsonify({"error": "goal_not_found"}), 404
+
+
+@welth_bp.route("/me/goals/<goal_id>", methods=["DELETE"])
+def me_goals_delete(goal_id: str):
+    user_id, err = _require_user()
+    if err:
+        return err
+    from services.user_context_service import delete_goal
+    if delete_goal(user_id, goal_id):
+        return jsonify({"ok": True})
+    return jsonify({"error": "goal_not_found"}), 404
+
+
+@welth_bp.route("/me/portfolio", methods=["GET"])
+def me_portfolio_get():
+    user_id, err = _require_user()
+    if err:
+        return err
+    from services.user_context_service import get_portfolio
+    return jsonify({"portfolio": get_portfolio(user_id)})
+
+
+@welth_bp.route("/me/portfolio", methods=["PUT"])
+def me_portfolio_put():
+    user_id, err = _require_user()
+    if err:
+        return err
+    from services.user_context_service import replace_portfolio
+    payload = request.get_json(silent=True) or {}
+    holdings = payload.get("holdings") if isinstance(payload, dict) else payload
+    try:
+        saved = replace_portfolio(user_id, holdings or [])
+        return jsonify({"portfolio": saved})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+# ---- Document upload / parse ------------------------------------------------
+
+
+@welth_bp.route("/me/documents", methods=["POST"])
+def me_documents_upload():
+    """Multipart upload: form fields `file` (the PDF) and `document_type`."""
+    user_id, err = _require_user()
+    if err:
+        return err
+    from services.document_service import parse_and_store, SUPPORTED_TYPES
+
+    if "file" not in request.files:
+        return jsonify({"error": "missing file"}), 400
+    f = request.files["file"]
+    document_type = (request.form.get("document_type") or "").strip().lower()
+    if document_type not in SUPPORTED_TYPES:
+        return jsonify({"error": f"document_type must be one of {SUPPORTED_TYPES}"}), 400
+
+    try:
+        file_bytes = f.read()
+        doc = parse_and_store(user_id, document_type, f.filename or "uploaded.pdf", file_bytes)
+        # ensure datetime is JSON-serialisable
+        if hasattr(doc.get("uploaded_at"), "isoformat"):
+            doc["uploaded_at"] = doc["uploaded_at"].isoformat()
+        return jsonify({"document": doc}), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error("document upload failed: %s", e)
+        return jsonify({"error": "Upload failed. Please try again."}), 500
+
+
+@welth_bp.route("/me/documents", methods=["GET"])
+def me_documents_list():
+    user_id, err = _require_user()
+    if err:
+        return err
+    from services.document_service import list_documents
+    document_type = (request.args.get("type") or "").strip().lower() or None
+    docs = list_documents(user_id, document_type=document_type, limit=50)
+    return jsonify({"documents": docs})
+
+
+@welth_bp.route("/me/documents/<document_id>", methods=["DELETE"])
+def me_documents_delete(document_id: str):
+    user_id, err = _require_user()
+    if err:
+        return err
+    from services.document_service import delete_document
+    if delete_document(user_id, document_id):
+        return jsonify({"ok": True})
+    return jsonify({"error": "document_not_found"}), 404
 
 
 # ---- Health check -----------------------------------------------------------

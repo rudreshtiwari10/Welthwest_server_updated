@@ -71,6 +71,83 @@ def get_tool_registry() -> ToolRegistry:
     from agent.tools.history import GetPriceHistoryTool
     from agent.tools.indicators import ComputeIndicatorTool
     from agent.tools.fundamentals import GetFundamentalsTool
+    from agent.tools.financials import GetFinancialsTool
+    from agent.tools.news import GetMarketNewsTool, GetCompanyNewsTool, FindNewsTool
+    from agent.tools.loans import ComputeEmiTool, ComputeLoanAmortizationTool
+    from agent.tools.investments import ComputeSipReturnTool, ComputeFdMaturityTool
+    from agent.tools.tax import CompareTaxRegimesTool, ComputeCapitalGainsTaxTool
+    from agent.tools.user_context import (
+        GetUserProfileTool,
+        GetUserGoalsTool,
+        GetUserPortfolioTool,
+        AnalyzeUserPortfolioTool,
+    )
+    from agent.tools.mutual_funds import GetMfDataTool, CompareMfTool, ScreenMfTool
+    from agent.tools.macro import (
+        GetMacroIndicatorTool,
+        GetForexRateTool,
+        GetCommodityPriceTool,
+        GetSectorPerformanceTool,
+    )
+    from agent.tools.derivatives import ComputeOptionsGreeksTool, ComputeOptionsPayoffTool
+    from agent.tools.bonds import ComputeBondPricingTool, ComputeBondDurationTool
+    from agent.tools.fixed_income import (
+        ComputeRdMaturityTool,
+        ComputePpfCorpusTool,
+        ComputeNpsCorpusTool,
+        ComputeSukanyaSamriddhiTool,
+        ComputeScssReturnsTool,
+        ComputeLumpsumReturnTool,
+        ComputeSwpSimulationTool,
+    )
+    from agent.tools.tax_extras import (
+        ComputeIncomeTaxTool,
+        ComputeAdvanceTaxTool,
+        ComputeHraExemptionTool,
+        ComputeGstTool,
+        Compute80cOptimizerTool,
+    )
+    from agent.tools.insurance import (
+        ComputeTermCoverNeedTool,
+        ComputeHealthCoverNeedTool,
+        ComputeEndowmentIrrTool,
+    )
+    from agent.tools.planning import (
+        ComputeEmergencyFundNeedTool,
+        ComputeRetirementCorpusTool,
+        ComputeEducationCorpusTool,
+        ComputeGoalRequiredSipTool,
+        ComputeFireNumberTool,
+        ComputeInflationAdjustedTool,
+        OptimizeAssetAllocationTool,
+    )
+    from agent.tools.loans_extras import (
+        ComputeLoanEligibilityTool,
+        ComparePrepayVsInvestTool,
+        CompareLoanOffersTool,
+        ComputeCreditScoreImpactTool,
+    )
+    from agent.tools.user_context_extras import (
+        ComputePortfolioXirrTool,
+        SimulatePortfolioChangeTool,
+        TrackGoalProgressTool,
+    )
+    from agent.tools.equity_extras import (
+        GetDividendHistoryTool,
+        GetCorporateActionsTool,
+        GetEarningsCalendarTool,
+    )
+    from agent.tools.derivatives_extras import (
+        SuggestOptionsStrategyTool,
+        ComputeFuturesMarginTool,
+        ComputePurchasingPowerTool,
+    )
+    from agent.tools.documents import (
+        ParseForm16Tool,
+        ParseSalarySlipTool,
+        ParseMfCgStatementTool,
+        ParseLoanDocumentTool,
+    )
     from agent.tools.resolve_symbol import ResolveSymbolTool
     from agent.tools.explain_concept import ExplainConceptTool
     from agent.tools.index import GetIndexQuoteTool
@@ -81,6 +158,70 @@ def get_tool_registry() -> ToolRegistry:
         GetPriceHistoryTool,
         ComputeIndicatorTool,
         GetFundamentalsTool,
+        GetFinancialsTool,
+        GetMarketNewsTool,
+        GetCompanyNewsTool,
+        FindNewsTool,
+        ComputeEmiTool,
+        ComputeLoanAmortizationTool,
+        ComputeSipReturnTool,
+        ComputeFdMaturityTool,
+        CompareTaxRegimesTool,
+        ComputeCapitalGainsTaxTool,
+        GetUserProfileTool,
+        GetUserGoalsTool,
+        GetUserPortfolioTool,
+        AnalyzeUserPortfolioTool,
+        GetMfDataTool,
+        CompareMfTool,
+        ScreenMfTool,
+        GetMacroIndicatorTool,
+        GetForexRateTool,
+        GetCommodityPriceTool,
+        GetSectorPerformanceTool,
+        ComputeOptionsGreeksTool,
+        ComputeOptionsPayoffTool,
+        ComputeBondPricingTool,
+        ComputeBondDurationTool,
+        ComputeRdMaturityTool,
+        ComputePpfCorpusTool,
+        ComputeNpsCorpusTool,
+        ComputeSukanyaSamriddhiTool,
+        ComputeScssReturnsTool,
+        ComputeLumpsumReturnTool,
+        ComputeSwpSimulationTool,
+        ComputeIncomeTaxTool,
+        ComputeAdvanceTaxTool,
+        ComputeHraExemptionTool,
+        ComputeGstTool,
+        Compute80cOptimizerTool,
+        ComputeTermCoverNeedTool,
+        ComputeHealthCoverNeedTool,
+        ComputeEndowmentIrrTool,
+        ComputeEmergencyFundNeedTool,
+        ComputeRetirementCorpusTool,
+        ComputeEducationCorpusTool,
+        ComputeGoalRequiredSipTool,
+        ComputeFireNumberTool,
+        ComputeInflationAdjustedTool,
+        OptimizeAssetAllocationTool,
+        ComputeLoanEligibilityTool,
+        ComparePrepayVsInvestTool,
+        CompareLoanOffersTool,
+        ComputeCreditScoreImpactTool,
+        ComputePortfolioXirrTool,
+        SimulatePortfolioChangeTool,
+        TrackGoalProgressTool,
+        GetDividendHistoryTool,
+        GetCorporateActionsTool,
+        GetEarningsCalendarTool,
+        SuggestOptionsStrategyTool,
+        ComputeFuturesMarginTool,
+        ComputePurchasingPowerTool,
+        ParseForm16Tool,
+        ParseSalarySlipTool,
+        ParseMfCgStatementTool,
+        ParseLoanDocumentTool,
         ResolveSymbolTool,
         ExplainConceptTool,
         GetIndexQuoteTool,

@@ -39,11 +39,48 @@ class AgentResponse:
     content: str
     disclaimer: str = DISCLAIMER
     tool_calls_made: list[dict] = field(default_factory=list)
+    # Structured data the frontend will render as bespoke cards alongside the
+    # markdown text — news lists, feature suggestions, calculator outputs, etc.
+    # Each entry: {kind: <display_hint>, tool: <tool_name>, data: <tool_result.data>}
+    display_payloads: list[dict] = field(default_factory=list)
     tokens_in: int = 0
     tokens_out: int = 0
     iterations: int = 0
     elapsed_ms: int = 0
     error: Optional[str] = None
+
+
+# display_hint values the frontend has bespoke card renderers for.
+# Other hints (e.g., "calculator_card") are fine to surface too — the frontend
+# falls back to the markdown table rendering if no bespoke component exists.
+_SURFACED_HINTS = {
+    "news_list",
+    "feature_suggestion",
+    "mf_card",
+    "mf_comparison",
+    "mf_picker",
+    "mf_list",
+    "calculator_card",
+    "financials_table",
+    "macro_card",
+    "forex_card",
+    "commodity_card",
+    "sector_heatmap",
+    "strategy_card",
+    "portfolio_simulation",
+    "goal_tracker",
+    "dividend_history",
+    "corporate_actions",
+    "earnings_calendar",
+    "document_form16",
+    "document_salary_slip",
+    "document_mf_cg_statement",
+    "document_loan_document",
+    "profile_card",
+    "goals_list",
+    "portfolio_table",
+    "portfolio_analysis",
+}
 
 
 class WelthAgent:
@@ -71,6 +108,7 @@ class WelthAgent:
         *,
         conversation_history: Optional[list[dict]] = None,
         prefer_model: str = "auto",
+        user_id: Optional[str] = None,
     ) -> AgentResponse:
         """
         Run the agent loop for a single user query.
@@ -88,6 +126,10 @@ class WelthAgent:
         total_tokens_in = 0
         total_tokens_out = 0
         tool_calls_log: list[dict] = []
+        display_payloads: list[dict] = []
+        # Per-request context handed to every tool — kept separate from
+        # LLM-provided arguments via the underscore prefix.
+        self._request_ctx = {"user_id": user_id}
 
         # ---- 0. Input validation --------------------------------------------
         conv_len = len(conversation_history) if conversation_history else 0
@@ -157,6 +199,15 @@ class WelthAgent:
                         "success": result.success,
                     })
 
+                    # Collect display payloads for tool results the frontend
+                    # has bespoke renderers for.
+                    if result.success and result.display_hint in _SURFACED_HINTS:
+                        display_payloads.append({
+                            "kind": result.display_hint,
+                            "tool": tc.name,
+                            "data": result.data,
+                        })
+
                     # Append tool result as a message
                     messages.append(Message(
                         role="tool",
@@ -190,6 +241,7 @@ class WelthAgent:
             return AgentResponse(
                 content=content,
                 tool_calls_made=tool_calls_log,
+                display_payloads=display_payloads,
                 tokens_in=total_tokens_in,
                 tokens_out=total_tokens_out,
                 iterations=iteration,
@@ -201,6 +253,7 @@ class WelthAgent:
         return AgentResponse(
             content="I've been working on this but couldn't complete the analysis. Could you try a more specific question?",
             tool_calls_made=tool_calls_log,
+            display_payloads=display_payloads,
             tokens_in=total_tokens_in,
             tokens_out=total_tokens_out,
             iterations=MAX_ITERATIONS,
@@ -238,9 +291,14 @@ class WelthAgent:
         return messages
 
     def _execute_tool(self, tc: ToolCall) -> ToolResult:
-        """Execute a single tool call safely."""
+        """Execute a single tool call safely. Injects per-request context (e.g.,
+        user_id) so personalization tools can scope to the right user without
+        the LLM having to pass it explicitly."""
         try:
-            return self._tools.execute(tc.name, **tc.arguments)
+            ctx = getattr(self, "_request_ctx", {}) or {}
+            args = dict(tc.arguments or {})
+            args["_ctx"] = ctx
+            return self._tools.execute(tc.name, **args)
         except Exception as e:
             logger.error("Tool %s execution error: %s", tc.name, e)
             return ToolResult(success=False, error="Tool execution failed")

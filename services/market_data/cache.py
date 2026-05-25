@@ -47,6 +47,7 @@ TTL_FUNDAMENTALS = 60 * 60 * 24
 TTL_SYMBOL_SEARCH = 60 * 60 * 24 * 7
 TTL_INDEX_QUOTE = 30
 TTL_CORP_ACTIONS = 60 * 60 * 24
+TTL_FINANCIALS = 60 * 60 * 24
 
 
 # ---- Lazy Redis client (mirrors services/usage_service.py) -----------------
@@ -238,6 +239,20 @@ class CachedMarketDataProvider(MarketDataProvider):
     def get_corporate_actions(self, symbol: str) -> list[dict]:
         return self._cached_call(
             "get_corporate_actions", TTL_CORP_ACTIONS, (symbol,), {}
+        )
+
+    def get_financials(
+        self,
+        symbol: str,
+        statement: str = "income",
+        period: str = "quarterly",
+        num_periods: int = 4,
+    ) -> dict:
+        return self._cached_call(
+            "get_financials",
+            TTL_FINANCIALS,
+            (symbol,),
+            {"statement": statement, "period": period, "num_periods": num_periods},
         )
 
     def health_check(self) -> bool:

@@ -173,13 +173,23 @@ def create_app():
         # Skip validation for GET requests and health checks
         if request.method == 'GET' or request.path in ['/', '/health']:
             return
-            
-        # Check for binary content early
+
+        # Multipart uploads are legitimately binary (PDFs, images) — the
+        # Content-Type header announces this, and the route handler is
+        # responsible for parsing the multipart payload. Don't apply the
+        # binary-content heuristic here; it would falsely reject every file upload.
+        content_type = (request.content_type or '').lower()
+        if content_type.startswith('multipart/'):
+            logger.info(f"Multipart upload: {request.method} {request.path} from {request.remote_addr} ({request.content_length} bytes)")
+            return
+
+        # Check for binary content early — guards JSON / text endpoints against
+        # SSL probes and adversarial binary payloads.
         raw_data = request.get_data()
         if is_binary_content(raw_data):
             logger.warning(f"Rejected binary request from {request.remote_addr} to {request.path}")
             return jsonify({"error": "Binary/malformed request rejected"}), 400
-            
+
         # Log request info for non-binary requests
         logger.info(f"Request: {request.method} {request.path} from {request.remote_addr}")
         if request.content_length:

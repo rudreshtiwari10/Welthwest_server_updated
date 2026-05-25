@@ -2,89 +2,315 @@
 # Single source of truth for all platform features the agent can recommend.
 # To add/remove a feature: edit this file, no code changes needed.
 # Features with enabled: false will not be promoted.
+#
+# Field guide for matching:
+#   trigger_intents — short snake_case intents the matcher uses (each gets a substring + token-overlap score)
+#   keywords        — broad vocabulary that should pull this feature in (substring matched against the query)
+#   use_cases       — concrete user-question examples the matcher token-overlaps against; richest signal
+#   tagline         — one-line value prop, surfaced on the card if the front-end wants it
+#   plan_tier       — FREE / PREMIUM / PRO — shown as a chip on the card
 
 features:
   - key: stock_page
-    name: "Stock Details"
-    description: "Deep-dive analytics on any NSE/BSE stock — live prices, charts, fundamentals, technicals"
-    url_template: "/stock/{symbol}"
+    name: "Stock Detail Page"
+    tagline: "Everything on one stock — price, chart, ratios, technicals, fundamentals."
+    description: >-
+      A single page that pulls together everything WelthWest knows about a specific Indian stock:
+      live NSE / BSE price, intraday and multi-timeframe charts, full fundamental ratios (P/E,
+      P/B, ROE, ROCE, market cap, debt/equity, dividend yield, sector / industry), technical
+      indicators (RSI, MACD, SMA, EMA, Bollinger Bands, ATR), recent news on the company, and a
+      compact financials summary. The fastest way to research one ticker end-to-end.
+    url_template: "/stock?symbol={symbol}"
     deep_link_params: ["symbol"]
+    keywords:
+      - chart
+      - charts
+      - price
+      - prices
+      - quote
+      - rsi
+      - macd
+      - moving average
+      - bollinger
+      - ratios
+      - p/e
+      - pe ratio
+      - fundamentals
+      - technicals
+      - technical analysis
+      - stock
+      - ticker
+      - deep dive
+      - analyze
+      - analyse
+      - stock page
     trigger_intents:
       - stock_lookup
       - price_query
-      - chart
+      - chart_query
       - fundamentals_query
       - deep_dive
-      - stock_details
       - technical_analysis
+      - stock_details
+    use_cases:
+      - "Show me the chart of RELIANCE"
+      - "What's the P/E of HDFCBANK"
+      - "Analyze TCS in detail"
+      - "Pull up the RSI and MACD for INFY"
+      - "Give me a full breakdown on Bajaj Finance"
+      - "I want to research a specific stock"
     plan_tier: FREE
     enabled: true
 
   - key: ai_screener
     name: "AI Screener"
-    description: "Find stocks matching your criteria using custom filters and rules"
+    tagline: "Find Indian stocks matching any rule you can describe."
+    description: >-
+      The AI Screener lets you express a stock-discovery query in plain English and translates
+      it into a filter run across NSE / BSE. Common screens: oversold stocks (RSI < 30),
+      breakouts above 50-day SMA, low-P/E + high-ROE value plays, dividend-yield stocks,
+      momentum stocks, sector-specific screens, fundamentally strong large caps. Built-in
+      templates plus custom rule construction. The right tool whenever the user wants to FIND
+      stocks rather than analyse one they already know.
     url_template: "/ai-screener"
     deep_link_params: []
+    keywords:
+      - screen
+      - screener
+      - find stocks
+      - search stocks
+      - filter stocks
+      - scan stocks
+      - oversold
+      - overbought
+      - momentum
+      - breakout
+      - undervalued
+      - cheap stocks
+      - high roe
+      - low pe
+      - dividend stocks
+      - large cap
+      - mid cap
+      - small cap
+      - sector
+      - shortlist
+      - discover stocks
     trigger_intents:
       - screener_query
       - stock_discovery
       - find_stocks
       - filter_stocks
+      - scan_stocks
+      - shortlist_stocks
+    use_cases:
+      - "Find me oversold large-cap stocks"
+      - "Show stocks with PE under 20 and ROE above 18"
+      - "Which IT stocks are breaking out"
+      - "Screen for high dividend yield stocks"
+      - "I want to discover momentum stocks"
+      - "List undervalued banking stocks"
+      - "Find stocks that crossed 50-day SMA"
+    plan_tier: FREE
+    enabled: true
+
+  - key: backtest
+    name: "Strategy Backtester (Beta)"
+    tagline: "Test any trading strategy on years of Indian market data."
+    description: >-
+      Backtest classic and custom strategies on historical NSE data. Supports SMA crossover,
+      RSI-based entries / exits, MACD signals, Bollinger Band breakouts, mean-reversion,
+      momentum strategies, and multi-leg rule combinations. Returns equity curve, total return,
+      win rate, number of trades, max drawdown, Sharpe ratio. Use to validate whether an idea
+      would have actually made money before risking capital. Beta — labelled as such on the UI.
+    url_template: "/backtest-beta"
+    deep_link_params: []
+    keywords:
+      - backtest
+      - back-test
+      - back test
+      - simulate
+      - historical performance
+      - strategy performance
+      - test strategy
+      - sma crossover
+      - rsi strategy
+      - macd strategy
+      - bollinger strategy
+      - win rate
+      - drawdown
+      - sharpe
+      - equity curve
+      - paper trade
+      - what if i had
+    trigger_intents:
+      - backtest
+      - strategy_test
+      - simulate_strategy
+      - historical_test
+      - validate_strategy
+    use_cases:
+      - "Backtest an SMA crossover on RELIANCE"
+      - "What would my returns be if I had used RSI entries on NIFTY"
+      - "Test a momentum strategy on the last 5 years"
+      - "Simulate a Bollinger breakout strategy"
+      - "Did mean reversion work on bank stocks"
+      - "Compare strategy A vs strategy B over historical data"
     plan_tier: FREE
     enabled: true
 
   - key: news
     name: "Market News"
-    description: "Latest market news, company updates, and sector developments"
-    url_template: "/news"
-    deep_link_params: ["topic", "symbol"]
+    tagline: "WelthWest's own newsroom — 2,500+ original financial articles."
+    description: >-
+      WelthWest publishes original financial news articles every day across Indian markets:
+      stock-specific developments, RBI / macro announcements, IPO updates, sector trends,
+      regulatory news, earnings coverage, corporate actions. The Market News page is the full
+      browsable archive. The assistant can also fetch and summarise specific articles in chat
+      — use this CTA when the user wants to keep reading or browse beyond what the chat showed.
+    # Newsroom is a separate Next.js app mounted on the WelthWest domain
+    url_template: "https://www.welthwest.com/news"
+    deep_link_params: []
+    keywords:
+      - news
+      - headlines
+      - article
+      - articles
+      - announcement
+      - announcements
+      - newsroom
+      - market update
+      - sector news
+      - earnings news
+      - ipo news
+      - rbi news
+      - regulatory
+      - macro news
+      - what happened
+      - latest
     trigger_intents:
       - news_query
       - sentiment_query
       - market_update
       - company_news
+      - sector_news
+      - browse_news
+    use_cases:
+      - "What's the latest news"
+      - "Show me today's market news"
+      - "Any RBI news"
+      - "News on RELIANCE"
+      - "Recent IPO news"
+      - "Browse all news articles"
+      - "Show me the news page"
     plan_tier: FREE
     enabled: true
 
   - key: blogs
     name: "WelthWest Blogs"
-    description: "Educational articles on investing, trading strategies, and financial concepts"
-    url_template: "/blogs"
+    tagline: "Long-form educational content on investing, trading and personal finance."
+    description: >-
+      Curated long-form blog posts on investing fundamentals, trading strategies, tax planning,
+      mutual-fund selection, retirement planning, behavioural finance, derivatives education,
+      Indian-market history, and step-by-step how-tos. Distinct from the news feed — these are
+      timeless explainer articles. Recommend whenever the user wants to learn a concept deeply
+      rather than get a current data point.
+    # Blogs are hosted on the same Next.js app mounted on the WelthWest domain
+    url_template: "https://www.welthwest.com/blogs"
     deep_link_params: ["q"]
+    keywords:
+      - blog
+      - blogs
+      - article
+      - learn
+      - learning
+      - tutorial
+      - guide
+      - explainer
+      - how to
+      - how do i
+      - beginner
+      - course
+      - education
+      - educational
+      - concepts
+      - lessons
+      - read more about
+      - deep dive concept
     trigger_intents:
       - education
-      - concept_explanation
+      - concept_deep_dive
       - learn_trading
+      - learn_investing
       - investment_strategy
+      - personal_finance_education
+    use_cases:
+      - "I want to learn options trading"
+      - "Explain mutual funds in detail"
+      - "Beginner's guide to investing"
+      - "How to read a balance sheet"
+      - "Tax-saving strategies for salaried"
+      - "Read more about technical analysis"
     plan_tier: FREE
     enabled: true
 
   - key: welth_assistant
     name: "WelthAI Assistant"
-    description: "Full-page research assistant with conversation history and advanced analysis"
+    tagline: "This page — the full money-OS chat experience."
+    description: >-
+      The full-page conversational research assistant (this very page). Use when suggesting the
+      user run a complex multi-step research workflow, save a conversation, or compose a longer
+      planning question. Rarely needed as a suggestion since the user is already here — only
+      include if explicitly relevant.
     url_template: "/welth-ai-assistant"
     deep_link_params: []
+    keywords:
+      - assistant
+      - chat
+      - conversation
+      - research workflow
     trigger_intents:
       - detailed_analysis
       - long_conversation
-      - research
+      - multi_step_research
+    use_cases:
+      - "Save this conversation"
+      - "Continue researching this in detail"
     plan_tier: FREE
-    enabled: true
+    enabled: false   # don't promote — user is already here
 
   - key: contact
-    name: "Contact Us"
-    description: "Get in touch with the WelthWest team for support or feedback"
+    name: "Contact Support"
+    tagline: "Reach the WelthWest team for help, bugs, or feedback."
+    description: >-
+      Reach the WelthWest team for support, bug reports, billing questions, or feature requests.
+      Recommend only when the user explicitly asks for support / help / wants to report a problem
+      / has a feedback or complaint — never as a general suggestion.
     url_template: "/contact"
     deep_link_params: []
+    keywords:
+      - support
+      - help
+      - bug
+      - report
+      - feedback
+      - complaint
+      - contact
+      - reach out
     trigger_intents:
       - support
       - feedback
-      - contact
-      - help
+      - report_bug
+      - contact_team
+    use_cases:
+      - "I want to report a bug"
+      - "How do I contact support"
+      - "Where do I send feedback"
     plan_tier: FREE
     enabled: true
 
-  # Disabled features — kept for registry completeness, never promoted
+  # ----- Disabled (kept for registry completeness) -----
+
   - key: market_regime
     name: "Market Regime Analysis"
     description: "ML-based market regime detection"
@@ -92,16 +318,5 @@ features:
     deep_link_params: []
     trigger_intents:
       - regime_analysis
-    plan_tier: PRO
-    enabled: false
-
-  - key: backtest
-    name: "Strategy Backtester"
-    description: "Backtest trading strategies on historical data"
-    url_template: "/backtest-beta"
-    deep_link_params: []
-    trigger_intents:
-      - backtest
-      - strategy_test
     plan_tier: PRO
     enabled: false

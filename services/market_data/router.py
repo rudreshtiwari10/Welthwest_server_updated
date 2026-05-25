@@ -107,5 +107,16 @@ class RoutedMarketDataProvider(MarketDataProvider):
     def get_corporate_actions(self, symbol: str) -> list[dict]:
         return self._try_chain("get_corporate_actions", symbol)
 
+    def get_financials(
+        self,
+        symbol: str,
+        statement: str = "income",
+        period: str = "quarterly",
+        num_periods: int = 4,
+    ) -> dict:
+        return self._try_chain(
+            "get_financials", symbol, statement, period, num_periods
+        )
+
     def health_check(self) -> bool:
         return any(p.health_check() for p in self._providers)
