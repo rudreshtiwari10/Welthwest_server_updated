@@ -93,15 +93,32 @@ class GeminiRotator:
             f"Rotating to key#{next_slot[0]} {next_slot[1]}"
         )
 
-    def post(self, payload: dict, action: str = 'generateContent', timeout: int = 60) -> dict:
+    def post(self, payload: dict, action: str = 'generateContent', timeout: int = 60, disable_thinking: bool = True) -> dict:
         """POST payload to Gemini, rotating across (key, model) slots on any
         failure. Returns the parsed JSON response dict from whichever slot
         succeeds. `action` lets callers hit non-generateContent endpoints
-        (e.g. 'predict' for Imagen)."""
+        (e.g. 'predict' for Imagen).
+
+        `disable_thinking` (default True): Gemini 2.5 models think by
+        default, and those thinking tokens count against maxOutputTokens —
+        with a modest token budget (e.g. structured JSON extraction calls)
+        this silently ate the entire budget on invisible reasoning and left
+        nothing for the actual output, causing finishReason=MAX_TOKENS with
+        no parseable content. This app's own routing already sends complex
+        reasoning to OpenRouter (see agent/llm/router.py) and uses Gemini
+        for fast/cheap calls, so thinking is off by default here; pass
+        False to opt back in for a specific call if ever needed.
+        """
         if not self.keys:
             raise GeminiExhaustedError(
                 "No Gemini API key configured (set GEMINI_API_KEY or GEMINI_API_KEYS)"
             )
+
+        if disable_thinking and action == 'generateContent':
+            payload = dict(payload)
+            gen_config = dict(payload.get('generationConfig', {}))
+            gen_config['thinkingConfig'] = {'thinkingBudget': 0}
+            payload['generationConfig'] = gen_config
 
         total_slots = len(self.keys) * len(self.models)
         attempts = 0
