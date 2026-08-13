@@ -12,12 +12,13 @@ import hashlib
 import requests
 from typing import Optional, List
 
+from services.gemini_client import GeminiRotator, GeminiExhaustedError
+
 logger = logging.getLogger(__name__)
 
 CLOUDINARY_CLOUD_NAME = os.getenv('CLOUDINARY_CLOUD_NAME', '')
 CLOUDINARY_API_KEY = os.getenv('CLOUDINARY_API_KEY', '')
 CLOUDINARY_API_SECRET = os.getenv('CLOUDINARY_API_SECRET', '')
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 
 
 class ImageService:
@@ -101,8 +102,8 @@ class ImageService:
     @staticmethod
     def generate_image_gemini(title: str, sector: str, sentiment: str) -> Optional[bytes]:
         """Generate an article banner image using Gemini's image generation"""
-        if not GEMINI_API_KEY:
-            logger.warning("GEMINI_API_KEY not set — skipping image generation")
+        if not GeminiRotator().keys:
+            logger.warning("No Gemini API key configured — skipping image generation")
             return None
 
         prompt = (
@@ -127,12 +128,8 @@ class ImageService:
 
     @staticmethod
     def _try_imagen3(prompt: str) -> Optional[bytes]:
-        """Try Google Imagen 3 model"""
+        """Try Google Imagen 3 model — rotates across all configured Gemini keys"""
         try:
-            url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"imagen-3.0-generate-002:predict?key={GEMINI_API_KEY}"
-            )
             payload = {
                 "instances": [{"prompt": prompt}],
                 "parameters": {
@@ -142,18 +139,18 @@ class ImageService:
                 },
             }
 
-            resp = requests.post(url, json=payload, timeout=30)
-            if resp.status_code != 200:
-                logger.info(f"Imagen 3 returned {resp.status_code}, skipping")
-                return None
+            rotator = GeminiRotator(models=['imagen-3.0-generate-002'])
+            data = rotator.post(payload, action='predict')
 
-            predictions = resp.json().get('predictions', [])
+            predictions = data.get('predictions', [])
             if predictions:
                 b64 = predictions[0].get('bytesBase64Encoded')
                 if b64:
                     logger.info("Generated image via Imagen 3")
                     return base64.b64decode(b64)
 
+        except GeminiExhaustedError as e:
+            logger.info(f"Imagen 3 exhausted across all keys, skipping: {e}")
         except Exception as e:
             logger.warning(f"Imagen 3 error: {e}")
 
@@ -161,12 +158,8 @@ class ImageService:
 
     @staticmethod
     def _try_gemini_flash_image(prompt: str) -> Optional[bytes]:
-        """Try Gemini Flash with image generation capability"""
+        """Try Gemini Flash with image generation capability — rotates across all configured Gemini keys"""
         try:
-            url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-2.0-flash-preview-image-generation:generateContent?key={GEMINI_API_KEY}"
-            )
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
@@ -174,12 +167,10 @@ class ImageService:
                 },
             }
 
-            resp = requests.post(url, json=payload, timeout=30)
-            if resp.status_code != 200:
-                logger.info(f"Gemini Flash image gen returned {resp.status_code}")
-                return None
+            rotator = GeminiRotator(models=['gemini-2.0-flash-preview-image-generation'])
+            data = rotator.post(payload)
 
-            candidates = resp.json().get('candidates', [])
+            candidates = data.get('candidates', [])
             if candidates:
                 parts = candidates[0].get('content', {}).get('parts', [])
                 for part in parts:
@@ -188,6 +179,8 @@ class ImageService:
                         logger.info("Generated image via Gemini Flash")
                         return base64.b64decode(inline['data'])
 
+        except GeminiExhaustedError as e:
+            logger.info(f"Gemini Flash image gen exhausted across all keys, skipping: {e}")
         except Exception as e:
             logger.warning(f"Gemini Flash image gen error: {e}")
 

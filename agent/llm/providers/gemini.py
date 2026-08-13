@@ -7,22 +7,19 @@ adds support for:
   - Tool/function calling (Gemini native)
   - Structured LLMResponse output
 
-Uses gemini-2.5-flash by default (fast, cheap, good for general responses).
+Key/model rotation goes through services.gemini_client.GeminiRotator (shared
+across every Gemini consumer in this app) rather than a single hardcoded
+key/model — see that module for GEMINI_API_KEYS config.
 """
 
-import json
 import logging
-import os
 import uuid
 from typing import Any, Optional
 
-import requests
-
 from agent.llm.base import LLMProvider, LLMResponse, Message, ToolCall
+from services.gemini_client import GeminiRotator, GeminiExhaustedError
 
 logger = logging.getLogger(__name__)
-
-_DEFAULT_MODEL = "gemini-2.5-flash"
 
 
 class GeminiProvider(LLMProvider):
@@ -30,9 +27,12 @@ class GeminiProvider(LLMProvider):
 
     name = "gemini"
 
-    def __init__(self, model: str = _DEFAULT_MODEL, api_key: Optional[str] = None):
-        self._model = model
-        self._api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
+    def __init__(self, model: Optional[str] = None, api_key: Optional[str] = None):
+        # Explicit model/key overrides still respected (e.g. tests), but by
+        # default this rotates across the full shared key/model pool.
+        models = [model] if model else None
+        keys = [api_key] if api_key else None
+        self._rotator = GeminiRotator(models=models, keys=keys)
 
     def chat(
         self,
@@ -42,14 +42,6 @@ class GeminiProvider(LLMProvider):
         temperature: float = 0.2,
         max_tokens: int = 2048,
     ) -> LLMResponse:
-        if not self._api_key:
-            raise RuntimeError("Gemini API key not configured")
-
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self._model}:generateContent?key={self._api_key}"
-        )
-
         # ---- Build contents array (Gemini format) --------------------------
         contents = _build_contents(messages)
         payload: dict[str, Any] = {
@@ -73,22 +65,15 @@ class GeminiProvider(LLMProvider):
                 "parts": [{"text": "\n\n".join(system_parts)}]
             }
 
-        # ---- Fire request ---------------------------------------------------
+        # ---- Fire request (rotates across key/model pool on failure) ------
         try:
-            resp = requests.post(url, json=payload, timeout=30)
-            resp.raise_for_status()
-            data = resp.json()
-        except requests.RequestException as e:
-            body = ""
-            if hasattr(e, "response") and e.response is not None:
-                try:
-                    body = e.response.text[:500]
-                except Exception:
-                    pass
-            logger.error("Gemini API request failed: %s | body: %s", e, body)
+            data = self._rotator.post(payload)
+        except GeminiExhaustedError as e:
+            logger.error("Gemini API exhausted across all keys/models: %s", e)
             raise RuntimeError("LLM request failed") from e
 
-        return _parse_response(data, self._model)
+        model_used = self._rotator.models[0] if len(self._rotator.models) == 1 else "gemini"
+        return _parse_response(data, model_used)
 
 
 # ---- Gemini format helpers --------------------------------------------------

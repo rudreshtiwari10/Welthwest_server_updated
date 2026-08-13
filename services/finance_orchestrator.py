@@ -56,8 +56,7 @@ class FinanceOrchestrator:
     }
 
     def __init__(self):
-        # Load API keys
-        self.gemini_api_key = os.environ.get('GEMINI_API_KEY', '')
+        # LLM calls go through services/llm_fallback.py (Gemini rotation -> OpenRouter fallback)
         # System prompts
         self.finance_system_prompt = """You are Welth, the in-house research assistant built by the WelthWest team — a platform specialising in Indian stock markets.
 
@@ -530,7 +529,10 @@ Handling data errors:
 
     def call_gemini(self, prompt: str, temperature: float = 0.2) -> str:
         """
-        Call Google Gemini API
+        Call Google Gemini API (rotates across all configured keys/models),
+        falling back to OpenRouter as a last resort if every one is exhausted.
+        Live chat response, not published content — a different model
+        answering is an acceptable trade for not hard-failing the user.
 
         Args:
             prompt: Full prompt including system message and context
@@ -539,34 +541,9 @@ Handling data errors:
         Returns:
             LLM response text
         """
-        if not self.gemini_api_key:
-            logger.error("LLM API key not configured")
-            return "I'm temporarily unable to process your request. Please try again shortly."
-
         try:
-            url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={self.gemini_api_key}"
-
-            payload = {
-                "contents": [{
-                    "parts": [{"text": prompt}]
-                }],
-                "generationConfig": {
-                    "temperature": temperature,
-                    "topK": 40,
-                    "topP": 0.95,
-                    "maxOutputTokens": 2048,
-                }
-            }
-
-            response = requests.post(url, json=payload, timeout=30)
-            response.raise_for_status()
-
-            data = response.json()
-            if 'candidates' in data and len(data['candidates']) > 0:
-                return data['candidates'][0]['content']['parts'][0]['text']
-            else:
-                return "Unable to generate response."
-
+            from services.llm_fallback import generate_text
+            return generate_text(prompt, max_tokens=2048, temperature=temperature)
         except Exception as e:
             logger.error(f"LLM API error: {e}")
             return "I'm sorry, I'm having trouble processing your request right now. Please try again in a moment."

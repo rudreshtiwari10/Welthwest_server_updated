@@ -5,8 +5,12 @@ Supports Gemini Flash (default) and Grok (via .env config)
 Config via .env:
   AI_ANALYSIS_PROVIDER=gemini   # gemini or grok
   AI_WRITING_PROVIDER=gemini    # gemini or grok
-  GEMINI_API_KEY=...
+  GEMINI_API_KEYS=key1,key2,... # preferred — comma-separated pool of keys
+  GEMINI_API_KEY=...            # fallback if GEMINI_API_KEYS not set (single key)
   GROK_API_KEY=...              # only needed if using grok
+
+Gemini key/model rotation lives in services/gemini_client.py (shared across
+every Gemini consumer in this app, not just this file).
 """
 
 import os
@@ -16,60 +20,21 @@ import time
 import logging
 import requests
 
+from services.gemini_client import GeminiRotator
+
 logger = logging.getLogger(__name__)
 
 
 class ArticleWriter:
-    # Gemini models to rotate through — each has its own free-tier quota
-    GEMINI_MODELS = [
-        'gemini-3-flash-preview',
-        'gemini-3.1-flash-lite-preview',
-        'gemini-2.5-flash-lite',
-        'gemini-2.5-flash',
-        'gemini-2.0-flash-lite',
-    ]
-
     def __init__(self):
         self.analysis_provider = os.getenv('AI_ANALYSIS_PROVIDER', 'gemini')
         self.writing_provider = os.getenv('AI_WRITING_PROVIDER', 'gemini')
-        self.gemini_key = os.getenv('GEMINI_API_KEY', '')
         self.grok_key = os.getenv('GROK_API_KEY', '')
-        # Track which models are exhausted and when to retry them
-        self._model_cooldowns = {}  # model_name -> datetime when it can be retried
-        self._current_model_idx = 0
+        self._gemini = GeminiRotator()
 
     # ── LLM Calls ──────────────────────────────────────────────
 
-    def _get_available_model(self) -> str:
-        """Get next available model, skipping ones in cooldown"""
-        now = time.time()
-        # First pass: find a model that's not in cooldown
-        for _ in range(len(self.GEMINI_MODELS)):
-            model = self.GEMINI_MODELS[self._current_model_idx]
-            cooldown_until = self._model_cooldowns.get(model, 0)
-            if now >= cooldown_until:
-                return model
-            # This model is still in cooldown, try next
-            self._current_model_idx = (self._current_model_idx + 1) % len(self.GEMINI_MODELS)
-
-        # All models in cooldown — find the one that expires soonest
-        soonest_model = min(self._model_cooldowns, key=self._model_cooldowns.get)
-        wait = self._model_cooldowns[soonest_model] - now
-        if wait > 0:
-            logger.info(f"All models in cooldown, waiting {wait:.0f}s for {soonest_model}")
-            time.sleep(wait)
-        return soonest_model
-
-    def _mark_model_exhausted(self, model: str):
-        """Put a model in cooldown for 15 minutes, rotate to next"""
-        self._model_cooldowns[model] = time.time() + 900  # 15 min cooldown
-        self._current_model_idx = (self.GEMINI_MODELS.index(model) + 1) % len(self.GEMINI_MODELS)
-        logger.warning(f"Model {model} exhausted, cooldown 15min. Rotating to {self.GEMINI_MODELS[self._current_model_idx]}")
-
     def call_gemini(self, prompt: str, max_tokens: int = 4000, temperature: float = 0.7) -> str:
-        if not self.gemini_key:
-            raise Exception("GEMINI_API_KEY not set")
-
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
@@ -77,36 +42,8 @@ class ArticleWriter:
                 "maxOutputTokens": max_tokens,
             },
         }
-
-        # Try all models via rotation
-        attempts = 0
-        max_attempts = len(self.GEMINI_MODELS) * 2  # Try each model up to twice
-
-        while attempts < max_attempts:
-            model = self._get_available_model()
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.gemini_key}"
-            attempts += 1
-
-            try:
-                response = requests.post(url, json=payload, timeout=60)
-                if response.status_code == 429:
-                    self._mark_model_exhausted(model)
-                    continue
-                response.raise_for_status()
-                data = response.json()
-                text = data['candidates'][0]['content']['parts'][0]['text']
-                logger.info(f"✓ {model} responded OK")
-                return text
-            except requests.exceptions.HTTPError as e:
-                logger.warning(f"✗ {model} HTTP error: {e}")
-                self._mark_model_exhausted(model)
-                continue
-            except Exception as e:
-                logger.warning(f"✗ {model} error: {e}")
-                self._mark_model_exhausted(model)
-                continue
-
-        raise Exception(f"All {len(self.GEMINI_MODELS)} Gemini models exhausted after {attempts} attempts")
+        data = self._gemini.post(payload)
+        return data['candidates'][0]['content']['parts'][0]['text']
 
     def call_grok(self, prompt: str, max_tokens: int = 4000, temperature: float = 0.7) -> str:
         if not self.grok_key:

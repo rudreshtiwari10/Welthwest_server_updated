@@ -177,7 +177,7 @@ def get_llm_router() -> LLMRouter:
     fast = None
     powerful = None
 
-    if os.environ.get("GEMINI_API_KEY"):
+    if os.environ.get("GEMINI_API_KEYS") or os.environ.get("GEMINI_API_KEY"):
         from agent.llm.providers.gemini import GeminiProvider
         fast = GeminiProvider()
 

@@ -83,7 +83,8 @@ class NextGenAIOrchestrator:
     def __init__(self):
         # Load API keys
         self.openrouter_api_key = os.environ.get('OPENROUTER_API_KEY', '')
-        self.gemini_api_key = os.environ.get('GEMINI_API_KEY', '')
+        from services.gemini_client import GeminiRotator
+        self._gemini = GeminiRotator()
         self.newsapi_key = os.environ.get('NEWSAPI_KEY', '')
         self.huggingface_token = os.environ.get('HUGGINGFACE_TOKEN', '')
 
@@ -93,7 +94,7 @@ class NextGenAIOrchestrator:
         # Track model availability
         self.available_models = {
             "openrouter": bool(self.openrouter_api_key),
-            "gemini": bool(self.gemini_api_key),
+            "gemini": bool(self._gemini.keys),
             "newsapi": bool(self.newsapi_key),
             "finbert": bool(self.huggingface_token),
             "yfinance": True
@@ -522,12 +523,10 @@ class NextGenAIOrchestrator:
     
     def call_gemini_api(self, prompt: str) -> str:
         """Call Gemini API as fallback"""
-        if not self.gemini_api_key:
+        if not self._gemini.keys:
             raise Exception("Gemini API key not available")
 
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={self.gemini_api_key}"
-
             payload = {
                 "contents": [{
                     "parts": [{
@@ -540,10 +539,7 @@ class NextGenAIOrchestrator:
                 }
             }
 
-            response = requests.post(url, json=payload, timeout=30)
-            response.raise_for_status()
-
-            data = response.json()
+            data = self._gemini.post(payload)
             raw_response = data['candidates'][0]['content']['parts'][0]['text']
 
             # Clean the response before returning
