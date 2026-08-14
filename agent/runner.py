@@ -30,7 +30,13 @@ from agent.tools.base import ToolResult
 logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 6
-WALL_CLOCK_TIMEOUT = 25  # seconds
+# Real successful completions routinely use 16-27s (tool-call turn + tool
+# execution + final synthesis turn, sometimes more for multi-tool
+# comparisons routed to the "powerful" provider) — 25s left near-zero
+# margin and was hard-timing-out legitimate in-progress queries, including
+# simple single-tool-call ones. 45s still fails fast on genuinely stuck
+# loops without punishing normal latency variance.
+WALL_CLOCK_TIMEOUT = 45  # seconds
 
 
 @dataclass
@@ -148,6 +154,7 @@ class WelthAgent:
         messages = self._build_messages(user_query, conversation_history)
 
         # ---- 2. Agent loop ---------------------------------------------------
+        synthesizer_guidance_sent = False
         for iteration in range(1, MAX_ITERATIONS + 1):
             elapsed = time.time() - start
             if elapsed > WALL_CLOCK_TIMEOUT:
@@ -218,6 +225,25 @@ class WelthAgent:
 
                 # If this wasn't the last iteration, add synthesizer guidance
                 if iteration < MAX_ITERATIONS:
+                    # SYNTHESIZER_PROMPT was previously imported but never
+                    # injected anywhere — the model had no explicit
+                    # instruction that the eventual tool-free turn is where
+                    # all user-facing substance belongs, so it would often
+                    # narrate helpfully alongside tool calls (silently
+                    # discarded — see 2a above, only the final tool-free
+                    # turn's content is ever returned to the user) and give
+                    # a thin "wrap-up" as the actual final answer. Inject it
+                    # once (not every iteration) — re-sending the same ~700
+                    # word block on every turn added real per-call latency
+                    # for no extra benefit once the model has already seen
+                    # it, and was partly responsible for several queries
+                    # timing out.
+                    if not synthesizer_guidance_sent:
+                        messages.append(Message(
+                            role="user",
+                            content=f"<synthesis_guidance>{SYNTHESIZER_PROMPT}</synthesis_guidance>",
+                        ))
+                        synthesizer_guidance_sent = True
                     # Continue loop — LLM will see tool results and either
                     # call more tools or generate a final response.
                     continue

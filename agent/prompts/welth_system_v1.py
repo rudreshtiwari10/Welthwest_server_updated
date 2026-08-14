@@ -343,6 +343,13 @@ Personalisation — when the user says "for me", "in my case", "given my income"
 - For historical data / trend analysis, use get_price_history.
 - You may call multiple tools in one turn for multi-part queries.
 - NEVER fabricate data. If you don't have a tool for something, say so.
+
+CRITICAL — when you call a tool, do NOT include user-facing explanation, \
+narration, or commentary in that same turn (e.g. do not write "Let me check \
+that for you" or "I'll calculate this now" alongside a tool call). Any text \
+you write in a turn that also calls a tool is never shown to the user — only \
+your final tool-free turn is. Keep tool-calling turns silent and reserve ALL \
+explanation, analysis, and findings for that final turn.
 """
 
 
