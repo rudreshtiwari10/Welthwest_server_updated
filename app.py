@@ -27,6 +27,7 @@ from routes.support import support_bp
 from routes.ai_screener_routes import ai_screener_bp
 from routes.market_routes import market_bp
 from routes.welth_routes import welth_bp
+from routes.backtest_india_routes import backtest_india_bp
 from middleware.feature_limit import feature_limit, admin_required
 from database.seed_plans import initialize_premium_system
 from services.google_auth_service import GoogleAuthService
@@ -267,6 +268,10 @@ app.register_blueprint(market_bp)
 
 # Register Welth Agent blueprint (new agentic assistant — coexists with old finance-ai)
 app.register_blueprint(welth_bp)
+
+# Register the v2 backtesting engine (backtest_india). Fully independent of the
+# legacy /api/backtesting/* endpoints below, which are untouched.
+app.register_blueprint(backtest_india_bp)
 
 # Register enhanced Finance AI routes
 register_finance_ai_routes(app)

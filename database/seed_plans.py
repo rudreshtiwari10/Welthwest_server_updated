@@ -96,8 +96,8 @@ def create_indexes():
         client = MongoClient(config.MONGODB_URI)
         db = client[config.DB_NAME]
 
-        # Plans collection indexes
-        db.plans.create_index([("_id", 1)], unique=True)
+        # Plans collection indexes (MongoDB automatically creates unique index on _id)
+        # db.plans.create_index([("_id", 1)], unique=True)
 
         # Transactions collection indexes
         db.transactions.create_index([("user_id", 1)])
