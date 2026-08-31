@@ -1,9 +1,10 @@
 """
 API surface for the backtest_india engine (WelthWest Backtesting v2).
 
-Entirely separate from the legacy /api/backtesting/* endpoints, which continue
-to serve the old Beta page unchanged. Nothing in this module imports from
-services/backtesting_engine.py or services/simple_backtest_service.py.
+This is now the only backtesting engine — the legacy /api/backtesting/*
+endpoints, the old Beta page, and services/backtesting_engine.py were
+retired. Nothing in this module ever imported from that file or from
+services/simple_backtest_service.py (still used elsewhere, by Finance AI).
 
 Routes
 ------

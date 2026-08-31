@@ -2,10 +2,11 @@
 backtest_india — WelthWest Realistic Hybrid Backtesting Engine (v2).
 
 A completely independent, event-driven research and execution simulator built
-to the specification in backtest.md. It shares NO code with the legacy
-`services/backtesting_engine.py` or `services/simple_backtest_service.py`;
-those remain untouched and continue to serve the old /api/backtesting/*
-endpoints.
+to the specification in backtest.md. It shared no code with the legacy
+`services/backtesting_engine.py` (removed — the old /api/backtesting/*
+endpoints and their engine were retired in favor of this one) or with
+`services/simple_backtest_service.py`, which is unrelated and still used by
+the Finance AI chat assistant.
 
 Canonical pipeline (spec §2):
 

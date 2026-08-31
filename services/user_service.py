@@ -344,49 +344,6 @@ class UserService:
         result = self.tokens.delete_one({"token": token})
         return result.deleted_count > 0
     
-    def save_backtest_result(self, user_id: str, backtest_data: Dict[str, Any]) -> bool:
-        """Save backtest result to user's history"""
-        try:
-            # Create backtest document
-            backtest = {
-                "user_id": user_id,
-                "created_at": datetime.utcnow(),
-                "type": "backtest",
-                "backtest_data": backtest_data,  # Use consistent field name
-                "name": backtest_data.get("name", f"Backtest {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"),
-                "symbol": backtest_data.get("stock_symbol", backtest_data.get("symbol", "Unknown")),
-                "strategy": backtest_data.get("strategy_type", backtest_data.get("strategy", "Custom")),
-                "performance": backtest_data.get("metrics", backtest_data.get("performance", {}))
-            }
-            
-            # Insert backtest into database
-            result = self.db.backtests.insert_one(backtest)
-            logger.info(f"Saved backtest for user {user_id}: {backtest['name']} ({backtest['symbol']})")
-            return bool(result.inserted_id)
-        except Exception as e:
-            logger.error(f"Error saving backtest result: {str(e)}")
-            print(f"Error saving backtest result: {str(e)}")
-            return False
-
-    def delete_backtest_result(self, user_id: str, backtest_id: str) -> bool:
-        """Delete a backtest result from user's history"""
-        try:
-            result = self.db.backtests.delete_one({
-                "_id": ObjectId(backtest_id),
-                "user_id": user_id  # Security: ensure user owns this backtest
-            })
-
-            if result.deleted_count > 0:
-                logger.info(f"Deleted backtest {backtest_id} for user {user_id}")
-                return True
-            else:
-                logger.warning(f"Backtest {backtest_id} not found for user {user_id}")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error deleting backtest: {str(e)}")
-            return False
-
     def save_ai_analysis_result(self, user_id: str, analysis_data: Dict[str, Any]) -> bool:
         """Save AI analysis result to user's history"""
         try:
@@ -502,31 +459,6 @@ class UserService:
                 "success": False,
                 "message": f"Error saving chat history: {str(e)}"
             }
-    
-    def get_user_backtests(self, user_id: str, limit: int = 10, skip: int = 0) -> List[Dict[str, Any]]:
-        """Get user's saved backtest results with full data"""
-        try:
-            backtests = list(self.db.backtests.find(
-                {"user_id": user_id}
-                # Include all data including results, metrics, charts, etc.
-            ).sort("created_at", -1).skip(skip).limit(limit))
-            
-            # Convert ObjectIds to strings and ensure consistent structure
-            for backtest in backtests:
-                backtest["_id"] = str(backtest["_id"])
-                # Handle both old and new data structures
-                if "data" in backtest and "backtest_data" not in backtest:
-                    backtest["backtest_data"] = backtest["data"]
-                # Ensure backtest_data is available for dashboard display
-                if "backtest_data" not in backtest and "data" not in backtest:
-                    logger.warning(f"No backtest data found for backtest {backtest['_id']}")
-            
-            logger.info(f"Retrieved {len(backtests)} backtests for user {user_id}")
-            return backtests
-        except Exception as e:
-            logger.error(f"Error getting user backtests: {str(e)}")
-            print(f"Error getting user backtests: {str(e)}")
-            return []
     
     def get_user_ai_analyses(self, user_id: str, limit: int = 10, skip: int = 0) -> List[Dict[str, Any]]:
         """Get user's saved AI analysis results"""
