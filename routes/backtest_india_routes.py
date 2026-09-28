@@ -45,21 +45,16 @@ MAX_ROBUSTNESS_VARIANTS = 24
 
 # ── Access gate ─────────────────────────────────────────────────────────────
 #
-# /run and /pattern-lab would normally sit behind feature_limit('backtest-beta'),
-# which enforces sign-in AND the daily quota.
-#
-# LOGIN IS CURRENTLY DISABLED FOR THIS PAGE. Both endpoints are open to anyone
-# who can reach them — no user id, no quota — because the page is still being
-# built out and signing in on every run got in the way.
-#
-# >>> TO PUT LOGIN BACK: change OPEN_ACCESS_BY_DEFAULT to False. <<<
-# That single line is the whole switch. Alternatively, leave it as-is and set
-# the env var BACKTEST_INDIA_OPEN_ACCESS=false, which overrides the default and
-# is the safer option for a deployed environment.
+# /run and /pattern-lab sit behind feature_limit('backtest-beta'), which
+# enforces sign-in AND the daily quota — same mechanism as
+# feature_limit('welth-market-regime') and anon_or_auth_feature_limit
+# ('welth-ai-assistant') use for those two features.
 #
 # The value is resolved per request, so nothing is baked in at import time.
+# Can still be forced open via the env var BACKTEST_INDIA_OPEN_ACCESS=true,
+# but that should stay unset in any deployed environment.
 
-OPEN_ACCESS_BY_DEFAULT = True
+OPEN_ACCESS_BY_DEFAULT = False
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _FALSY = {"0", "false", "no", "off"}
