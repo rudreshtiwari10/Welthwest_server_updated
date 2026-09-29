@@ -98,6 +98,30 @@ class MarketArticle:
             'totalPages': (total + limit - 1) // limit
         }
 
+    def get_recent_topics(self, days: int = 21) -> List[dict]:
+        """Title/slug/tags/sector/affected_stocks for everything published
+        in the last `days` — used by the news pipeline to skip writing a
+        topical duplicate of a story it already covered (matched on tags/
+        sector/stocks, not title wording — see NewsIntelligence
+        ._topic_signature()), instead of only de-duplicating within a
+        single ingest run."""
+        from datetime import timedelta
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        articles = self.collection.find(
+            {'status': 'published', 'published_at': {'$gte': cutoff}},
+            {'title': 1, 'slug': 1, 'tags': 1, 'sector': 1, 'affected_stocks': 1},
+        )
+        return [
+            {
+                'title': a.get('title'),
+                'slug': a.get('slug'),
+                'tags': a.get('tags', []),
+                'sector': a.get('sector'),
+                'affected_stocks': a.get('affected_stocks', []),
+            }
+            for a in articles
+        ]
+
     def increment_views(self, slug: str) -> bool:
         try:
             result = self.collection.update_one(

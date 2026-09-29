@@ -11,6 +11,15 @@ from dateutil import parser as dateparser
 
 logger = logging.getLogger(__name__)
 
+# How much topic overlap (Jaccard, on tags + sector + affected_stocks) a
+# new article needs with an already-published one from the last
+# DUPLICATE_LOOKBACK_DAYS before it's skipped as a duplicate. This is
+# checked on topic signature, not title wording — see _topic_signature()
+# and process_cluster(). Start conservative; tighten once behaviour is
+# observed against real published tag data.
+DUPLICATE_TOPIC_THRESHOLD = 0.4
+DUPLICATE_LOOKBACK_DAYS = 21
+
 
 class NewsIntelligence:
     def __init__(self, db):
@@ -133,8 +142,41 @@ class NewsIntelligence:
 
     # ── Step 3: Process ────────────────────────────────────────
 
-    def process_cluster(self, cluster: List[dict]) -> dict:
-        """Process a single cluster: analyze + write + save"""
+    @staticmethod
+    def _topic_signature(article_data: dict) -> set:
+        """Tags + sector + affected stocks, lowercased, as a set.
+
+        Title wording alone is a weak duplication signal here — the writer
+        rephrases freely, so two articles about the same recurring macro
+        story (e.g. Iran tensions -> oil -> Indian stocks) can share almost
+        no words in their headlines. Tags/sector/affected_stocks describe
+        WHAT the article is actually about, and are far more stable across
+        independently-written coverage of the same underlying story.
+        """
+        sig = set()
+        for tag in article_data.get('tags', []) or []:
+            sig.add(str(tag).strip().lower())
+        sector = article_data.get('sector')
+        if sector:
+            sig.add(str(sector).strip().lower())
+        for stock in article_data.get('affected_stocks', []) or []:
+            sig.add(str(stock).strip().lower())
+        return sig
+
+    def process_cluster(self, cluster: List[dict], recent_articles: List[dict] = None) -> dict:
+        """Process a single cluster: analyze + write + save.
+
+        `recent_articles` (tags/sector/affected_stocks/title/slug for
+        everything published in the last DUPLICATE_LOOKBACK_DAYS) lets this
+        catch a recurring macro story that resurfaces in the source feed
+        every few days — `cluster()` below only de-dupes items within a
+        single ingest batch, so without this a story like "Iran tensions"
+        or "Bitcoin price move" gets written up fresh every single time it
+        recurs, with no awareness of WelthWest's own prior near-identical
+        coverage. Checked after writing (not before) because the topic
+        signature this relies on — tags/sector/affected_stocks — only
+        exists once the writer has analysed the cluster.
+        """
         cluster_id = str(uuid.uuid4())[:8]
 
         try:
@@ -155,6 +197,24 @@ class NewsIntelligence:
                 logger.warning(f"Cluster {cluster_id}: No title generated, skipping")
                 return {'success': False, 'reason': 'no_title'}
 
+            # De-dup against our own recent coverage by topic, not title
+            # wording — see _topic_signature() and process_cluster() docstring.
+            if recent_articles:
+                new_sig = self._topic_signature(article_data)
+                if new_sig:
+                    for recent in recent_articles:
+                        sim = self._jaccard_similarity(new_sig, self._topic_signature(recent))
+                        if sim >= DUPLICATE_TOPIC_THRESHOLD:
+                            logger.info(
+                                f"Cluster {cluster_id}: skipping '{article_data.get('title')}' — "
+                                f"{sim:.2f} topic overlap with recently published "
+                                f"'{recent.get('title')}' ({recent.get('slug')})"
+                            )
+                            raw_ids = [item.get('_id') for item in cluster if item.get('_id')]
+                            if raw_ids:
+                                self.raw_news.mark_processed(raw_ids, cluster_id)
+                            return {'success': False, 'reason': 'duplicate_of_recent'}
+
             # Source and upload article image
             try:
                 image_url = self.image_service.get_article_image(cluster, article_data)
@@ -173,7 +233,14 @@ class NewsIntelligence:
                 self.raw_news.mark_processed(raw_ids, cluster_id)
 
             logger.info(f"Published article: {article.get('title', '')[:60]}")
-            return {'success': True, 'slug': article.get('slug'), 'title': article.get('title')}
+            return {
+                'success': True,
+                'slug': article.get('slug'),
+                'title': article.get('title'),
+                'tags': article.get('tags', []),
+                'sector': article.get('sector'),
+                'affected_stocks': article.get('affected_stocks', []),
+            }
 
         except Exception as e:
             logger.error(f"Cluster {cluster_id} processing failed: {e}")
@@ -228,13 +295,33 @@ class NewsIntelligence:
             # Pick single-source items that are likely trending/important
             to_process.extend(single_source[:remaining])
 
+        # Recent published articles' topic data, so a recurring story
+        # (Iran/oil, Bitcoin swings, ...) that resurfaces in the feed
+        # doesn't get written up as "new" every time — see
+        # process_cluster() / _topic_signature(). Fetched once per run and
+        # extended below as this run publishes, so two similar clusters
+        # processed in the same run also catch each other even if
+        # cluster() didn't merge them.
+        try:
+            recent_articles = self.market_article.get_recent_topics(days=DUPLICATE_LOOKBACK_DAYS)
+        except Exception as e:
+            logger.warning(f"Could not load recent articles for de-dup, proceeding without it: {e}")
+            recent_articles = []
+
         for cluster in to_process:
-            result = self.process_cluster(cluster)
+            result = self.process_cluster(cluster, recent_articles=recent_articles)
             if result.get('success'):
                 results['published'] += 1
                 results['articles'].append({
                     'slug': result.get('slug'),
                     'title': result.get('title'),
+                })
+                recent_articles.append({
+                    'title': result.get('title'),
+                    'slug': result.get('slug'),
+                    'tags': result.get('tags', []),
+                    'sector': result.get('sector'),
+                    'affected_stocks': result.get('affected_stocks', []),
                 })
             else:
                 results['failed'] += 1
