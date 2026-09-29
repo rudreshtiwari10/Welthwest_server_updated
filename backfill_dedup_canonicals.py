@@ -117,15 +117,34 @@ def main():
     logger.info(f"Found {len(clusters)} duplicate clusters, covering {duplicate_count} "
                 f"articles that would get a canonical_slug pointing elsewhere.\n")
 
+    all_scores = []
     for cluster in clusters:
         canonical = pick_canonical(cluster)
+        canon_sig = NewsIntelligence._topic_signature(canonical)
         others = [a for a in cluster if a['slug'] != canonical['slug']]
         logger.info(f"Cluster ({len(cluster)} articles) -> canonical: "
                     f"'{canonical['title']}' ({canonical['slug']}, {canonical.get('content_length', 0)} chars)")
         for a in others:
-            logger.info(f"    duplicate: '{a['title']}' ({a['slug']}, {a.get('content_length', 0)} chars)")
+            sim = NewsIntelligence._jaccard_similarity(canon_sig, NewsIntelligence._topic_signature(a))
+            days = _days_apart(canonical, a)
+            all_scores.append(sim)
+            logger.info(f"    duplicate: '{a['title']}' ({a['slug']}, {a.get('content_length', 0)} chars, "
+                        f"sim={sim:.2f}, {days:.0f}d apart)")
             if args.apply:
                 market_article.update(a['slug'], {'canonical_slug': canonical['slug']})
+        logger.info("")
+
+    if all_scores:
+        all_scores.sort()
+        buckets = [0] * 6  # 0.4-0.5, 0.5-0.6, ..., 0.9-1.0
+        for s in all_scores:
+            idx = min(int((s - 0.4) / 0.1), 5) if s >= 0.4 else 0
+            buckets[idx] += 1
+        logger.info("Similarity score distribution (helps pick a threshold by looking at "
+                    "the actual data instead of guessing):")
+        for i, count in enumerate(buckets):
+            lo = 0.4 + i * 0.1
+            logger.info(f"    {lo:.1f}-{lo + 0.1:.1f}: {count}")
         logger.info("")
 
     if args.apply:

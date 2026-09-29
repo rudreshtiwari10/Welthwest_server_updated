@@ -21,13 +21,18 @@ logger = logging.getLogger(__name__)
 # real corpus still found a same-DAY false positive (an "AI Stock Surge:
 # Microsoft's Rally" piece and an unrelated "AI Infrastructure Funding
 # Freeze: Oracle-Blue Owl" piece, published the same day) that MAX_DAYS_
-# APART structurally can't exclude — only the threshold can. Calibrated
-# against the two confirmed real data points from that dry-run: a
-# genuine duplicate pair (two "Middle East de-escalation" pieces,
-# published hours apart) scored 0.88; a confirmed false positive (Nvidia
-# AI-safety vs SpaceX AI-funding, unrelated events) scored 0.71. 0.75
-# sits with margin above the false positive and below the true one.
-DUPLICATE_TOPIC_THRESHOLD = 0.75
+# APART structurally can't exclude — only the threshold can.
+#
+# 0.75 (calibrated off just two data points: a confirmed true positive at
+# 0.88, a confirmed false positive at 0.71) was tried and was a huge
+# overcorrection — it dropped a production dry-run from 827 flagged
+# articles to 6, meaning most genuine duplicates score well below 0.88.
+# True/false positives apparently overlap significantly in this range —
+# there may be no single clean cutoff. Back to 0.4 (the original, looser
+# value) while backfill_dedup_canonicals.py's new per-pair score + day-gap
+# logging + score-distribution histogram gathers real data to calibrate
+# from, instead of guessing from a couple of examples.
+DUPLICATE_TOPIC_THRESHOLD = 0.4
 MAX_DAYS_APART = 5
 DUPLICATE_LOOKBACK_DAYS = 21
 
