@@ -25,6 +25,23 @@ from services.gemini_client import GeminiRotator
 logger = logging.getLogger(__name__)
 
 
+# Placeholder values a model sometimes returns instead of an empty list
+# when told to give "affected stocks ... if applicable" — filtered out
+# wherever list fields like this are read, so one never ends up stored,
+# served by the API, or joined into a screener deep-link URL as literal
+# text (e.g. /ai-screener?q=None).
+_PLACEHOLDER_VALUES = {'none', 'n/a', 'na', 'not applicable', 'null', ''}
+
+
+def _clean_list(values) -> list:
+    if not isinstance(values, list):
+        return []
+    return [
+        v.strip() for v in values
+        if isinstance(v, str) and v.strip().lower() not in _PLACEHOLDER_VALUES
+    ]
+
+
 class ArticleWriter:
     def __init__(self):
         self.analysis_provider = os.getenv('AI_ANALYSIS_PROVIDER', 'gemini')
@@ -170,7 +187,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
   "why_it_matters": "2-3 sentences on market significance — be specific about how this impacts Indian markets",
   "winners": ["list of companies/sectors that benefit"],
   "losers": ["list of companies/sectors that suffer"],
-  "affected_stocks": ["specific Indian stock names/tickers if applicable"],
+  "affected_stocks": ["specific Indian stock names/tickers — empty array [] if none apply, never a placeholder like 'None' or 'N/A'"],
   "sector": "primary sector affected (e.g., Banking, IT, Pharma, Energy, Auto, FMCG, Metals, Infra, Telecom, Defence, Crypto, General)",
   "sentiment": "Bullish or Bearish or Neutral",
   "impact_score": "Low or Medium or High",
@@ -271,14 +288,14 @@ Respond ONLY with valid JSON:
             'sentiment': analysis.get('sentiment', 'Neutral'),
             'impact_score': analysis.get('impact_score', 'Medium'),
             'time_horizon': analysis.get('time_horizon', 'Short-term'),
-            'affected_stocks': analysis.get('affected_stocks', []),
+            'affected_stocks': _clean_list(analysis.get('affected_stocks', [])),
             'sector': analysis.get('sector', 'General'),
             'category': analysis.get('category', 'deep-analysis'),
         })
 
         # Merge tags (dedupe)
         all_tags = list(set(
-            analysis.get('tags', []) + article_data.get('tags', [])
+            _clean_list(analysis.get('tags', [])) + _clean_list(article_data.get('tags', []))
         ))
         article_data['tags'] = all_tags[:10]
 
