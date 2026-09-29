@@ -81,9 +81,9 @@ def main():
                          help='Actually write canonical_slug (default: dry run, writes nothing)')
     args = parser.parse_args()
 
-    from app import mongo
+    from database import get_db
     from models.market_article import MarketArticle
-    market_article = MarketArticle(mongo.db)
+    market_article = MarketArticle(get_db())
 
     logger.info("Loading all published articles...")
     articles = market_article.get_all_published_for_dedup()
