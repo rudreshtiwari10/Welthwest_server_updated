@@ -4,14 +4,24 @@ duplicate's SEO canonical at the most complete article in its cluster.
 
 Context: services/news_intelligence.py now skips writing a new article
 if its topic (tags + sector + affected_stocks) overlaps something
-published in the last 21 days — but that only stops NEW duplicates.
-Google's Coverage report showed ~1,454 already-published articles it
-crawled but declined to index, heavily clustered around a handful of
-recurring narratives (Iran/oil, Bitcoin swings) covered many times over
-with different headlines. This script finds those existing clusters
-across the WHOLE corpus (not just a rolling window) using the exact same
-topic-signature Jaccard logic, and sets `canonical_slug` on every
-non-canonical article in a cluster.
+published nearby in time — but that only stops NEW duplicates. Google's
+Coverage report showed ~1,454 already-published articles it crawled but
+declined to index, heavily clustered around a handful of recurring
+narratives (Iran/oil, Bitcoin swings) covered many times over with
+different headlines. This script finds those existing clusters across
+the WHOLE corpus (not just a rolling window) using the exact same
+topic-signature Jaccard + time-proximity logic, and sets
+`canonical_slug` on every non-canonical article in a cluster.
+
+Topic overlap alone is NOT enough to call two articles duplicates — a
+first pass against the real corpus clustered an Nvidia AI-safety piece
+with a SpaceX AI-funding piece (~0.7 tag/sector/ticker overlap) despite
+them being unrelated events 105 days apart, because anything in a "hot"
+recurring sector (AI/IT, oil/geopolitics) shares the same handful of
+generic tags and tickers regardless of the actual triggering event. Real
+duplicates (two "Middle East de-escalation" pieces) were published hours
+apart. MAX_DAYS_APART (imported from news_intelligence) requires articles
+to also be close in time before they're considered the same story.
 
 This does NOT touch, hide, redirect, or delete any article — every URL
 stays fully live and fully functional for anyone who visits it directly.
@@ -30,18 +40,29 @@ Usage:
 import argparse
 import logging
 
-from services.news_intelligence import NewsIntelligence, DUPLICATE_TOPIC_THRESHOLD
+from services.news_intelligence import NewsIntelligence, DUPLICATE_TOPIC_THRESHOLD, MAX_DAYS_APART
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
 
-def find_clusters(articles: list, threshold: float = DUPLICATE_TOPIC_THRESHOLD) -> list:
+def _days_apart(a: dict, b: dict) -> float:
+    """Inf if either is missing published_at — never treated as close enough."""
+    pa, pb = a.get('published_at'), b.get('published_at')
+    if not pa or not pb:
+        return float('inf')
+    return abs((pa - pb).days)
+
+
+def find_clusters(articles: list, threshold: float = DUPLICATE_TOPIC_THRESHOLD,
+                   max_days_apart: int = MAX_DAYS_APART) -> list:
     """Same greedy approach as NewsIntelligence.cluster(), but run once
     across the whole corpus on topic signatures instead of per-batch on
-    title tokens. O(n^2) in the number of articles — fine for a one-time
-    script against a few thousand articles; re-block by shared tag first
-    if this ever needs to run against a much larger corpus."""
+    title tokens, and additionally requiring articles to be close in time
+    — see module docstring for why topic overlap alone isn't enough.
+    O(n^2) in the number of articles — fine for a one-time script against
+    a few thousand articles; re-block by shared tag first if this ever
+    needs to run against a much larger corpus."""
     signed = [(a, NewsIntelligence._topic_signature(a)) for a in articles]
     used = set()
     clusters = []
@@ -56,6 +77,8 @@ def find_clusters(articles: list, threshold: float = DUPLICATE_TOPIC_THRESHOLD) 
                 continue
             a_j, sig_j = signed[j]
             if not sig_j:
+                continue
+            if _days_apart(a_i, a_j) > max_days_apart:
                 continue
             if NewsIntelligence._jaccard_similarity(sig_i, sig_j) >= threshold:
                 cluster.append(a_j)

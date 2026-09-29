@@ -12,12 +12,21 @@ from dateutil import parser as dateparser
 logger = logging.getLogger(__name__)
 
 # How much topic overlap (Jaccard, on tags + sector + affected_stocks) a
-# new article needs with an already-published one from the last
-# DUPLICATE_LOOKBACK_DAYS before it's skipped as a duplicate. This is
-# checked on topic signature, not title wording — see _topic_signature()
-# and process_cluster(). Start conservative; tighten once behaviour is
-# observed against real published tag data.
+# new article needs with an already-published one before it's skipped as
+# a duplicate. Checked on topic signature, not title wording — see
+# _topic_signature() and process_cluster().
+#
+# MAX_DAYS_APART matters more than the threshold above: run against the
+# real corpus (backfill_dedup_canonicals.py), topic overlap alone
+# clustered genuinely different stories — e.g. an Nvidia AI-safety piece
+# and a SpaceX AI-funding piece, ~0.7 overlap on shared tags/sector/
+# tickers, but 105 days apart and about unrelated events. A real
+# same-story duplicate (two "Middle East de-escalation" pieces) was
+# published hours apart, same day, 0.88 overlap. Time proximity is what
+# actually separates "same recurring sector" from "same specific event" —
+# topic overlap alone can't.
 DUPLICATE_TOPIC_THRESHOLD = 0.4
+MAX_DAYS_APART = 5
 DUPLICATE_LOOKBACK_DAYS = 21
 
 
@@ -199,10 +208,18 @@ class NewsIntelligence:
 
             # De-dup against our own recent coverage by topic, not title
             # wording — see _topic_signature() and process_cluster() docstring.
+            # Also requires the match to be within MAX_DAYS_APART: topic
+            # overlap alone can't tell "same specific event" from "same
+            # recurring sector" (see module-level comment) — time proximity
+            # is the signal that actually distinguishes them.
             if recent_articles:
                 new_sig = self._topic_signature(article_data)
                 if new_sig:
+                    now = datetime.utcnow()
                     for recent in recent_articles:
+                        published_at = recent.get('published_at')
+                        if published_at and (now - published_at).days > MAX_DAYS_APART:
+                            continue
                         sim = self._jaccard_similarity(new_sig, self._topic_signature(recent))
                         if sim >= DUPLICATE_TOPIC_THRESHOLD:
                             logger.info(
@@ -322,6 +339,7 @@ class NewsIntelligence:
                     'tags': result.get('tags', []),
                     'sector': result.get('sector'),
                     'affected_stocks': result.get('affected_stocks', []),
+                    'published_at': datetime.utcnow(),
                 })
             else:
                 results['failed'] += 1
