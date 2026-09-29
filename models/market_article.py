@@ -98,6 +98,25 @@ class MarketArticle:
             'totalPages': (total + limit - 1) // limit
         }
 
+    def get_all_published_for_dedup(self) -> List[dict]:
+        """slug/title/tags/sector/affected_stocks/published_at/content_length
+        for every published article — used by the one-time
+        backfill_dedup_canonicals.py script to find near-duplicate
+        clusters across the whole corpus (not just the rolling window
+        get_recent_topics() covers). content_length is computed
+        server-side via aggregation so this doesn't have to transfer the
+        full article body for every one of several thousand articles."""
+        pipeline = [
+            {'$match': {'status': 'published'}},
+            {'$project': {
+                '_id': 0,
+                'slug': 1, 'title': 1, 'tags': 1, 'sector': 1,
+                'affected_stocks': 1, 'published_at': 1,
+                'content_length': {'$strLenCP': {'$ifNull': ['$content', '']}},
+            }},
+        ]
+        return list(self.collection.aggregate(pipeline))
+
     def get_recent_topics(self, days: int = 21) -> List[dict]:
         """Title/slug/tags/sector/affected_stocks for everything published
         in the last `days` — used by the news pipeline to skip writing a
