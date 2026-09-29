@@ -16,16 +16,18 @@ logger = logging.getLogger(__name__)
 # a duplicate. Checked on topic signature, not title wording — see
 # _topic_signature() and process_cluster().
 #
-# MAX_DAYS_APART matters more than the threshold above: run against the
-# real corpus (backfill_dedup_canonicals.py), topic overlap alone
-# clustered genuinely different stories — e.g. an Nvidia AI-safety piece
-# and a SpaceX AI-funding piece, ~0.7 overlap on shared tags/sector/
-# tickers, but 105 days apart and about unrelated events. A real
-# same-story duplicate (two "Middle East de-escalation" pieces) was
-# published hours apart, same day, 0.88 overlap. Time proximity is what
-# actually separates "same recurring sector" from "same specific event" —
-# topic overlap alone can't.
-DUPLICATE_TOPIC_THRESHOLD = 0.4
+# MAX_DAYS_APART (below) catches most of what topic overlap alone can't —
+# see its comment — but not everything: a backfill dry-run against the
+# real corpus still found a same-DAY false positive (an "AI Stock Surge:
+# Microsoft's Rally" piece and an unrelated "AI Infrastructure Funding
+# Freeze: Oracle-Blue Owl" piece, published the same day) that MAX_DAYS_
+# APART structurally can't exclude — only the threshold can. Calibrated
+# against the two confirmed real data points from that dry-run: a
+# genuine duplicate pair (two "Middle East de-escalation" pieces,
+# published hours apart) scored 0.88; a confirmed false positive (Nvidia
+# AI-safety vs SpaceX AI-funding, unrelated events) scored 0.71. 0.75
+# sits with margin above the false positive and below the true one.
+DUPLICATE_TOPIC_THRESHOLD = 0.75
 MAX_DAYS_APART = 5
 DUPLICATE_LOOKBACK_DAYS = 21
 
