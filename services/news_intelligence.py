@@ -12,28 +12,30 @@ from dateutil import parser as dateparser
 logger = logging.getLogger(__name__)
 
 # How much topic overlap (Jaccard, on tags + sector + affected_stocks) a
-# new article needs with an already-published one before it's skipped as
-# a duplicate. Checked on topic signature, not title wording — see
-# _topic_signature() and process_cluster().
+# new article needs with an already-published one, published within
+# MAX_DAYS_APART, before it's skipped as a duplicate. Checked on topic
+# signature, not title wording — see _topic_signature() and
+# process_cluster().
 #
-# MAX_DAYS_APART (below) catches most of what topic overlap alone can't —
-# see its comment — but not everything: a backfill dry-run against the
-# real corpus still found a same-DAY false positive (an "AI Stock Surge:
-# Microsoft's Rally" piece and an unrelated "AI Infrastructure Funding
-# Freeze: Oracle-Blue Owl" piece, published the same day) that MAX_DAYS_
-# APART structurally can't exclude — only the threshold can.
+# This signal has a real ceiling: an instrumented production dry-run
+# (backfill_dedup_canonicals.py) measured real scores for confirmed
+# cases and found a false positive (different companies, same day:
+# "Microsoft's Rally" vs "Oracle-Blue Owl deal") at 0.43, and a genuine
+# duplicate (same event, 1 day apart: the "US Jobs Shockwave" cluster) at
+# 0.45 — statistically indistinguishable. 90% of all flagged pairs (749
+# of 827) sat in a single 0.4-0.5 band with no natural gap anywhere in
+# the distribution. No threshold cleanly separates true from false here.
 #
-# 0.75 (calibrated off just two data points: a confirmed true positive at
-# 0.88, a confirmed false positive at 0.71) was tried and was a huge
-# overcorrection — it dropped a production dry-run from 827 flagged
-# articles to 6, meaning most genuine duplicates score well below 0.88.
-# True/false positives apparently overlap significantly in this range —
-# there may be no single clean cutoff. Back to 0.4 (the original, looser
-# value) while backfill_dedup_canonicals.py's new per-pair score + day-gap
-# logging + score-distribution histogram gathers real data to calibrate
-# from, instead of guessing from a couple of examples.
-DUPLICATE_TOPIC_THRESHOLD = 0.4
-MAX_DAYS_APART = 5
+# Given that, these values deliberately trade recall for precision
+# rather than chase an exact cutoff that doesn't exist: MAX_DAYS_APART
+# tightened to 2 (same-day/next-day only — where every confirmed genuine
+# duplicate in the sample was) and the threshold to 0.5. This knowingly
+# loses some real duplicates (the 0.45-scoring "US Jobs" cluster would no
+# longer match) in exchange for confidence in what IS flagged — the
+# right tradeoff for something applied automatically, since the
+# downstream effect (a canonical tag) is advisory, not destructive.
+DUPLICATE_TOPIC_THRESHOLD = 0.5
+MAX_DAYS_APART = 2
 DUPLICATE_LOOKBACK_DAYS = 21
 
 
