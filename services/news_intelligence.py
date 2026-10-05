@@ -38,6 +38,27 @@ DUPLICATE_TOPIC_THRESHOLD = 0.5
 MAX_DAYS_APART = 2
 DUPLICATE_LOOKBACK_DAYS = 21
 
+# The duplicate check above catches near-identical articles about the
+# SAME specific event. It does nothing for a recurring macro narrative
+# (Iran/oil, Bitcoin swings) that resurfaces every few days with a
+# genuinely different headline/angle each time — those pairs don't score
+# high enough on _topic_signature() to be flagged, yet collectively they
+# crowded out other coverage and were the actual source of most of the
+# 231 articles canonicalized by backfill_dedup_canonicals.py. Rather than
+# loosen the Jaccard threshold to try to catch these too — which would
+# reintroduce the exact unreliability that threshold already has (a
+# confirmed false positive at 0.43 and true positive at 0.45, no clean
+# gap anywhere in the distribution — see comment above) — this caps how
+# many articles can publish against the same (sector, tag) pair per
+# rolling week, using exact string equality instead of a similarity
+# score. Deliberately generous (3, matching the loose end of what was
+# discussed) since the failure mode of a false positive here is lost
+# content, not a bad SEO tag; tighten only after watching real
+# `theme_cap_reached` log lines in production, the same way
+# DUPLICATE_TOPIC_THRESHOLD was tuned from real data rather than guessed.
+THEME_WEEKLY_CAP = 3
+THEME_WINDOW_DAYS = 7
+
 
 class NewsIntelligence:
     def __init__(self, db):
@@ -181,6 +202,23 @@ class NewsIntelligence:
             sig.add(str(stock).strip().lower())
         return sig
 
+    @staticmethod
+    def _theme_keys(article_data: dict) -> set:
+        """(sector, tag) pairs for the weekly theme rate-limit — see
+        THEME_WEEKLY_CAP. Exact string equality, not similarity: coarser
+        than _topic_signature() in that it only needs ONE shared tag
+        within the same sector to collide, but precise in what it
+        matches on, so it doesn't inherit the Jaccard threshold's known
+        false-positive rate."""
+        sector = str(article_data.get('sector') or '').strip().lower()
+        if not sector:
+            return set()
+        return {
+            (sector, str(tag).strip().lower())
+            for tag in (article_data.get('tags', []) or [])
+            if str(tag).strip()
+        }
+
     def process_cluster(self, cluster: List[dict], recent_articles: List[dict] = None) -> dict:
         """Process a single cluster: analyze + write + save.
 
@@ -222,9 +260,9 @@ class NewsIntelligence:
             # recurring sector" (see module-level comment) — time proximity
             # is the signal that actually distinguishes them.
             if recent_articles:
+                now = datetime.utcnow()
                 new_sig = self._topic_signature(article_data)
                 if new_sig:
-                    now = datetime.utcnow()
                     for recent in recent_articles:
                         published_at = recent.get('published_at')
                         if published_at and (now - published_at).days > MAX_DAYS_APART:
@@ -240,6 +278,28 @@ class NewsIntelligence:
                             if raw_ids:
                                 self.raw_news.mark_processed(raw_ids, cluster_id)
                             return {'success': False, 'reason': 'duplicate_of_recent'}
+
+                # Theme-level rate limit — independent of the exact-duplicate
+                # check above, see THEME_WEEKLY_CAP comment at module level.
+                for key in self._theme_keys(article_data):
+                    count = sum(
+                        1 for r in recent_articles
+                        if r.get('published_at')
+                        and (now - r['published_at']).days <= THEME_WINDOW_DAYS
+                        and key in self._theme_keys(r)
+                    )
+                    if count >= THEME_WEEKLY_CAP:
+                        sector, tag = key
+                        logger.info(
+                            f"Cluster {cluster_id}: skipping '{article_data.get('title')}' — "
+                            f"theme cap reached ({count} articles on sector={sector!r} "
+                            f"tag={tag!r} in the last {THEME_WINDOW_DAYS} days, "
+                            f"cap={THEME_WEEKLY_CAP})"
+                        )
+                        raw_ids = [item.get('_id') for item in cluster if item.get('_id')]
+                        if raw_ids:
+                            self.raw_news.mark_processed(raw_ids, cluster_id)
+                        return {'success': False, 'reason': 'theme_cap_reached'}
 
             # Source and upload article image
             try:
