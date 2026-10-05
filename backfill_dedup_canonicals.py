@@ -112,16 +112,41 @@ def main():
     articles = market_article.get_all_published_for_dedup()
     logger.info(f"Loaded {len(articles)} articles. Clustering (topic-overlap threshold={DUPLICATE_TOPIC_THRESHOLD})...\n")
 
-    clusters = find_clusters(articles)
+    raw_clusters = find_clusters(articles)
+
+    # find_clusters() only verifies each member against the greedy SEED it
+    # was added against — not against whichever member pick_canonical()
+    # ultimately chooses (longest content, which can be a different
+    # article). A same-topic chain spanning up to 2x MAX_DAYS_APART can
+    # pass clustering this way (A-B within range, A-C within range, but
+    # B-C out of range) and silently violate the constraint once one end
+    # of the chain is picked as canonical. Re-verify every duplicate
+    # against the ACTUAL canonical here and drop any that fail either
+    # check against it specifically, rather than trusting cluster
+    # membership alone.
+    clusters = []
+    for cluster in raw_clusters:
+        canonical = pick_canonical(cluster)
+        canon_sig = NewsIntelligence._topic_signature(canonical)
+        kept = [canonical]
+        for a in cluster:
+            if a['slug'] == canonical['slug']:
+                continue
+            sim = NewsIntelligence._jaccard_similarity(canon_sig, NewsIntelligence._topic_signature(a))
+            if sim >= DUPLICATE_TOPIC_THRESHOLD and _days_apart(canonical, a) <= MAX_DAYS_APART:
+                kept.append(a)
+        if len(kept) > 1:
+            clusters.append(kept)
+
     duplicate_count = sum(len(c) - 1 for c in clusters)
     logger.info(f"Found {len(clusters)} duplicate clusters, covering {duplicate_count} "
                 f"articles that would get a canonical_slug pointing elsewhere.\n")
 
     all_scores = []
     for cluster in clusters:
-        canonical = pick_canonical(cluster)
+        canonical = cluster[0]  # already the chosen canonical, from the re-verification pass above
         canon_sig = NewsIntelligence._topic_signature(canonical)
-        others = [a for a in cluster if a['slug'] != canonical['slug']]
+        others = cluster[1:]
         logger.info(f"Cluster ({len(cluster)} articles) -> canonical: "
                     f"'{canonical['title']}' ({canonical['slug']}, {canonical.get('content_length', 0)} chars)")
         for a in others:
