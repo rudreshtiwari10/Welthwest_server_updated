@@ -161,15 +161,23 @@ def main():
 
     if all_scores:
         all_scores.sort()
-        buckets = [0] * 6  # 0.4-0.5, 0.5-0.6, ..., 0.9-1.0
+        # Explicit comparisons, not arithmetic on the float, to bucket this —
+        # (s - 0.4) / 0.1 looks equivalent but isn't: 0.5 - 0.4 is
+        # 0.09999999999999998 in IEEE 754, not exactly 0.1, so int() truncated
+        # plenty of boundary scores (0.50 itself included) into the wrong
+        # bucket. Purely a display bug — the actual threshold check above
+        # uses direct float comparison and was never affected by this.
+        bounds = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.01]  # upper bound nudged past 1.0 to include an exact 1.0 score
+        buckets = [0] * (len(bounds) - 1)
         for s in all_scores:
-            idx = min(int((s - 0.4) / 0.1), 5) if s >= 0.4 else 0
-            buckets[idx] += 1
+            for i in range(len(buckets)):
+                if bounds[i] <= s < bounds[i + 1]:
+                    buckets[i] += 1
+                    break
         logger.info("Similarity score distribution (helps pick a threshold by looking at "
                     "the actual data instead of guessing):")
         for i, count in enumerate(buckets):
-            lo = 0.4 + i * 0.1
-            logger.info(f"    {lo:.1f}-{lo + 0.1:.1f}: {count}")
+            logger.info(f"    {bounds[i]:.1f}-{bounds[i + 1]:.1f}: {count}")
         logger.info("")
 
     if args.apply:
