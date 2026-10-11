@@ -6,7 +6,11 @@ services:
     buildCommand: |
       pip install --upgrade pip setuptools wheel
       pip install --no-cache-dir -r requirements.txt
-    startCommand: gunicorn app:app --workers 1 --threads 2
+    # server.py, not app.py directly -- it starts the in-process scheduler
+    # thread (news pipeline every 2h, top-gainers refresh every 15min)
+    # before serving the Flask app. Pointing this at `gunicorn app:app`
+    # would bring the API up fine but silently never run the pipeline.
+    startCommand: python server.py
     envVars:
       - key: PYTHONUNBUFFERED
         value: "true"
