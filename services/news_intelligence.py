@@ -90,6 +90,19 @@ class NewsIntelligence:
             except Exception as e:
                 logger.warning(f"Failed to fetch category {category}: {e}")
 
+        # Google's actual daily trending-searches feed -- real, current search
+        # demand, not inferred from how many of our own RSS feeds cover a
+        # story. Tagged category='google_trends', which survives into
+        # raw_news and is read back in run_pipeline() to prioritize these
+        # over cluster-size alone. Most entries are non-financial; the
+        # existing relevance check filters those out same as any other item.
+        try:
+            trending_items = self.news_aggregator.fetch_google_trends(geo='IN')
+            all_items.extend(trending_items)
+            logger.info(f"Fetched {len(trending_items)} Google Trends items")
+        except Exception as e:
+            logger.warning(f"Failed to fetch Google Trends: {e}")
+
         if not all_items:
             logger.info("No news items fetched")
             return 0
@@ -368,6 +381,22 @@ class NewsIntelligence:
 
         clusters = self.cluster(unprocessed)
         results['clusters'] = len(clusters)
+
+        # Confirmed real search demand (Google's own trending-searches feed
+        # -- see ingest()/fetch_google_trends -- not just how many of our
+        # own RSS feeds happen to cover a story) jumps the queue ahead of
+        # plain cluster-size ordering. This is what actually answers "is
+        # this being searched heavily right now" rather than approximating
+        # it via source count.
+        trending_ids = {
+            id(c) for c in clusters
+            if any(a.get('category') == 'google_trends' for a in c)
+        }
+        if trending_ids:
+            trending_clusters = [c for c in clusters if id(c) in trending_ids]
+            other_clusters = [c for c in clusters if id(c) not in trending_ids]
+            clusters = trending_clusters + other_clusters
+            logger.info(f"{len(trending_clusters)} cluster(s) matched a current Google Trends topic — prioritized")
 
         # Step 3: Process clusters (up to max_articles)
         # Prioritize clusters with 2+ articles (multi-source synthesis)

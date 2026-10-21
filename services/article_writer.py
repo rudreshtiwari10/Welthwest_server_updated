@@ -266,6 +266,13 @@ Length and structure — let the STORY decide, not a template:
 - Don't force every article through the same skeleton. Some stories are a tight 400-word explainer; others genuinely need a stock-by-stock breakdown. Decide based on what THIS story actually needs.
 - It's fine — good, even — for structure to vary noticeably from article to article.
 
+Voice — write like a specific person, not an averaged-out "balanced" AI:
+- Vary sentence length on purpose. A short, blunt sentence after two longer ones reads human. Uniform medium-length sentences read like a machine.
+- Take an actual position. If the analysis points toward bullish or bearish, say so plainly instead of hedging with "however, on the other hand, some may argue..." — real analysts commit to a read, they don't balance every claim with its opposite.
+- Open differently each time. Don't default to "The [event] has sent shockwaves through..." or restating the headline as sentence one — start wherever the story's most interesting detail actually is.
+- Use contractions and plain words where a real person would ("doesn't", "won't", "it's") — stiff formality is itself a tell.
+- Only hedge where there's genuine, specific uncertainty worth naming — not as a reflexive habit on every claim.
+
 What to avoid (these read as AI-generated filler and hurt both readers and search rankings):
 - Generic headline patterns like "Unpacking X", "Decoding X", "Navigating the Storm", "X: What You Need to Know"
 - A mandatory "expert perspective" or "bull vs bear" section that invents opinions or quotes nobody said — if there's a genuine open question in the story, just say what it is plainly, don't manufacture two sides

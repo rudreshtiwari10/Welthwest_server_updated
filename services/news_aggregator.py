@@ -274,6 +274,49 @@ class NewsAggregator:
             return []
 
     @staticmethod
+    def fetch_google_trends(geo: str = 'IN') -> List[Dict]:
+        """Google's actual daily trending-searches feed -- what people are
+        searching for right now, independent of how many of our own RSS
+        feeds happen to cover a story. Most entries are non-financial
+        (celebrities, sports); the normal relevance check + finance
+        taxonomy filters those out same as any other source. Items carry
+        `is_trending`/`approx_traffic` so run_pipeline() can give
+        confirmed real search-demand priority over cluster-size alone.
+
+        feedparser flattens Google's nested <ht:news_item> sub-element
+        straight onto the entry (ht_news_item_title/_snippet/_url) --
+        verified directly against the live feed, not assumed."""
+        try:
+            url = f"https://trends.google.com/trending/rss?geo={geo}"
+            response = requests.get(url, timeout=8, headers={'User-Agent': 'Mozilla/5.0'})
+            feed = feedparser.parse(response.content)
+
+            items = []
+            for entry in feed.entries[:20]:
+                search_term = entry.get('title', '')
+                headline = entry.get('ht_news_item_title', '') or search_term
+                snippet = entry.get('ht_news_item_snippet', '')
+
+                item = NewsAggregator.normalize_news_item(
+                    {
+                        'title': headline,
+                        'summary': snippet or search_term,
+                        'link': entry.get('ht_news_item_url', '') or entry.get('link', ''),
+                        'published': entry.get('published', ''),
+                    },
+                    'Google Trends',
+                    'google_trends',
+                )
+                item['search_term'] = search_term
+                item['approx_traffic'] = entry.get('ht_approx_traffic', '')
+                item['is_trending'] = True
+                items.append(item)
+            return items
+        except Exception as e:
+            print(f"[GoogleTrends] Error fetching trends for {geo}: {e}")
+            return []
+
+    @staticmethod
     def get_news(category: str = 'all', region: str = 'indian', limit: int = 50) -> Dict:
         """
         Get aggregated news from all sources
