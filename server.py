@@ -48,9 +48,9 @@ def refresh_top_gainers_losers():
 def run_news_pipeline():
     try:
         logger.info("Running news intelligence pipeline...")
-        from app import mongo
+        from database import get_db
         from services.news_intelligence import NewsIntelligence
-        pipeline = NewsIntelligence(mongo.db)
+        pipeline = NewsIntelligence(get_db())
         results = pipeline.run_pipeline(max_articles=3)
         logger.info(f"Pipeline complete: {results.get('published', 0)} articles published")
     except Exception as e:
