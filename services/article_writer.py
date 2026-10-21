@@ -51,7 +51,8 @@ class ArticleWriter:
 
     # ── LLM Calls ──────────────────────────────────────────────
 
-    def call_gemini(self, prompt: str, max_tokens: int = 4000, temperature: float = 0.7) -> str:
+    def call_gemini(self, prompt: str, max_tokens: int = 4000, temperature: float = 0.7,
+                    enable_thinking: bool = False) -> str:
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
@@ -59,7 +60,12 @@ class ArticleWriter:
                 "maxOutputTokens": max_tokens,
             },
         }
-        data = self._gemini.post(payload)
+        # Thinking tokens count against maxOutputTokens (see gemini_client's
+        # disable_thinking docstring) -- only worth enabling where max_tokens
+        # has real headroom beyond the expected output size, and where the
+        # task benefits from actual reasoning (synthesis/judgment) rather
+        # than being a fast structured-extraction call.
+        data = self._gemini.post(payload, disable_thinking=not enable_thinking)
         return data['candidates'][0]['content']['parts'][0]['text']
 
     def call_grok(self, prompt: str, max_tokens: int = 4000, temperature: float = 0.7) -> str:
@@ -83,10 +89,11 @@ class ArticleWriter:
         data = response.json()
         return data['choices'][0]['message']['content']
 
-    def _call_provider(self, provider: str, prompt: str, max_tokens: int = 4000, temperature: float = 0.7) -> str:
+    def _call_provider(self, provider: str, prompt: str, max_tokens: int = 4000, temperature: float = 0.7,
+                       enable_thinking: bool = False) -> str:
         if provider == 'grok':
             return self.call_grok(prompt, max_tokens, temperature)
-        return self.call_gemini(prompt, max_tokens, temperature)
+        return self.call_gemini(prompt, max_tokens, temperature, enable_thinking=enable_thinking)
 
     # ── JSON Parsing ───────────────────────────────────────────
 
@@ -119,15 +126,35 @@ class ArticleWriter:
 
     # ── Relevance Check ────────────────────────────────────────
 
+    # The explicit grounding for "is this financially relevant" — replaces a
+    # vague holistic judgment call with a concrete, broad-but-bounded list.
+    # Narrowing happens here, not at ingestion: news_aggregator.py's RSS
+    # feeds are broad general-news sources (e.g. "trending" = Google News
+    # India top stories), so this gate is the only thing standing between
+    # raw general news and what WelthWest actually publishes.
+    RELEVANT_TOPICS = """
+Markets & Trading: stock markets (NSE/BSE), indices (Nifty, Sensex, Bank Nifty), IPOs/listings, mutual funds, SIPs, F&O/derivatives, commodity trading, forex/currency markets, bond/debt markets, algorithmic/quant trading
+Banking & Credit: banking sector (PSU & private), RBI policy/repo rate, NPAs/bad loans, loans & interest rates, credit/debit cards, digital payments/UPI/fintech, insurance, NBFCs, microfinance
+Crypto & Digital Assets: Bitcoin & major cryptocurrencies, crypto regulation, blockchain/Web3, stablecoins, crypto exchanges, central bank digital currency (digital rupee)
+Macro & Policy: inflation (CPI/WPI), GDP growth, union budget/fiscal policy, tax policy (income tax/GST), monetary policy (RBI/Fed/ECB/BOJ), trade policy & tariffs, rupee/currency movements, employment/jobs data, fiscal deficit/government debt, sovereign credit ratings
+Corporate & Earnings: quarterly earnings, M&A, corporate fraud/scandals, dividends/buybacks, stock splits/bonus shares, startup funding/VC, unicorns, layoffs/hiring trends, index reshuffles (Nifty/Sensex additions-removals)
+Sectors: IT/technology, pharma & healthcare, auto & EV, energy/oil & gas, metals & mining, real estate, FMCG, telecom, defense, infrastructure/construction, agriculture & commodities, aviation, renewable energy
+Global & Geopolitical-Economic: wars/conflicts with market impact, sanctions & trade wars, global supply chains, elections affecting markets, major central bank decisions globally, international trade data (exports/imports), global recession/growth signals
+Personal Finance & Retail Investing: retail investor trends, retirement/pension planning, personal tax planning, investment scams/fraud warnings, financial literacy
+""".strip()
+
     def check_relevance(self, news_cluster: list) -> bool:
         """Quick check: is this news actually relevant to financial markets?"""
         titles = " | ".join(item.get('title', '') for item in news_cluster)
 
-        prompt = f"""You are a financial news editor. Your job is to decide if a news story has REAL, MEANINGFUL impact on financial markets, stocks, or the economy.
+        prompt = f"""You are a financial news editor. Your job is to decide if a news story has REAL, MEANINGFUL impact on financial markets, stocks, banking, trading, crypto, or the broader economy.
+
+WelthWest covers these areas (use this as your grounding — a story qualifies if it's directly about one of these, or has a genuine, specific, non-forced connection to one):
+{self.RELEVANT_TOPICS}
 
 Score this news from 1-10 on market relevance:
-- 8-10: Directly about markets, stocks, economy, trade, monetary policy, corporate earnings, IPOs, commodities, crypto prices
-- 5-7: Indirectly impacts markets — government policy, industry regulation, major geopolitical events (wars, sanctions), tech disruptions affecting listed companies
+- 8-10: Directly about one of the areas above
+- 5-7: Indirectly connected with a real, specific, explainable market/economic impact — not every indirect link counts, only ones you could concretely explain in a sentence
 - 1-4: Celebrity deaths, sports, entertainment, local crime, obituaries, social media drama, lifestyle — these do NOT meaningfully impact markets even with a forced connection
 
 NEWS: {titles}
@@ -197,7 +224,14 @@ Respond ONLY with valid JSON (no markdown, no explanation):
   "key_risks": "1-2 sentences on risks"
 }}"""
 
-        raw = self._call_provider(self.analysis_provider, prompt, max_tokens=1500, temperature=0.4)
+        # Thinking enabled here deliberately: this is the step that decides
+        # the real market connection, winners/losers, and sector -- the
+        # synthesis quality here is what the rest of the article depends on.
+        # max_tokens raised from 1500 to leave room for reasoning tokens on
+        # top of the (still-small) JSON output, per call_gemini's note on
+        # thinking tokens counting against the same budget.
+        raw = self._call_provider(self.analysis_provider, prompt, max_tokens=3000, temperature=0.4,
+                                  enable_thinking=True)
         return self._parse_json(raw)
 
     # ── Writing Step ───────────────────────────────────────────
@@ -209,9 +243,9 @@ Respond ONLY with valid JSON (no markdown, no explanation):
             for item in news_cluster
         )
 
-        prompt = f"""You are a senior financial analyst and investigative journalist at WelthWest Research Desk. You write in-depth, data-driven articles that become the definitive resource on a topic. Your articles rank #1 on Google because of their depth, original analysis, and comprehensive coverage.
+        prompt = f"""You are a financial journalist at WelthWest who writes tight, specific, genuinely useful pieces for Indian retail investors — the kind of writing a sharp human analyst would actually publish, not a templated report.
 
-Based on this analysis, write a COMPREHENSIVE, ORIGINAL article. Do NOT copy any source phrasing. Every sentence must add value.
+Based on this analysis, write an ORIGINAL article. Do NOT copy any source phrasing. Do NOT pad — every sentence should earn its place.
 
 ANALYSIS:
 - Core Event: {analysis.get('core_event', '')}
@@ -227,40 +261,45 @@ ANALYSIS:
 SOURCE HEADLINES (for context only — do NOT copy):
 {sources_summary}
 
-Write the article with this structure:
-1. CATCHY, clickable headline with high-search-volume keywords
-2. Key takeaway (2-3 lines — the "so what" for investors, make it punchy)
-3. What happened — set the scene with context and background, explain WHY this matters NOW
-4. Deep market impact analysis — connect to Indian stock market with specific data points, historical parallels, and sector-level breakdown
-5. Stock-by-stock breakdown — name 4-6 specific NSE/BSE stocks affected, explain HOW and WHY each is impacted, include sector peers
-6. Expert perspective — add contrarian views, what bears vs bulls would argue
-7. Actionable investor playbook — concrete steps: what to buy/sell/watch, entry points, time horizons
-8. Risk matrix — list 3-4 specific risks with probability assessment
-9. What to watch next — upcoming catalysts, dates, data releases that will move this story
+Length and structure — let the STORY decide, not a template:
+- Typical length is 400-800 words. A genuinely complex, multi-company story can run up to ~1100 — but only because there's real substance to cover, never to hit a quota.
+- Don't force every article through the same skeleton. Some stories are a tight 400-word explainer; others genuinely need a stock-by-stock breakdown. Decide based on what THIS story actually needs.
+- It's fine — good, even — for structure to vary noticeably from article to article.
 
-Requirements:
-- 1200-2000 words — this is a DEEP DIVE, not a news brief
-- Authoritative, data-driven tone — like a Goldman Sachs research note but readable
-- Include specific numbers: market cap, P/E ratios, revenue figures, % changes where relevant
-- Reference historical parallels ("last time this happened in 2022, Nifty moved X%")
-- ALWAYS connect to Indian stock market with specific NSE/BSE tickers
-- Use long-tail keywords naturally throughout for SEO dominance
-- Include 2-3 subheadings as questions people would Google (e.g., "How will RBI rate cut affect bank stocks?")
-- Do NOT include any disclaimer text in the article body
-- Every paragraph must contain an insight the reader can't easily find elsewhere
+What to avoid (these read as AI-generated filler and hurt both readers and search rankings):
+- Generic headline patterns like "Unpacking X", "Decoding X", "Navigating the Storm", "X: What You Need to Know"
+- A mandatory "expert perspective" or "bull vs bear" section that invents opinions or quotes nobody said — if there's a genuine open question in the story, just say what it is plainly, don't manufacture two sides
+- A formal "risk matrix" with invented probability percentages — risks are fine, fabricated precision isn't
+- Forcing a "How will X affect Y?" question as a subheading in every single article — use it occasionally if it's genuinely the clearest framing, not as a default pattern
+- Stock transition words as filler ("Moreover," "Furthermore," "In conclusion") and throat-clearing openers ("In today's ever-evolving market...")
+- Claiming precise numbers (P/E ratios, % moves, historical parallels) you don't actually have grounds for from the source material — only include specific figures you can reasonably infer or that were in the sources
+
+What to do instead:
+- Be specific and concrete about THIS story — names, numbers, and mechanisms you can actually support, not generic market commentary that could apply to any story in this sector
+- Write like you're explaining it to a smart friend who invests but doesn't have time to read five sources — direct, confident, no ceremony
+- Connect to Indian markets with real NSE/BSE tickers where there's a genuine connection — don't force a stock list if the story doesn't warrant one
+- A short, punchy take is better than a long, padded one
+
+Do NOT include any disclaimer text in the article body.
 
 Respond ONLY with valid JSON:
 {{
-  "title": "catchy, trending, SEO-optimized headline (max 80 chars) — use keywords people actually search for",
-  "meta_title": "search-engine optimized title (max 60 chars) — include key topic + 'Indian market' or 'stocks'",
-  "meta_description": "compelling click-worthy description for search results (max 155 chars)",
-  "key_takeaway": "2-3 line key takeaway for investors — make it quotable",
-  "summary": "3-4 sentence summary for cards/previews — hook the reader",
-  "content": "full HTML article content with <h2>, <h3>, <p>, <strong>, <ul>/<li>, <blockquote> tags. Use <h2> for main sections, <h3> for subsections.",
-  "tags": ["10-15 SEO tags — mix of trending topic tags, long-tail keywords, stock names, and financial terms people search for"]
+  "title": "specific, clear headline (max 80 chars) — describe what actually happened, use real search terms, avoid generic AI headline patterns",
+  "meta_title": "search-engine optimized title (max 60 chars)",
+  "meta_description": "compelling, specific description for search results (max 155 chars)",
+  "key_takeaway": "1-2 line takeaway — the single most useful thing an investor should know",
+  "summary": "2-3 sentence summary for cards/previews",
+  "content": "full HTML article content with <h2>, <h3>, <p>, <strong>, <ul>/<li>, <blockquote> tags where they genuinely help structure — not as decoration",
+  "tags": ["8-12 SEO tags — real topic/stock/financial terms people search for, no filler tags"]
 }}"""
 
-        raw = self._call_provider(self.writing_provider, prompt, max_tokens=6000, temperature=0.7)
+        # Thinking enabled: with output now 400-800 words instead of
+        # 1200-2000, there's real budget headroom to spend on reasoning
+        # about phrasing/structure/what to include, rather than on more
+        # words. max_tokens kept generous so thinking tokens (which count
+        # against this same budget) don't crowd out the output JSON.
+        raw = self._call_provider(self.writing_provider, prompt, max_tokens=5000, temperature=0.8,
+                                  enable_thinking=True)
         return self._parse_json(raw)
 
     # ── Full Pipeline for One Cluster ──────────────────────────

@@ -51,7 +51,7 @@ def run_news_pipeline():
         from database import get_db
         from services.news_intelligence import NewsIntelligence
         pipeline = NewsIntelligence(get_db())
-        results = pipeline.run_pipeline(max_articles=3)
+        results = pipeline.run_pipeline(max_articles=1)
         logger.info(f"Pipeline complete: {results.get('published', 0)} articles published")
     except Exception as e:
         logger.error(f"News pipeline error: {str(e)}")
@@ -61,8 +61,12 @@ def run_scheduler():
     # Schedule the job to run every 15 minutes
     schedule.every(15).minutes.do(refresh_top_gainers_losers)
 
-    # Schedule news pipeline every 2 hours (~30 articles/day)
-    schedule.every(2).hours.do(run_news_pipeline)
+    # Every 150 min (~9-10 runs/day) at max_articles=1 per run below --
+    # targets 8-10 published articles/day, down from the old ~30/day, which
+    # was producing templated, overlength, low-quality volume. Deliberately
+    # left slightly above 8-10 on the max side since relevance/dedup/theme-
+    # cap filtering (see news_intelligence.py) will drop some runs entirely.
+    schedule.every(150).minutes.do(run_news_pipeline)
 
     # Run the job once at startup to initialize data
     refresh_top_gainers_losers()
