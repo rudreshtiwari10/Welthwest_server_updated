@@ -173,6 +173,54 @@ Respond ONLY with valid JSON:
             logger.warning(f"Relevance check failed: {e}, allowing through")
             return True  # If check fails, let it through
 
+    # ── Search Demand Check ───────────────────────────────────
+
+    def check_search_demand(self, news_cluster: list) -> bool:
+        """Second, independent gate from check_relevance(). Relevance asks
+        "does this fit WelthWest's topic areas"; this asks "is it actually
+        the kind of thing people are searching for/discussing right now",
+        since a story can clear the relevance bar while still being a
+        minor/routine development nobody's looking for. Distinct from the
+        Google-Trends cluster-priority boost in run_pipeline() -- that only
+        reorders which cluster gets attempted first, it doesn't reject
+        anything; this can skip a cluster outright."""
+        titles = " | ".join(item.get('title', '') for item in news_cluster)
+        matched_trends = any(item.get('category') == 'google_trends' for item in news_cluster)
+
+        trend_note = (
+            "This story matched one of today's actual Google Trends topics for India "
+            "— treat that as strong evidence of current search interest."
+            if matched_trends else
+            "This did not come from today's Google Trends feed (that feed is small and "
+            "skews toward celebrities/sports, so absence here doesn't mean low interest) "
+            "— judge independently based on how significant this kind of story typically is."
+        )
+
+        prompt = f"""You are a financial news editor deciding whether a story is worth publishing based on CURRENT reader/search interest — not whether it's financially relevant, that has already been checked separately.
+
+{trend_note}
+
+Score 1-10 on current search/reader demand:
+- 8-10: A major, timely development people are actively searching for and discussing right now (a rate decision, a market crash/rally, a big regulatory move, a major company's earnings surprise)
+- 5-7: Moderately interesting — relevant and timely, but not the kind of thing dominating search/conversation
+- 1-4: A minor, niche, or routine development — technically news, but unlikely to draw real reader interest even among people who follow markets
+
+NEWS: {titles}
+
+Respond ONLY with valid JSON:
+{{"score": <number 1-10>, "reason": "one line why"}}"""
+
+        try:
+            raw = self._call_provider(self.analysis_provider, prompt, max_tokens=100, temperature=0.2)
+            result = self._parse_json(raw)
+            score = int(result.get('score', 0))
+            reason = result.get('reason', '')
+            logger.info(f"Search-demand check: {score}/10 — {reason} — {titles[:80]}")
+            return score >= 6
+        except Exception as e:
+            logger.warning(f"Search-demand check failed: {e}, allowing through")
+            return True  # If check fails, let it through
+
     # ── Analysis Step ──────────────────────────────────────────
 
     def analyze(self, news_cluster: list) -> dict:
@@ -312,13 +360,19 @@ Respond ONLY with valid JSON:
     # ── Full Pipeline for One Cluster ──────────────────────────
 
     def process_cluster(self, news_cluster: list) -> dict:
-        """Full pipeline: relevance check → analyze → write for one cluster"""
+        """Full pipeline: relevance check → search-demand check → analyze → write for one cluster"""
         titles_preview = " | ".join(item.get('title', '')[:50] for item in news_cluster)
         logger.info(f"Checking relevance of {len(news_cluster)} articles: {titles_preview[:100]}")
 
         # Quick relevance gate — skip junk news
         if not self.check_relevance(news_cluster):
-            raise Exception("Skipped: not market-relevant (score < 5)")
+            raise Exception("Skipped: not market-relevant (score < 7)")
+        time.sleep(5)
+
+        # Second, independent gate — relevant but low current search/reader
+        # interest also gets skipped. See check_search_demand() docstring.
+        if not self.check_search_demand(news_cluster):
+            raise Exception("Skipped: low current search/reader demand (score < 6)")
         time.sleep(5)
 
         logger.info(f"Analyzing cluster of {len(news_cluster)} articles...")
