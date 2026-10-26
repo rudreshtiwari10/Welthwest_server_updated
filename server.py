@@ -118,5 +118,15 @@ if __name__ == "__main__":
         app.run(
             host='0.0.0.0',
             port=port,
+            # Without this, Werkzeug's dev server handles exactly one
+            # request at a time -- concurrent requests queue up serially.
+            # Confirmed directly: 15 concurrent paginated requests (the
+            # sitemap generator's own fetch pattern) produced one request
+            # that took 47.5s just from queueing behind the others, well
+            # past the sitemap's 30s abort timeout, silently dropping that
+            # page's worth of articles. threaded=True lets requests overlap
+            # on I/O wait (these are DB-bound, not CPU-bound) instead of
+            # serializing.
+            threaded=True,
             ssl_context=ssl_context
         )
