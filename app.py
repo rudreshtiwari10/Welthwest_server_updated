@@ -276,68 +276,6 @@ app.register_blueprint(backtest_india_bp)
 # Register enhanced Finance AI routes
 register_finance_ai_routes(app)
 
-# Browsable API reference at /apidocs. flasgger's default behavior only
-# includes routes that have a specially-formatted YAML docstring -- with
-# none of the ~190 existing routes annotated that way, the generated spec
-# would be empty. Building the `paths` dict directly from app.url_map
-# instead, so every registered route shows up (path + method only, no
-# per-route request/response detail -- that still needs docstrings added
-# over time via flasgger's normal per-route annotation).
-def _build_routes_spec_paths() -> dict:
-    paths: dict = {}
-    for rule in app.url_map.iter_rules():
-        if rule.rule.startswith('/apidocs') or rule.rule.startswith('/apispec') or rule.rule.startswith('/flasgger_static'):
-            continue
-        # Flask's <converter:name> -> OpenAPI's {name}
-        openapi_path = re.sub(r'<(?:[^:<>]+:)?([^<>]+)>', r'{\1}', rule.rule)
-        methods = sorted(m for m in (rule.methods or []) if m not in ('HEAD', 'OPTIONS'))
-        if not methods:
-            continue
-        entry = paths.setdefault(openapi_path, {})
-        for method in methods:
-            entry[method.lower()] = {
-                "tags": [rule.endpoint.split('.')[0] if '.' in rule.endpoint else "app"],
-                "summary": rule.endpoint,
-                "responses": {"200": {"description": "Success"}},
-            }
-    return paths
-
-
-@app.route('/apispec.json')
-def _api_spec():
-    # Built fresh per-request (not cached at import time) so routes
-    # registered by anything loaded after this point still show up.
-    return jsonify({
-        "swagger": "2.0",
-        "info": {
-            "title": "WelthWest API",
-            "description": "Every registered route, auto-generated from the Flask url_map. Path + method only for now -- per-route request/response detail needs real documentation added over time.",
-            "version": "1.0.0",
-        },
-        "basePath": "/",
-        "paths": _build_routes_spec_paths(),
-    })
-
-
-@app.route('/apidocs')
-@app.route('/apidocs/')
-def _api_docs():
-    # flasgger's own UI-serving pipeline silently dropped routes supplied
-    # via its `template` param (confirmed directly: the function above
-    # returns 197 paths when called in isolation, but flasgger's served
-    # spec came back with 0) -- serving swagger-ui directly against our
-    # own /apispec.json route sidesteps that entirely.
-    return """<!DOCTYPE html>
-<html><head><title>WelthWest API</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
-</head><body>
-<div id="swagger-ui"></div>
-<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-<script>
-  window.onload = () => SwaggerUIBundle({ url: '/apispec.json', dom_id: '#swagger-ui' });
-</script>
-</body></html>"""
-
 # Defer premium system initialization to first request (thread-safe)
 import threading
 _premium_init_lock = threading.Lock()
